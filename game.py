@@ -8,14 +8,9 @@ class Game:
         self.captures_enabled = settings.captures_enabled
         self.tournament_rules_enabled = settings.tournament_rules_enabled
         self.connect_n = settings.connect_n
-        self.board = np.zeros(self.board_size, dtype=int)
-        self.player_captures = 0
-        self.opponent_captures = 0
-        self.num_moves = 0
-        self.policy = np.zeros(self.board_size, dtype=float)
-        self.value = None
+        self.reset_game()
 
-    def start_game(self):
+    def reset_game(self):
         self.board = np.zeros(self.board_size, dtype=int)
         self.player_captures = 0
         self.opponent_captures = 0
@@ -31,14 +26,12 @@ class Game:
         legal_moves = []
         if self.num_moves == 2 and self.tournament_rules_enabled:
             center = (self.board_size[0] // 2, self.board_size[1] // 2)
-            min_x, max_x = center[0] - 3, center[0] + 3
-            min_y, max_y = center[1] - 3, center[1] + 3
             for i in range(self.board_size[0]):
                 for j in range(self.board_size[1]):
+                    # Ensure the move is at least 3 spaces away from the center
                     if (
-                        not (min_x <= i <= max_x and min_y <= j <= max_y)
-                        and self.board[i][j] == 0
-                    ):
+                        abs(i - center[0]) >= 3 or abs(j - center[1]) >= 3
+                    ) and self.board[i][j] == 0:
                         legal_moves.append((i, j))
         else:
             for i in range(self.board_size[0]):
@@ -46,6 +39,26 @@ class Game:
                     if self.board[i][j] == 0:
                         legal_moves.append((i, j))
         return legal_moves
+
+    def make_move(self, move):
+        x, y = move
+        if self.board[x][y] != 0:
+            raise ValueError("Invalid move: Cell is already occupied.")
+        self.board[x][y] = 1
+        self.num_moves += 1
+
+        result = self.check_n_in_a_row(move)
+
+        if result == False:
+            return None
+
+        max_num_moves = self.board_size[0] * self.board_size[1]
+        fastest_win = self.connect_n - 1
+
+        weighted_value = (max_num_moves - self.num_moves + fastest_win) / max_num_moves
+        scaled_value = weighted_value * 0.9 + 0.1
+
+        self.value = scaled_value
 
     def check_n_in_a_row(self, move):
         directions = [(1, 0), (0, 1), (1, 1), (1, -1)]

@@ -12,4 +12,5 @@ class GameSettings:
         self.captures_enabled = self.settings["captures_enabled"]
         self.tournament_rules_enabled = self.settings["tournament_rules_enabled"]
         self.connect_n = self.settings["connect_n"]
-        self.db_path = self.settings["db-path"]
+        self.table_name = self.settings["table_name"]
+        self.db_path = all_settings["db-path"]
