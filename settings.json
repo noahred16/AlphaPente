@@ -15,7 +15,8 @@
         "board_size": [7, 7],
         "captures_enabled": false,
         "tournament_rules_enabled": true,
-        "connect_n": 5
+        "connect_n": 5,
+        "model": "GomokuSimpleNN"
     },
     "pente": {
         "description": "Pente is like Gomoku but with captures.",
