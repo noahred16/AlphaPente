@@ -20,7 +20,10 @@ class Game:
 
     def flip_board(self):
         self.board = -self.board
-        self.player_captures, self.opponent_captures = self.opponent_captures, self.player_captures
+        self.player_captures, self.opponent_captures = (
+            self.opponent_captures,
+            self.player_captures,
+        )
 
     def get_legal_moves(self):
         if self.num_moves == 0:

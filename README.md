@@ -9,3 +9,7 @@ Through such, it generates more accurate estimates for the policy and value of t
 The insights are generated through the process of the MCTS.
 
 Works through a NN MCTS
+
+
+## GUI
+flask --app play run --debug

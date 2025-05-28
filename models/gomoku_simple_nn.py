@@ -1,7 +1,7 @@
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 class GomokuSimpleNN(nn.Module):  # Class name remains consistent
     def __init__(self, board_size):
@@ -16,7 +16,9 @@ class GomokuSimpleNN(nn.Module):  # Class name remains consistent
 
         # Fully connected layers for policy head
         self.policy_conv = nn.Conv2d(128, 2, kernel_size=1)
-        self.policy_fc = nn.Linear(2 * board_size[0] * board_size[1], board_size[0] * board_size[1])
+        self.policy_fc = nn.Linear(
+            2 * board_size[0] * board_size[1], board_size[0] * board_size[1]
+        )
 
         # Fully connected layers for value head
         self.value_conv = nn.Conv2d(128, 1, kernel_size=1)
@@ -25,8 +27,12 @@ class GomokuSimpleNN(nn.Module):  # Class name remains consistent
 
     def forward(self, board, player_captures, opponent_captures, num_moves):
         # Combine inputs into a single tensor
-        captures = torch.full_like(board, player_captures, dtype=torch.float32).unsqueeze(1)
-        opponent = torch.full_like(board, opponent_captures, dtype=torch.float32).unsqueeze(1)
+        captures = torch.full_like(
+            board, player_captures, dtype=torch.float32
+        ).unsqueeze(1)
+        opponent = torch.full_like(
+            board, opponent_captures, dtype=torch.float32
+        ).unsqueeze(1)
         x = torch.cat([board.unsqueeze(1), captures, opponent], dim=1)
 
         # Convolutional layers
