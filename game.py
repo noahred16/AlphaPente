@@ -18,6 +18,10 @@ class Game:
         self.policy = np.zeros(self.board_size, dtype=float)
         self.value = None
 
+    def flip_board(self):
+        self.board = -self.board
+        self.player_captures, self.opponent_captures = self.opponent_captures, self.player_captures
+
     def get_legal_moves(self):
         if self.num_moves == 0:
             center = (self.board_size[0] // 2, self.board_size[1] // 2)
