@@ -14,3 +14,4 @@ class GameSettings:
         self.connect_n = self.settings["connect_n"]
         self.table_name = self.settings["table_name"]
         self.db_path = all_settings["db-path"]
+        self.model = self.settings["model"]

@@ -1,13 +1,15 @@
 {
     "db-path": "alpha_pente.db",
     "game": "gomoku-simple",
+    "puct_exploration_constant": 1.0,
     "gomoku": {
         "description": "Gomoku is the simplest of the games. To win, place 5 of your stones in a straight continuous line (either horizontally, vertically or diagonally). Whoever does this first wins the game. One note, you must get exactly 5 in a row to win. 6 or more of your stones in a row is called an 'overline' and does not count as a win, play continues.",
         "table_name": "gomoku",
         "board_size": [19, 19],
         "captures_enabled": false,
         "tournament_rules_enabled": true,
-        "connect_n": 5
+        "connect_n": 5,
+        "model": "GomokuNN"
     },
     "gomoku-simple": {
         "description": "Gomoku is the simplest of the games. To win, place 5 of your stones in a straight continuous line (either horizontally, vertically or diagonally). Whoever does this first wins the game. One note, you must get exactly 5 in a row to win. 6 or more of your stones in a row is called an 'overline' and does not count as a win, play continues.",
@@ -24,6 +26,7 @@
         "board_size": [19, 19],
         "captures_enabled": true,
         "tournament_rules_enabled": true,
-        "connect_n": 5
+        "connect_n": 5,
+        "model": "PenteNN"
     }
 }
