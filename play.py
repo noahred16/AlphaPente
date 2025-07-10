@@ -3,8 +3,12 @@ import numpy as np
 import random
 import secrets
 from dataclasses import dataclass
-from game import Game
-from settings_loader import GameSettings
+from game import reset_game, get_legal_moves, make_move, check_n_in_a_row
+from settings_loader import load_settings
+import torch
+from models.gomoku_simple_nn import GomokuSimpleNN
+from mcts import MCTS
+import os
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -16,26 +20,31 @@ class Settings:
     captures_enabled: bool
     tournament_rules_enabled: bool
     connect_n: int
+    model: str
 
 
-# Helper function to flip the board for opponent's perspective
-def flip_board(board):
-    """Flip the board values (1 -> -1, -1 -> 1, 0 -> 0)"""
-    return -board
+def load_model(settings):
+    try:
+        model = GomokuSimpleNN(settings["board_size"][0])
+        checkpoint_path = f"./checkpoints/{settings['model']}.pt"
 
-
-# Helper function to convert move coordinates when board is flipped
-def flip_move(move, board_size):
-    """Flip move coordinates - in this case, just return the same coordinates"""
-    # Since we're just flipping values, not rotating the board, coordinates stay the same
-    return move
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            print(f"Checkpoint loaded successfully: {checkpoint.keys()}")  # Debugging statement
+            model.load_state_dict(checkpoint["model_state"])
+            model.eval()
+            return model
+        else:
+            raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
+    except Exception as e:
+        print(f"Error in load_model: {e}")  # Debugging statement
+        raise
 
 
 @app.route("/")
 def index():
-    # Load settings to get board size
-    game_settings = GameSettings()
-    board_size = list(game_settings.board_size)
+    settings = load_settings()
+    board_size = list(settings["board_size"])
     return render_template("index.html", board_size=board_size)
 
 
@@ -44,129 +53,114 @@ def new_game():
     data = request.json
 
     # Load game settings from file
-    game_type = data.get("game_type", None)  # Allow specifying game type
-    game_settings = GameSettings(game_type)
+    settings = load_settings()
 
     # Use settings from file, but allow overrides from request
-    settings = Settings(
-        board_size=list(game_settings.board_size),
-        captures_enabled=data.get("captures_enabled", game_settings.captures_enabled),
-        tournament_rules_enabled=data.get(
-            "tournament_rules_enabled", game_settings.tournament_rules_enabled
-        ),
-        connect_n=data.get("connect_n", game_settings.connect_n),
-    )
-
-    game = Game(settings)
-
-    # Store game settings and state in session
     session["settings"] = {
-        "board_size": settings.board_size,
-        "captures_enabled": settings.captures_enabled,
-        "tournament_rules_enabled": settings.tournament_rules_enabled,
-        "connect_n": settings.connect_n,
+        "board_size": data.get("board_size", settings["board_size"]),
+        "captures_enabled": data.get("captures_enabled", settings["captures_enabled"]),
+        "tournament_rules_enabled": data.get(
+            "tournament_rules_enabled", settings["tournament_rules_enabled"]
+        ),
+        "connect_n": data.get("connect_n", settings["connect_n"]),
+        "model": settings["model"],
     }
-    session["board"] = game.board.tolist()
-    session["player_captures"] = game.player_captures
-    session["opponent_captures"] = game.opponent_captures
-    session["num_moves"] = game.num_moves
-    session["current_player"] = 1  # 1 for human, -1 for AI
+
+    board, player_captures, opponent_captures = reset_game(settings["board_size"])
+    session["board"] = board.tolist()
+    session["player_captures"] = player_captures
+    session["opponent_captures"] = opponent_captures
+    session["num_moves"] = 0
+
+    # Store user color and determine player values
+    user_color = data.get("user_color", "white")  # Default to white
+    session["user_color"] = user_color
+    session["user_value"] = -1 if user_color == "white" else 1
+    session["ai_value"] = 1 if user_color == "white" else -1
+    
+    # White goes first in this game
+    session["current_player"] = -1  # -1 = white, 1 = black
+    
     session["game_over"] = False
     session["winner"] = None
+    session["ai_move_type"] = None
+
+    # If AI plays white (user chose black), AI needs to make first move
+    needs_ai_move = (user_color == "black")
 
     return jsonify(
         {
-            "board": game.board.tolist(),
-            "player_captures": game.player_captures,
-            "opponent_captures": game.opponent_captures,
+            "board": session["board"],
+            "player_captures": session["player_captures"],
+            "opponent_captures": session["opponent_captures"],
             "current_player": session["current_player"],
             "game_over": False,
             "winner": None,
+            "ai_move_type": None,
+            "user_color": user_color,
+            "user_value": session["user_value"],
+            "ai_value": session["ai_value"],
+            "needs_ai_move": needs_ai_move
         }
     )
 
 
 @app.route("/api/make_move", methods=["POST"])
-def make_move():
+def make_move_api():
     if "settings" not in session:
         return jsonify({"error": "No game in progress"}), 400
 
-    # Reconstruct game from session
-    settings = Settings(**session["settings"])
-    game = Game(settings)
-    game.board = np.array(session["board"])
-    game.player_captures = session["player_captures"]
-    game.opponent_captures = session["opponent_captures"]
-    game.num_moves = session["num_moves"]
-
+    # Reconstruct game state from session
+    settings = session["settings"]
+    board = np.array(session["board"])
+    player_captures = session["player_captures"]
+    opponent_captures = session["opponent_captures"]
+    num_moves = session["num_moves"]
     current_player = session["current_player"]
+    user_value = session["user_value"]
+    ai_value = session["ai_value"]
+
+    # Check if it's actually the user's turn
+    if current_player != user_value:
+        return jsonify({"error": "It's not your turn"}), 400
 
     data = request.json
     move = (data["x"], data["y"])
 
     try:
-        # For AI moves, we need to flip the board
-        if current_player == -1:
-            game.board = flip_board(game.board)
-
         # Validate and make the move
-        legal_moves = game.get_legal_moves()
+        legal_moves = get_legal_moves(
+            board, num_moves, settings["tournament_rules_enabled"]
+        )
         if move not in legal_moves:
             raise ValueError("Invalid move: Move is not legal.")
 
-        game.make_move(move)
+        # Make the move with the current player's value
+        board[move[0], move[1]] = current_player
 
         # Check if game is over
-        game_over = game.value is not None
+        game_over = check_n_in_a_row(move, board, settings["connect_n"], current_player)
+
         winner = None
         if game_over:
-            winner = current_player
-
-        # Flip board back if it was AI's turn
-        if current_player == -1:
-            game.board = flip_board(game.board)
+            winner = "user"
+        
+        # Check for draw (no legal moves left)
+        if not game_over and not get_legal_moves(board, num_moves + 1, settings["tournament_rules_enabled"]):
+            game_over = True
+            winner = "draw"
 
         # Update session state
-        session["board"] = game.board.tolist()
-        session["player_captures"] = game.player_captures
-        session["opponent_captures"] = game.opponent_captures
-        session["num_moves"] = game.num_moves
+        session["board"] = board.tolist()
+        session["player_captures"] = player_captures
+        session["opponent_captures"] = opponent_captures
+        session["num_moves"] = num_moves + 1
+        session["current_player"] = -current_player  # Switch turn
         session["game_over"] = game_over
         session["winner"] = winner
 
-        # If game is not over and it was human's turn, make AI move
-        if not game_over and current_player == 1:
-            session["current_player"] = -1
-
-            # Flip board for AI's perspective
-            game.board = flip_board(game.board)
-
-            # Get legal moves and make random AI move
-            ai_legal_moves = game.get_legal_moves()
-            if ai_legal_moves:
-                ai_move = random.choice(ai_legal_moves)
-                game.make_move(ai_move)
-
-                # Check if AI won
-                if game.value is not None:
-                    game_over = True
-                    winner = -1
-                    session["game_over"] = game_over
-                    session["winner"] = winner
-
-                # Flip board back to human's perspective
-                game.board = flip_board(game.board)
-
-                # Update session state after AI move
-                session["board"] = game.board.tolist()
-                session["player_captures"] = game.player_captures
-                session["opponent_captures"] = game.opponent_captures
-                session["num_moves"] = game.num_moves
-
-            session["current_player"] = 1
-        else:
-            # Switch player if game continues
-            session["current_player"] = -current_player
+        # Determine if AI should move next
+        needs_ai_move = not game_over and session["current_player"] == ai_value
 
         return jsonify(
             {
@@ -176,16 +170,106 @@ def make_move():
                 "current_player": session["current_player"],
                 "game_over": session["game_over"],
                 "winner": session["winner"],
+                "ai_move_type": session.get("ai_move_type"),
+                "needs_ai_move": needs_ai_move
             }
         )
 
     except ValueError as e:
-        # Restore original board state if move failed
-        if current_player == -1:
-            game.board = flip_board(game.board)
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": "An unexpected error occurred"}), 500
+        return jsonify({"error": "An unexpected error occurred: " + str(e)}), 500
+
+
+@app.route("/api/make_ai_move", methods=["POST"])
+def make_ai_move():
+    if "settings" not in session:
+        return jsonify({"error": "No game in progress"}), 400
+
+    # Reconstruct game state from session
+    settings = session["settings"]
+    board = np.array(session["board"], dtype=np.int8)  # Ensure board is a NumPy array
+    player_captures = session["player_captures"]
+    opponent_captures = session["opponent_captures"]
+    num_moves = session["num_moves"]
+    current_player = session["current_player"]
+    ai_value = session["ai_value"]
+
+    if current_player != ai_value:  # Ensure it's AI's turn
+        return jsonify({"error": "It's not AI's turn"}), 400
+
+    try:
+        # Ensure board is a NumPy array
+        board = np.array(session["board"], dtype=np.int8)
+
+        # Get legal moves
+        legal_moves = get_legal_moves(
+            board, num_moves, settings["tournament_rules_enabled"]
+        )
+        
+        if not legal_moves:
+            raise ValueError("No legal moves available")
+
+        # print(board, player_captures, opponent_captures)
+
+        # Use MCTS to determine the best move
+        model = load_model(settings)
+        mcts = MCTS(model, simulations=100)
+        print("board:", board)
+
+        # copy and flip board
+        model_board = np.copy(board)
+        model_board *= -1  # Flip the board for the model
+
+
+        move, policy = mcts.best_move(model_board, player_captures, opponent_captures)
+        print("best move:", move, "policy:", policy)
+        if move is None:
+            raise ValueError("No valid move found by MCTS.")
+
+        # Make the move with AI's value
+        board[move[0], move[1]] = current_player
+
+        # Check if game is over
+        game_over = check_n_in_a_row(move, board, settings["connect_n"])
+        winner = None
+        if game_over:
+            winner = "ai"
+            
+        # Check for draw (no legal moves left)
+        if not game_over and not get_legal_moves(board, num_moves + 1, settings["tournament_rules_enabled"]):
+            game_over = True
+            winner = "draw"
+
+        # Update session state
+        session["board"] = board.tolist()
+        session["player_captures"] = player_captures
+        session["opponent_captures"] = opponent_captures
+        session["num_moves"] = num_moves + 1
+        session["current_player"] = -current_player  # Switch turn to user
+        session["game_over"] = game_over
+        session["winner"] = winner
+        session["ai_move_type"] = "mcts"  # Updated to "mcts"
+
+        return jsonify(
+            {
+                "board": session["board"],
+                "player_captures": session["player_captures"],
+                "opponent_captures": session["opponent_captures"],
+                "current_player": session["current_player"],  # Updated to user
+                "game_over": session["game_over"],
+                "winner": session["winner"],
+                "ai_move_type": session["ai_move_type"],
+                "ai_move": move,
+                "needs_ai_move": False,  # User's turn now
+                "user_value": session["user_value"],  # Ensure user_value is included
+            }
+        )
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": "An unexpected error occurred: " + str(e)}), 500
 
 
 @app.route("/api/game_types", methods=["GET"])
@@ -209,15 +293,13 @@ def get_game_types():
                 }
 
         return jsonify(
-            {"default": all_settings.get("game", "gomoku-simple"), "games": game_types}
+            {"default": all_settings.get("game", "gomoku_simple"), "games": game_types}
         )
     except Exception as e:
         return jsonify({"error": "Could not read game types"}), 500
 
 
 # Create the templates directory and HTML file
-import os
-
 os.makedirs("templates", exist_ok=True)
 
 html_content = """<!DOCTYPE html>
@@ -225,7 +307,7 @@ html_content = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pente Game</title>
+    <title>Gomoku Game</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -272,6 +354,12 @@ html_content = """<!DOCTYPE html>
         .cell:hover {
             background-color: #ffd700;
         }
+        .cell.disabled {
+            cursor: default; /* Updated to show default cursor instead of "not-allowed" */
+        }
+        .cell.disabled:hover {
+            background-color: #f5deb3;
+        }
         .stone {
             width: 26px;
             height: 26px;
@@ -306,6 +394,10 @@ html_content = """<!DOCTYPE html>
         button:hover {
             background-color: #45a049;
         }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
         .info {
             margin-top: 20px;
             text-align: center;
@@ -335,11 +427,35 @@ html_content = """<!DOCTYPE html>
         .game-selector {
             margin-bottom: 10px;
         }
+        .color-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            vertical-align: middle;
+            margin-left: 5px;
+        }
+        .color-indicator.black {
+            background-color: #000;
+            border: 1px solid #333;
+        }
+        .color-indicator.white {
+            background-color: #fff;
+            border: 1px solid #ccc;
+        }
+        .thinking {
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="game-container">
-        <h1>Board Game - Play vs Random AI</h1>
+        <h1>Gomoku - Play vs AI</h1>
         
         <div class="settings">
             <div class="game-selector">
@@ -348,7 +464,7 @@ html_content = """<!DOCTYPE html>
                     <select id="gameType" onchange="updateGameSettings()">
                         <option value="">Default (from settings.json)</option>
                         <option value="gomoku">Gomoku (19x19)</option>
-                        <option value="gomoku-simple">Gomoku Simple (7x7)</option>
+                        <option value="gomoku_simple">Gomoku Simple (7x7)</option>
                         <option value="pente">Pente (19x19)</option>
                     </select>
                 </label>
@@ -361,6 +477,13 @@ html_content = """<!DOCTYPE html>
             </label>
             <label>
                 Connect: <input type="number" id="connectN" value="5" min="3" max="8" style="width: 40px;">
+            </label>
+            <label>
+                Your Color: 
+                <select id="userColor">
+                    <option value="white">White (goes first)</option>
+                    <option value="black">Black (goes second)</option>
+                </select>
             </label>
         </div>
         
@@ -381,14 +504,14 @@ html_content = """<!DOCTYPE html>
 
     <script>
         let gameState = null;
-        const boardSize = {{ board_size }};  // This will be injected from Flask
+        let boardSize = {{ board_size }};
+        let isProcessing = false;
 
         function updateGameSettings() {
-            // This could be extended to dynamically update settings based on game type
             const gameType = document.getElementById('gameType').value;
             if (gameType === 'pente') {
                 document.getElementById('capturesEnabled').checked = true;
-            } else if (gameType === 'gomoku' || gameType === 'gomoku-simple') {
+            } else if (gameType === 'gomoku' || gameType === 'gomoku_simple') {
                 document.getElementById('capturesEnabled').checked = false;
             }
         }
@@ -397,7 +520,6 @@ html_content = """<!DOCTYPE html>
             const board = document.getElementById('board');
             board.innerHTML = '';
             
-            // Create board dynamically based on boardSize
             for (let i = 0; i < boardSize[0]; i++) {
                 const row = document.createElement('div');
                 row.className = 'board-row';
@@ -429,6 +551,14 @@ html_content = """<!DOCTYPE html>
                     stone.className = 'stone ' + (value === 1 ? 'black-stone' : 'white-stone');
                     cell.appendChild(stone);
                 }
+                
+                // Disable clicks during AI turn or when game is over
+                if (isProcessing || gameState.game_over || 
+                    (gameState.current_player !== gameState.user_value)) {
+                    cell.classList.add('disabled');
+                } else {
+                    cell.classList.remove('disabled');
+                }
             });
             
             document.getElementById('playerCaptures').textContent = gameState.player_captures;
@@ -441,77 +571,135 @@ html_content = """<!DOCTYPE html>
             const statusEl = document.getElementById('status');
             
             if (gameState.game_over) {
-                if (gameState.winner === 1) {
-                    statusEl.innerHTML = '<span class="winner">You Win!</span>';
-                } else if (gameState.winner === -1) {
-                    statusEl.innerHTML = 'AI Wins!';
-                } else {
-                    statusEl.innerHTML = 'Draw!';
+                if (gameState.winner === 'user') {
+                    statusEl.innerHTML = '<span class="winner">You Win! 🎉</span>';
+                } else if (gameState.winner === 'ai') {
+                    statusEl.innerHTML = 'AI Wins! 🤖';
+                } else if (gameState.winner === 'draw') {
+                    statusEl.innerHTML = 'Draw! 🤝';
                 }
             } else {
-                statusEl.textContent = gameState.current_player === 1 ? 'Your turn' : 'AI thinking...';
+                const isUserTurn = gameState.current_player === gameState.user_value;
+                const userColor = gameState.user_color;
+                const currentColor = gameState.current_player === 1 ? 'black' : 'white';
+                
+                if (isUserTurn) {
+                    statusEl.innerHTML = `Your turn <span class="color-indicator ${userColor}"></span>`;
+                } else {
+                    statusEl.innerHTML = `<span class="thinking">AI thinking...</span> <span class="color-indicator ${currentColor}"></span>`;
+                }
             }
         }
 
         async function newGame() {
+            isProcessing = true;
+            
             const settings = {
                 game_type: document.getElementById('gameType').value || null,
                 captures_enabled: document.getElementById('capturesEnabled').checked,
                 tournament_rules_enabled: document.getElementById('tournamentRules').checked,
-                connect_n: parseInt(document.getElementById('connectN').value)
+                connect_n: parseInt(document.getElementById('connectN').value),
+                user_color: document.getElementById('userColor').value
             };
             
-            const response = await fetch('/api/new_game', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(settings)
-            });
-            
-            if (response.ok) {
-                gameState = await response.json();
+            try {
+                const response = await fetch('/api/new_game', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings)
+                });
                 
-                // If board size changed, recreate the board
-                if (gameState.board.length !== boardSize[0] || 
-                    (gameState.board[0] && gameState.board[0].length !== boardSize[1])) {
-                    boardSize[0] = gameState.board.length;
-                    boardSize[1] = gameState.board[0].length;
-                    createBoard();
+                if (response.ok) {
+                    gameState = await response.json();
+                    
+                    // Update board size if it changed
+                    if (gameState.board.length !== boardSize[0] || 
+                        (gameState.board[0] && gameState.board[0].length !== boardSize[1])) {
+                        boardSize = [gameState.board.length, gameState.board[0].length];
+                        createBoard();
+                    }
+                    
+                    updateBoard();
+                    
+                    // If AI needs to move first (user chose white)
+                    if (gameState.needs_ai_move) {
+                        await makeAIMove();
+                    }
+                } else {
+                    const error = await response.json();
+                    console.error('Error starting game:', error.error);
                 }
-                
-                updateBoard();
-            } else {
-                const error = await response.json();
-                // alert('Error starting game: ' + error.error);
-                console.error('Error starting game:', error.error);
+            } finally {
+                isProcessing = false;
             }
         }
 
         async function makeMove(x, y) {
-            console.log(`Making move at (${x}, ${y})`);
-            if (!gameState || gameState.game_over || gameState.current_player !== 1) {
-                console.warn("Cannot make move: Game is over or it's not your turn.", gameState);
+            if (!gameState || gameState.game_over || isProcessing) {
                 return;
             }
             
-            const response = await fetch('/api/make_move', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({x, y})
-            });
+            // Check if it's the user's turn
+            if (gameState.current_player !== gameState.user_value) {
+                console.log("Not your turn!", gameState.current_player, gameState.user_value);
+                return;
+            }
             
-            if (response.ok) {
-                gameState = await response.json();
-                updateBoard();
-            } else {
-                const error = await response.json();
-                // alert(error.error);
-                console.error('Error making move:', error.error);
+            isProcessing = true;
+            
+            try {
+                const response = await fetch('/api/make_move', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({x, y})
+                });
+                
+                if (response.ok) {
+                    gameState = await response.json();
+                    updateBoard();
+                    
+                    // If game is not over and it's AI's turn, make AI move
+                    if (!gameState.game_over && gameState.needs_ai_move) {
+                        await makeAIMove();
+                    }
+                } else {
+                    const error = await response.json();
+                    console.error('Error making move:', error.error);
+                }
+            } finally {
+                isProcessing = false;
+            }
+        }
+
+        async function makeAIMove() {
+            if (!gameState || gameState.game_over) return;
+            
+            updateStatus(); // Show "AI thinking..."
+            
+            // Add a small delay to make it feel more natural
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            try {
+                const response = await fetch('/api/make_ai_move', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                
+                if (response.ok) {
+                    gameState = await response.json();
+                    updateBoard();
+                } else {
+                    const error = await response.json();
+                    console.error('Error with AI move:', error.error);
+                }
+            } catch (error) {
+                console.error('Error making AI move:', error);
             }
         }
 
         // Initialize
         createBoard();
-        newGame();
     </script>
 </body>
 </html>"""

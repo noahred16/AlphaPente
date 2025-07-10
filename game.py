@@ -73,7 +73,7 @@ def calculate_score(num_moves, board_size, captures_enabled):
     return score
 
 
-def check_n_in_a_row(move, board, connect_n):
+def check_n_in_a_row(move, board, connect_n, current_player=1):
     board_size = board.shape
     directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
     x, y = move
@@ -81,7 +81,7 @@ def check_n_in_a_row(move, board, connect_n):
         count = 1
         nx, ny = x + dx, y + dy
         while (
-            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == 1
+            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == current_player
         ):
             count += 1
             if count == connect_n:
@@ -90,7 +90,7 @@ def check_n_in_a_row(move, board, connect_n):
             ny += dy
         nx, ny = x - dx, y - dy
         while (
-            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == 1
+            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == current_player
         ):
             count += 1
             if count == connect_n:
