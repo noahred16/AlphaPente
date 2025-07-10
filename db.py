@@ -7,6 +7,12 @@ class Database:
     def __init__(self, db_path, board_size):
         self.db_path = db_path
         self.board_size = board_size
+        self.setup_empty_db()
+
+    def setup_empty_db(self):
+        if not os.path.exists(self.db_path):
+            conn = sqlite3.connect(self.db_path)
+            conn.close()
 
     def setup(self, table_name):
         conn = sqlite3.connect(self.db_path)
@@ -55,6 +61,10 @@ class Database:
                 value,
             ),
         )
+
+        if cursor.rowcount == 0:
+            raise Exception("Failed to insert data into the database.")
+
         conn.commit()
         conn.close()
 
@@ -86,6 +96,26 @@ class Database:
         conn.close()
         return total
 
+    def show_tables(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+
+        conn.close()
+        return [table[0] for table in tables]
+
+    def get_count(self, table_name):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cursor.fetchone()[0]
+
+        conn.close()
+        return count
+
     def serialize(self, board, dtype=int):
         return np.array(board, dtype=dtype).tobytes()
 
@@ -105,3 +135,39 @@ class Database:
         board = self.deserialize(board_blob)
         policy = self.deserialize(policy_blob, dtype=float)
         return id, board, player_captures, opponent_captures, num_moves, policy, value
+
+    def delete_by_num_moves(self, table_name, num_moves):
+        """Delete all records where num_moves equals the specified value."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            DELETE FROM {table_name}
+            WHERE num_moves = ?
+            """,
+            (num_moves,),
+        )
+        affected_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return affected_rows
+
+    def clear_table(self, table_name):
+        """Clear all records from the specified table."""
+        if not table_name:
+            raise ValueError("Table name cannot be empty.")
+        input_val = input(
+            f"Are you sure you want to clear the table '{table_name}'? (yes/no): "
+        )
+        if input_val.lower() not in ["yes", "y"]:
+            print("Operation cancelled.")
+            return 0
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(f"DELETE FROM {table_name}")
+        affected_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        print(f"Cleared {affected_rows} rows from table '{table_name}'.")
+        return affected_rows
