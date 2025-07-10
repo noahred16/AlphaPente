@@ -17,7 +17,8 @@ from game import (
     calculate_score,
     pretty_print,
 )
-from models.gomoku_simple_nn import create_board_state
+
+# from models.gomoku_simple_nn import predict_policy_and_value
 
 
 class MCTSNode:
@@ -216,42 +217,15 @@ class MCTS:
 
         return self.root
 
-    # .get_best_move()
-
-    def predict_policy_and_value(self, board, player_captures, opponent_captures):
-        board_input = torch.tensor(board, dtype=torch.float32)
-        board_state = create_board_state(board_input, 1)  # TODO check assumption
-        with torch.no_grad():
-            move_probs, board_value = self.model.predict(board_state)
-
-            # Convert move_probs to policy priors
-            policy = move_probs.numpy()
-            value = board_value.item()
-
-            # player_captures_input = torch.tensor(player_captures, dtype=torch.float32)
-            # opponent_captures_input = torch.tensor(
-            #     opponent_captures, dtype=torch.float32
-            # )
-
-            # policy, value = self.model(
-            #     board_input.unsqueeze(0),
-            #     player_captures_input.unsqueeze(0),
-            #     opponent_captures_input.unsqueeze(0),
-            # )
-
-            # policy = policy.squeeze(0).numpy()
-            # value = value.item()
-        return policy, value
-
     def get_policy_priors(self, board, player_captures, opponent_captures):
-        policy, _ = self.predict_policy_and_value(
+        policy, _ = self.model.predict_policy_and_value(
             board, player_captures, opponent_captures
         )
         return policy
 
     def get_value(self, board, player_captures, opponent_captures):
         # return 0
-        _, value = self.predict_policy_and_value(
+        _, value = self.model.predict_policy_and_value(
             board, player_captures, opponent_captures
         )
         return value
@@ -293,11 +267,15 @@ class MCTS:
             player_captures=node.player_captures,
             opponent_captures=node.opponent_captures,
         )
+        # print("Policy Priors:", policy_priors)
+        # print("shape:", policy_priors.shape) # 7 x 7
         for move in node.untried_moves:
-            move_index = move[0] * BOARD_SIZE[0] + move[1]
+            # move_index = move[0] * BOARD_SIZE[0] + move[1]
             child_node = MCTSNode(
                 prev_move=move,
-                policy_prior=policy_priors[move_index],
+                policy_prior=policy_priors[move[0]][
+                    move[1]
+                ],  # Use the prior for the move
                 board=node.board,
                 player_captures=node.player_captures,
                 opponent_captures=node.opponent_captures,

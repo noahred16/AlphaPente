@@ -68,7 +68,7 @@ def test_gomoku_simple_nn(gomoku_model: GomokuSimpleNN):
     empty_board = torch.zeros(7, 7)
 
     # Convert to model input format (assuming player 1's turn)
-    board_state = create_board_state(empty_board, current_player=1)
+    board_state = create_board_state(empty_board)
 
     # Since the board is empty, all moves are valid, not really ... don't love the whatever this is.
     valid_moves = torch.ones(7, 7)
@@ -134,7 +134,7 @@ def test_train_on_batch(gomoku_model: GomokuSimpleNN):
 
     # Empty board state for player 1
     empty_board = torch.zeros(7, 7)
-    board_state = create_board_state(empty_board, current_player=1)
+    board_state = create_board_state(empty_board)
 
     # Create fake target policy - let's say we want the model to play in the center
     target_policy = torch.zeros(49)

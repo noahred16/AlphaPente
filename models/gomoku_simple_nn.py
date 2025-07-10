@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
 class GomokuSimpleNN(nn.Module):
@@ -25,8 +26,14 @@ class GomokuSimpleNN(nn.Module):
         # Calculate size for fully connected layer
         conv_output_size = 128 * board_size * board_size
 
+        # Additional input for capture counts (2 values: player_captures, opponent_captures)
+        capture_input_size = 2
+
+        # Combined input size for shared layer
+        combined_input_size = conv_output_size + capture_input_size
+
         # Shared fully connected layer
-        self.fc_shared = nn.Linear(conv_output_size, hidden_size)
+        self.fc_shared = nn.Linear(combined_input_size, hidden_size)
 
         # Policy head (predicts move probabilities)
         self.policy_head = nn.Linear(hidden_size, board_size * board_size)
@@ -35,21 +42,40 @@ class GomokuSimpleNN(nn.Module):
         self.value_hidden = nn.Linear(hidden_size, 64)
         self.value_head = nn.Linear(64, 1)
 
-    def forward(self, x):
-        # x shape: (batch_size, 2, 7, 7)
-        # Channel 0: current player stones (1 where player has stone, 0 elsewhere)
-        # Channel 1: opponent stones (1 where opponent has stone, 0 elsewhere)
+    def forward(self, board_state, player_captures, opponent_captures):
+        """
+        Forward pass through the network.
 
+        Args:
+            board_state: tensor of shape (batch_size, 2, 7, 7)
+                - Channel 0: current player stones (1 where player has stone, 0 elsewhere)
+                - Channel 1: opponent stones (1 where opponent has stone, 0 elsewhere)
+            player_captures: tensor of shape (batch_size,) - number of captures by player
+            opponent_captures: tensor of shape (batch_size,) - number of captures by opponent
+
+        Returns:
+            policy: tensor of shape (batch_size, 49) - raw logits for each board position
+            value: tensor of shape (batch_size, 1) - position evaluation between -1 and 1
+        """
         # Convolutional layers with ReLU and batch norm
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn1(self.conv1(board_state)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
 
         # Flatten for fully connected layers
         x = x.view(x.size(0), -1)
 
+        # Ensure captures have correct shape and normalize
+        player_captures = (
+            player_captures.view(-1, 1).float() / 10.0
+        )  # Assuming max ~10 captures
+        opponent_captures = opponent_captures.view(-1, 1).float() / 10.0
+
+        # Concatenate conv features with capture counts
+        combined = torch.cat([x, player_captures, opponent_captures], dim=1)
+
         # Shared representation
-        shared = F.relu(self.fc_shared(x))
+        shared = F.relu(self.fc_shared(combined))
 
         # Policy output (raw logits for each board position)
         policy = self.policy_head(shared)
@@ -60,12 +86,16 @@ class GomokuSimpleNN(nn.Module):
 
         return policy, value
 
-    def predict(self, board_state, valid_moves_mask=None):
+    def predict(
+        self, board_state, player_captures, opponent_captures, valid_moves_mask=None
+    ):
         """
         Make predictions for a single board state.
 
         Args:
             board_state: tensor of shape (2, 7, 7)
+            player_captures: scalar or tensor with player's capture count
+            opponent_captures: scalar or tensor with opponent's capture count
             valid_moves_mask: optional tensor of shape (7, 7) with 1 for valid moves
 
         Returns:
@@ -73,10 +103,22 @@ class GomokuSimpleNN(nn.Module):
             value: scalar tensor with position evaluation
         """
         # Add batch dimension
-        x = board_state.unsqueeze(0)
+        board_state = board_state.unsqueeze(0)
+        player_captures = (
+            torch.tensor([player_captures])
+            if not torch.is_tensor(player_captures)
+            else player_captures.unsqueeze(0)
+        )
+        opponent_captures = (
+            torch.tensor([opponent_captures])
+            if not torch.is_tensor(opponent_captures)
+            else opponent_captures.unsqueeze(0)
+        )
 
         # Get predictions
-        policy_logits, value = self.forward(x)
+        policy_logits, value = self.forward(
+            board_state, player_captures, opponent_captures
+        )
 
         # Reshape policy to board shape
         policy_logits = policy_logits.view(-1)
@@ -99,6 +141,8 @@ class GomokuSimpleNN(nn.Module):
         Args:
             batch: dict with keys:
                 - 'states': tensor of shape (batch_size, 2, 7, 7)
+                - 'player_captures': tensor of shape (batch_size,) - player capture counts
+                - 'opponent_captures': tensor of shape (batch_size,) - opponent capture counts
                 - 'policies': tensor of shape (batch_size, 49) - target move distributions
                 - 'values': tensor of shape (batch_size,) - target position evaluations
             epochs: number of times to train on this batch
@@ -110,6 +154,8 @@ class GomokuSimpleNN(nn.Module):
 
         # Extract batch data
         states = batch["states"]
+        player_captures = batch["player_captures"]
+        opponent_captures = batch["opponent_captures"]
         target_policies = batch["policies"]
         target_values = batch["values"]
 
@@ -126,7 +172,9 @@ class GomokuSimpleNN(nn.Module):
 
         for epoch in range(epochs):
             # Forward pass
-            policy_logits, predicted_values = self.forward(states)
+            policy_logits, predicted_values = self.forward(
+                states, player_captures, opponent_captures
+            )
 
             # Calculate policy loss (cross-entropy)
             # Ensure target_policies is normalized
@@ -157,25 +205,71 @@ class GomokuSimpleNN(nn.Module):
             "total_loss": (total_policy_loss + total_value_loss) / epochs,
         }
 
+    def predict_policy_and_value(self, board, player_captures, opponent_captures):
+        """
+        Predict policy and value for a given game state.
 
-def create_board_state(board, current_player):
+        Args:
+            board: np.array of shape (7, 7) with 1 for player, -1 for opponent, 0 for empty
+            player_captures: int - number of captures by player
+            opponent_captures: int - number of captures by opponent
+
+        Returns:
+            policy: np.array of shape (7, 7) with move probabilities
+            value: float - position evaluation between -1 and 1
+        """
+        # Set model to evaluation mode
+        self.eval()
+
+        # Preprocess the game state
+        board_tensor, player_cap_tensor, opponent_cap_tensor = preprocess_game_state(
+            board, player_captures, opponent_captures
+        )
+
+        # Get legal moves mask (assuming empty spaces are legal moves)
+        valid_moves_mask = torch.tensor(board == 0, dtype=torch.float32)
+
+        # Make prediction without computing gradients
+        with torch.no_grad():
+            move_probs, value = self.predict(
+                board_tensor, player_cap_tensor, opponent_cap_tensor, valid_moves_mask
+            )
+
+        # Reshape policy back to board shape
+        policy = move_probs.view(7, 7).numpy()
+
+        # Convert value to float
+        value = value.item()
+
+        return policy, value
+
+
+def preprocess_game_state(board, player_captures, opponent_captures):
     """
-    Convert board array to neural network input format.
+    Convert game state to tensors suitable for the neural network.
 
     Args:
-        board: numpy array or tensor of shape (7, 7) with 0=empty, 1=player1, 2=player2
-        current_player: 1 or 2
+        board: np.array of shape (7, 7) with 1 for player, -1 for opponent, 0 for empty
+        player_captures: int - number of captures by player
+        opponent_captures: int - number of captures by opponent
 
     Returns:
-        tensor of shape (2, 7, 7)
+        board_tensor: torch.tensor of shape (2, 7, 7)
+        player_captures_tensor: torch.tensor scalar
+        opponent_captures_tensor: torch.tensor scalar
     """
-    if not isinstance(board, torch.Tensor):
-        board = torch.tensor(board, dtype=torch.float32)
+    # Create two-channel board representation
+    player_channel = (board == 1).astype(np.float32)
+    opponent_channel = (board == -1).astype(np.float32)
 
-    opponent = 3 - current_player  # If player is 1, opponent is 2, and vice versa
+    # Stack channels
+    board_channels = np.stack([player_channel, opponent_channel], axis=0)
 
-    # Create two-channel representation
-    current_player_stones = (board == current_player).float()
-    opponent_stones = (board == opponent).float()
+    # Convert to tensors
+    board_tensor = torch.tensor(board_channels, dtype=torch.float32)
+    player_captures_tensor = torch.tensor(player_captures, dtype=torch.float32)
+    opponent_captures_tensor = torch.tensor(opponent_captures, dtype=torch.float32)
 
-    return torch.stack([current_player_stones, opponent_stones])
+    return board_tensor, player_captures_tensor, opponent_captures_tensor
+
+

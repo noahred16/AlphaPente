@@ -53,7 +53,7 @@ record_count = 0
 
 game_num = 0
 
-mcts = MCTS(model, simulations=400, random=0.5)
+mcts = MCTS(model, simulations=100, random=0.3)
 
 # TODO Experiment with different MCTS configurations
 p1 = MCTS(model, simulations=400)
@@ -120,6 +120,11 @@ while True:
     ):
         if record_count >= record_limit:
             break
+
+        # skip over random moves (ones where policy is 0 for all
+        if np.all(policy == 0):
+            continue
+
         # flip the result for each opponent move
         result = result if i % 2 == 0 else -result
         db.store(
