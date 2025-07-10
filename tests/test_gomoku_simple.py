@@ -1,13 +1,14 @@
 import pytest
 import torch
+import torch.nn as nn
 import numpy as np
-from models.gomoku_simple_nn import GomokuSimpleNN, create_board_state
+from models.gomoku_simple_nn import GomokuSimpleNN, preprocess_game_state
 from game import reset_game, get_legal_moves, make_move, pretty_print, is_game_over
 from db import Database
 from settings_loader import load_settings
 from mcts import MCTSNode, MCTS
 from tree_view import tree_visualization  # Import tree_visualization from tree_view.py
-
+import os
 
 _settings = load_settings("gomoku_simple")
 BOARD_SIZE = _settings["board_size"]
@@ -47,6 +48,16 @@ def db():
 def gomoku_model():
     model = GomokuSimpleNN(BOARD_SIZE[0])
 
+    # Initialize the model
+    model = GomokuSimpleNN(BOARD_SIZE[0])
+    checkpoint_path = f"./checkpoints/{MODEL}.pt"
+
+    # Load checkpoint if it exists
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path)
+        model.load_state_dict(checkpoint["model_state"])
+        print(f"Loaded checkpoint from {checkpoint_path}")
+
     return model
 
 
@@ -54,69 +65,51 @@ def test_gomoku_simple_nn(gomoku_model: GomokuSimpleNN):
     # Set the model to evaluation mode
     gomoku_model.eval()
 
-    import torch
-
-
-import torch.nn as nn
-
-
-def test_gomoku_simple_nn(gomoku_model: GomokuSimpleNN):
-    # Set the model to evaluation mode
-    gomoku_model.eval()
-
     # Create an empty board (all zeros)
-    empty_board = torch.zeros(7, 7)
+    empty_board = np.zeros((7, 7), dtype=np.int8)
+    player_captures = 0
+    opponent_captures = 0
 
-    # Convert to model input format (assuming player 1's turn)
-    board_state = create_board_state(empty_board)
-
-    # Since the board is empty, all moves are valid, not really ... don't love the whatever this is.
-    valid_moves = torch.ones(7, 7)
-
-    # Make prediction
-    with torch.no_grad():  # Disable gradient computation for inference
-        move_probs, board_value = gomoku_model.predict(board_state, valid_moves)
+    # Use the predict_policy_and_value function
+    policy, value = gomoku_model.predict_policy_and_value(
+        empty_board, player_captures, opponent_captures
+    )
 
     # Test 1: Check policy shape
-    assert move_probs.shape == (
-        49,
-    ), f"Expected policy shape (49,), got {move_probs.shape}"
+    assert policy.shape == (7, 7), f"Expected policy shape (7, 7), got {policy.shape}"
 
     # Test 2: Check that policy sums to 1 (within floating point tolerance)
-    policy_sum = move_probs.sum().item()
+    policy_sum = policy.sum()
     assert (
         abs(policy_sum - 1.0) < 1e-6
     ), f"Policy probabilities should sum to 1, got {policy_sum}"
 
     # Test 3: Check that all probabilities are non-negative
-    assert (move_probs >= 0).all(), "All move probabilities should be non-negative"
+    assert (policy >= 0).all(), "All move probabilities should be non-negative"
 
-    # Test 4: Check value shape and range
-    assert (
-        board_value.shape == ()
-    ), f"Expected scalar value, got shape {board_value.shape}"
-    value = board_value.item()
+    # Test 4: Check value range
     assert -1 <= value <= 1, f"Board value should be between -1 and 1, got {value}"
 
     # Test 5: For empty board, value should be close to 0 (neutral position)
-    # This is a soft check as untrained models might give random values
     print(
         f"Empty board evaluation: {value:.3f} (should be close to 0 for a trained model)"
     )
 
     # Test 6: For empty board, policy should be relatively uniform
     # Calculate standard deviation of probabilities
-    prob_std = move_probs.std().item()
-    prob_mean = move_probs.mean().item()
+    prob_std = policy.std()
+    prob_mean = policy.mean()
     print(f"Policy statistics - Mean: {prob_mean:.4f}, Std: {prob_std:.4f}")
     print(f"(For empty board, expect relatively uniform distribution)")
 
     # Test 7: Print top 5 moves to verify they make sense
-    top5_probs, top5_indices = torch.topk(move_probs, 5)
+    flat_policy = policy.flatten()
+    top5_probs_idx = np.argsort(flat_policy)[-5:][::-1]
     print("\nTop 5 predicted moves on empty board:")
-    for i, (prob, idx) in enumerate(zip(top5_probs, top5_indices)):
+    for i, idx in enumerate(top5_probs_idx):
         row, col = idx // 7, idx % 7
-        print(f"  {i+1}. Position ({row}, {col}): {prob.item():.3f}")
+        prob = flat_policy[idx]
+        print(f"  {i+1}. Position ({row}, {col}): {prob:.3f}")
 
     print("\nAll tests passed!")
 
@@ -132,9 +125,15 @@ def test_train_on_batch(gomoku_model: GomokuSimpleNN):
     # Create a single training sample
     batch_size = 1
 
-    # Empty board state for player 1
-    empty_board = torch.zeros(7, 7)
-    board_state = create_board_state(empty_board)
+    # Empty board state
+    empty_board = np.zeros((7, 7), dtype=np.int8)
+    player_captures = 0
+    opponent_captures = 0
+
+    # Preprocess the board state
+    board_tensor, player_cap_tensor, opponent_cap_tensor = preprocess_game_state(
+        empty_board, player_captures, opponent_captures
+    )
 
     # Create fake target policy - let's say we want the model to play in the center
     target_policy = torch.zeros(49)
@@ -146,7 +145,9 @@ def test_train_on_batch(gomoku_model: GomokuSimpleNN):
 
     # Prepare batch
     training_batch = {
-        "states": board_state.unsqueeze(0),  # Add batch dimension
+        "states": board_tensor.unsqueeze(0),  # Add batch dimension
+        "player_captures": player_cap_tensor.unsqueeze(0),  # Add batch dimension
+        "opponent_captures": opponent_cap_tensor.unsqueeze(0),  # Add batch dimension
         "policies": target_policy.unsqueeze(0),  # Add batch dimension
         "values": target_value,
     }
@@ -158,6 +159,12 @@ def test_train_on_batch(gomoku_model: GomokuSimpleNN):
         7,
         7,
     ), f"Wrong states shape: {training_batch['states'].shape}"
+    assert training_batch["player_captures"].shape == (
+        1,
+    ), f"Wrong player_captures shape: {training_batch['player_captures'].shape}"
+    assert training_batch["opponent_captures"].shape == (
+        1,
+    ), f"Wrong opponent_captures shape: {training_batch['opponent_captures'].shape}"
     assert training_batch["policies"].shape == (
         1,
         49,
@@ -168,9 +175,9 @@ def test_train_on_batch(gomoku_model: GomokuSimpleNN):
     print("✓ Batch shapes are correct")
 
     # Get predictions before training
-    gomoku_model.eval()
-    with torch.no_grad():
-        pre_train_policy, pre_train_value = gomoku_model.predict(board_state)
+    pre_train_policy, pre_train_value = gomoku_model.predict_policy_and_value(
+        empty_board, player_captures, opponent_captures
+    )
 
     # Train on the batch
     losses = gomoku_model.train_on_batch(training_batch, epochs=10)
@@ -357,10 +364,10 @@ def test_mcts1(gomoku_model: GomokuSimpleNN):
     best_child = root.best_child(greedy=True)
     move = best_child.prev_move
 
-    print("Best move is", move)
-    pretty_print(board, move)
-    print("Best move is", move)
-    print("")
+    # print("Best move is", move)
+    # pretty_print(board, move)
+    # print("Best move is", move)
+    # print("")
 
     assert move is not None
     # best move is (5,3)
@@ -433,9 +440,10 @@ def test_mcts2(gomoku_model: GomokuSimpleNN):
     best_child = root.best_child(greedy=True)
     move = best_child.prev_move
 
-    move = mcts.best_move(board, player_captures, opponent_captures)
+    move, policy = mcts.best_move(board, player_captures, opponent_captures)
 
     print("Best move is", move)
+    # print("board", board)
     pretty_print(board, move)
     print("Best move is", move)
     print("")
@@ -487,8 +495,10 @@ def test_mcts3(gomoku_model: GomokuSimpleNN):
     # Generate tree visualization for debugging
     # tree_visualization(root)
 
-    best_child = root.best_child(greedy=True)
-    move = best_child.prev_move
+    # best_child = root.best_child(greedy=True)
+    # move = best_child.prev_move
+
+    move, policy = mcts.best_move(board, player_captures, opponent_captures)
 
     print("Best move is", move)
     pretty_print(board, move)
@@ -499,7 +509,7 @@ def test_mcts3(gomoku_model: GomokuSimpleNN):
     # move is either (1, 3) or (6, 3)
     assert move in [
         (1, 3),
-        (6, 3),
+        (5, 3),
     ], f"Expected best move to be either (1, 3) or (5, 3), got {move}"
 
 
@@ -517,7 +527,7 @@ def test_cases_mcts(gomoku_model: GomokuSimpleNN):
                     [" ", " ", " ", " ", " ", " ", " "],
                 ]
             ),
-            "expected_moves": [(1, 3), (6, 3)],
+            "expected_moves": [(1, 3), (5, 3)],
         },
     ]
 
@@ -534,7 +544,7 @@ def test_cases_mcts(gomoku_model: GomokuSimpleNN):
         board = board.astype(np.int8)
 
         mcts = MCTS(model, simulations=2000)
-        move = mcts.best_move(board, player_captures, opponent_captures)
+        move, policy = mcts.best_move(board, player_captures, opponent_captures)
 
         assert move is not None, "MCTS should return a valid move"
         assert (

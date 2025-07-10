@@ -176,12 +176,21 @@ class GomokuSimpleNN(nn.Module):
                 states, player_captures, opponent_captures
             )
 
-            # Calculate policy loss (cross-entropy)
-            # Ensure target_policies is normalized
-            target_policies_norm = target_policies / target_policies.sum(
-                dim=1, keepdim=True
+            # Calculate policy loss (KL divergence)
+            # Ensure target_policies is normalized and avoid division by zero
+            target_policies_sum = target_policies.sum(dim=1, keepdim=True)
+            target_policies_sum = torch.clamp(
+                target_policies_sum, min=1e-8
+            )  # Avoid zero division
+            target_policies_norm = target_policies / target_policies_sum
+            target_policies_norm = target_policies_norm.view(
+                policy_logits.shape
+            )  # Match shape
+            policy_loss = F.kl_div(
+                F.log_softmax(policy_logits, dim=1),
+                target_policies_norm,
+                reduction="batchmean",
             )
-            policy_loss = F.cross_entropy(policy_logits, target_policies_norm)
 
             # Calculate value loss (MSE)
             value_loss = F.mse_loss(predicted_values, target_values)
@@ -271,5 +280,3 @@ def preprocess_game_state(board, player_captures, opponent_captures):
     opponent_captures_tensor = torch.tensor(opponent_captures, dtype=torch.float32)
 
     return board_tensor, player_captures_tensor, opponent_captures_tensor
-
-

@@ -18,7 +18,7 @@ from mcts import MCTSNode, MCTS
 db = Database(DB_PATH, BOARD_SIZE)
 
 # Model and training settings
-model = GomokuSimpleNN(BOARD_SIZE)
+model = GomokuSimpleNN(BOARD_SIZE[0])
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 checkpoint_path = f"./checkpoints/{MODEL}.pt"
 
@@ -31,7 +31,7 @@ if os.path.exists(checkpoint_path):
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["optimizer_state"])
-    start_epoch = checkpoint.get("epoch", 0)
+    start_epoch = checkpoint.get("epoch", 0)  # TODO: what is this?
     print(
         f"Loaded checkpoint from {checkpoint_path}, starting from epoch {start_epoch}"
     )
@@ -102,6 +102,11 @@ for epoch in range(start_epoch, num_epochs):
             "policies": torch.stack(policies),
             "values": torch.stack(values),
         }
+
+        # Validate batch tensors
+        for key, tensor in batch.items():
+            if not torch.isfinite(tensor).all():
+                raise ValueError(f"Invalid values detected in batch tensor: {key}")
 
         # Train on batch
         losses = model.train_on_batch(batch, epochs=1)

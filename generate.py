@@ -32,14 +32,12 @@ db.setup(TABLE_NAME)
 
 # Initialize the model
 model = GomokuSimpleNN(BOARD_SIZE[0])
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 checkpoint_path = f"./checkpoints/{MODEL}.pt"
 
 # Load checkpoint if it exists
 if os.path.exists(checkpoint_path):
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint["model_state"])
-    optimizer.load_state_dict(checkpoint["optimizer_state"])
     print(f"Loaded checkpoint from {checkpoint_path}")
 
 # Start the game
