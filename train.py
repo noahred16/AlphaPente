@@ -1,98 +1,142 @@
-from game import Game, pretty_print
-from settings_loader import GameSettings
+from game import reset_game, get_legal_moves, make_move, pretty_print, check_n_in_a_row
+from settings_loader import (
+    BOARD_SIZE,
+    TABLE_NAME,
+    DB_PATH,
+    TOURNAMENT_RULES_ENABLED,
+    MODEL,
+)
 from db import Database
-from models.gomoku_simple_nn import GomokuSimpleNN
+from models.gomoku_simple_nn import GomokuSimpleNN, preprocess_game_state
 import random
 import torch
 import os
+import numpy as np
+from mcts import MCTSNode, MCTS
 
-# Load settings and initialize the game
-settings = GameSettings("gomoku-simple")  # Change game type as needed
-game = Game(settings)
-db = Database(settings.db_path, settings.board_size)
+# Initialize the database
+db = Database(DB_PATH, BOARD_SIZE)
 
-# Setup the database table for the game type
-db.setup(settings.table_name)
-
-# Initialize the model
-model = GomokuSimpleNN(settings.board_size)
+# Model and training settings
+model = GomokuSimpleNN(BOARD_SIZE)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-checkpoint_path = f"./checkpoints/{settings.settings['model']}.pt"
+checkpoint_path = f"./checkpoints/{MODEL}.pt"
+
+# Create checkpoint directory if it doesn't exist
+os.makedirs("./checkpoints", exist_ok=True)
 
 # Load checkpoint if it exists
+start_epoch = 0
 if os.path.exists(checkpoint_path):
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["optimizer_state"])
-    print(f"Loaded checkpoint from {checkpoint_path}")
+    start_epoch = checkpoint.get("epoch", 0)
+    print(
+        f"Loaded checkpoint from {checkpoint_path}, starting from epoch {start_epoch}"
+    )
 
-# Start the game
-game.reset_game()
+# Training parameters
+batch_size = 32  # Increased for better gradient estimates
+num_epochs = 100
+save_interval = 10  # Save checkpoint every N epochs
 
-while True:
-    legal_moves = game.get_legal_moves()
+# Training loop
+for epoch in range(start_epoch, num_epochs):
+    # Fetch training data
+    training_data = db.fetch_collection(
+        TABLE_NAME, 10000
+    )  # Get most recent 10k records
 
-    if len(legal_moves) == 0:
-        print("No legal moves available.")
+    if not training_data:
+        print(f"No training data available")
         break
 
-    move = random.choice(legal_moves)
+    # Shuffle data for this epoch
+    random.shuffle(training_data)
 
-    # Make a move using the make_move function
-    game.make_move(move)
+    # Track epoch losses
+    epoch_policy_loss = 0.0
+    epoch_value_loss = 0.0
+    num_batches = 0
 
-    if game.value is not None:
-        db.store(
-            settings.table_name,
-            game.board,
-            game.player_captures,
-            game.opponent_captures,
-            game.num_moves,
-            game.policy,
-            game.value,
-        )
+    # Process in batches
+    for batch_start in range(0, len(training_data), batch_size):
+        batch_end = min(batch_start + batch_size, len(training_data))
+        batch_data = training_data[batch_start:batch_end]
 
-        # Train the model
-        board_tensor = torch.tensor(game.board, dtype=torch.float32).unsqueeze(0)
-        policy, value = model(
-            board_tensor,
-            game.player_captures,
-            game.opponent_captures,
-            game.num_moves,
-        )
-        target_value = torch.tensor([game.value], dtype=torch.float32)
-        value_loss = torch.nn.functional.mse_loss(value.view(-1), target_value)
-        optimizer.zero_grad()
-        value_loss.backward()
-        optimizer.step()
+        # Prepare batch tensors
+        board_states = []
+        player_captures_list = []
+        opponent_captures_list = []
+        policies = []
+        values = []
 
-    if game.value is not None:
-        print("Game Over with move:", move, "Number of moves:", game.num_moves)
-        break
+        for data in batch_data:
+            id, board, player_captures, opponent_captures, num_moves, policy, value = (
+                db.decode_row(data)
+            )
 
-    # Flip the board for the opponent's turn
-    game.board *= -1
+            # Preprocess the game state
+            board_tensor, player_cap_tensor, opponent_cap_tensor = (
+                preprocess_game_state(board, player_captures, opponent_captures)
+            )
 
-# Pretty print the final board state
-pretty_print(game.board, move)
+            board_states.append(board_tensor)
+            player_captures_list.append(player_cap_tensor)
+            opponent_captures_list.append(opponent_cap_tensor)
 
-# Save the checkpoint
-torch.save(
-    {
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-    },
-    checkpoint_path,
-)
+            # Convert policy and value to tensors
+            # Policy should be a flat tensor of shape (49,) for 7x7 board
+            policy_tensor = torch.tensor(policy, dtype=torch.float32)
+            value_tensor = torch.tensor(value, dtype=torch.float32)
 
-# Print how many records are in the database
-total_records = db.get_total(settings.table_name)
-print(f"Total records in {settings.table_name}: {total_records}")
+            policies.append(policy_tensor)
+            values.append(value_tensor)
 
-rows = db.fetch_collection(settings.table_name, 50)
+        # Stack batch tensors
+        batch = {
+            "states": torch.stack(board_states),
+            "player_captures": torch.stack(player_captures_list),
+            "opponent_captures": torch.stack(opponent_captures_list),
+            "policies": torch.stack(policies),
+            "values": torch.stack(values),
+        }
 
-# for row in rows:
-#     id, board, player_captures, opponent_captures, num_moves, policy, value = db.decode_row(row)
-#     if value is not None:
-#         # print(f"Number of moves: {num_moves}, Value: {value:.2f}")
-#         print(f"ID: {id} Num Moves: {num_moves} Value: {value:.2f}")
+        # Train on batch
+        losses = model.train_on_batch(batch, epochs=1)
+
+        # Accumulate losses
+        epoch_policy_loss += losses["policy_loss"]
+        epoch_value_loss += losses["value_loss"]
+        num_batches += 1
+
+        # Print progress every 100 batches
+        if (batch_start // batch_size + 1) % 100 == 0:
+            print(
+                f"Epoch {epoch}, Batch {batch_start // batch_size + 1}/{len(training_data) // batch_size}: "
+                f"Policy Loss: {losses['policy_loss']:.4f}, Value Loss: {losses['value_loss']:.4f}"
+            )
+
+    # Calculate average losses for epoch
+    avg_policy_loss = epoch_policy_loss / num_batches if num_batches > 0 else 0
+    avg_value_loss = epoch_value_loss / num_batches if num_batches > 0 else 0
+
+    print(f"\nEpoch {epoch} completed:")
+    print(f"  Average Policy Loss: {avg_policy_loss:.4f}")
+    print(f"  Average Value Loss: {avg_value_loss:.4f}")
+    print(f"  Total samples trained: {len(training_data)}")
+
+    # Save checkpoint periodically
+    if (epoch + 1) % save_interval == 0 or epoch == num_epochs - 1:
+        checkpoint = {
+            "epoch": epoch + 1,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "policy_loss": avg_policy_loss,
+            "value_loss": avg_value_loss,
+        }
+        torch.save(checkpoint, checkpoint_path)
+        print(f"Checkpoint saved at epoch {epoch + 1}")
+
+print("\nTraining completed!")

@@ -10,6 +10,18 @@ The insights are generated through the process of the MCTS.
 
 Works through a NN MCTS
 
+## Quickstart
+<!-- start python virtual env -->
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+<!-- generate requirments.txt -->
+pip freeze > requirements.txt
+
+
 
 ## GUI
 flask --app play run --debug
+
+
