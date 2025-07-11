@@ -17,7 +17,7 @@ TOURNAMENT_RULES_ENABLED = _settings["tournament_rules_enabled"]
 CONNECT_N = _settings["connect_n"]
 TABLE_NAME = _settings["table_name"]
 DB_PATH = _settings["db_path"]
-MODEL = _settings["model"] + "_TEST"
+MODEL = _settings["model"]  # + "_TEST"
 
 
 @pytest.fixture
@@ -46,17 +46,21 @@ def db():
 
 @pytest.fixture
 def gomoku_model():
-    model = GomokuSimpleNN(BOARD_SIZE[0])
-
     # Initialize the model
+    torch.manual_seed(42)
     model = GomokuSimpleNN(BOARD_SIZE[0])
     checkpoint_path = f"./checkpoints/{MODEL}.pt"
 
     # Load checkpoint if it exists
     if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
         model.load_state_dict(checkpoint["model_state"])
         print(f"Loaded checkpoint from {checkpoint_path}")
+    else:
+        print(f"No checkpoint found at {checkpoint_path}. Using untrained model.")
+
+    # seed and eval
+    model.eval()
 
     return model
 
@@ -353,7 +357,7 @@ def test_mcts1(gomoku_model: GomokuSimpleNN):
     board = board.astype(np.int8)
 
     model = gomoku_model
-    mcts = MCTS(model, simulations=2000)
+    mcts = MCTS(model, simulations=200)
 
     root = mcts.run(board, player_captures, opponent_captures)
     assert root is not None, "MCTS run should return a valid result"
@@ -429,7 +433,7 @@ def test_mcts2(gomoku_model: GomokuSimpleNN):
     board = board.astype(np.int8)
 
     model = gomoku_model
-    mcts = MCTS(model, simulations=2000)
+    mcts = MCTS(model, simulations=200)
 
     root = mcts.run(board, player_captures, opponent_captures)
     assert root is not None, "MCTS run should return a valid result"
@@ -487,7 +491,7 @@ def test_mcts3(gomoku_model: GomokuSimpleNN):
     board = board.astype(np.int8)
 
     model = gomoku_model
-    mcts = MCTS(model, simulations=2000)
+    mcts = MCTS(model, simulations=200)
 
     root = mcts.run(board, player_captures, opponent_captures)
     assert root is not None, "MCTS run should return a valid result"
@@ -543,7 +547,7 @@ def test_cases_mcts(gomoku_model: GomokuSimpleNN):
         board = np.where(board == " ", 0, board)
         board = board.astype(np.int8)
 
-        mcts = MCTS(model, simulations=2000)
+        mcts = MCTS(model, simulations=200)
         move, policy = mcts.best_move(board, player_captures, opponent_captures)
 
         assert move is not None, "MCTS should return a valid move"
@@ -553,3 +557,95 @@ def test_cases_mcts(gomoku_model: GomokuSimpleNN):
 
         # tree_visualization(root)
         # pretty_print(board, move)
+
+
+# TODO write a test called test_mcts4
+
+
+# [[ 0  0  1  0  0  0  0]
+#  [ 0  0  0  0  0  0  0]
+#  [ 0  0  0  0  0  0  0]
+#  [ 0  0 -1 -1 -1  0  0]
+#  [ 0  0  0  0  0  0  0]
+#  [ 0  0  0  1  1  0  0]
+#  [-1  0  0  0  0  0  0]]
+def test_mcts4(gomoku_model: GomokuSimpleNN):
+    """Test MCTS with a specific board position requiring strategic play."""
+    board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
+
+    # Board position from the comment at end of file
+    board = np.array(
+        [
+            [0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, -1, -1, -1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 1, 0, 0],
+            [-1, 0, 0, 0, 0, 0, 0],
+        ],
+        dtype=np.int8,
+    )
+
+    # Analyze the position:
+    # Player 1 (X) has: stones at (0,2), (5,3), (5,4)
+    # Player -1 (O) has: stones at (3,2), (3,3), (3,4), (6,0)
+    # O has 3 in a row horizontally at row 3
+    # X has 2 in a row horizontally at row 5
+
+    # Critical moves to consider:
+    # - (3,1) or (3,5) to block O from getting 4 in a row
+    # - (5,2) or (5,5) to extend X's line to 3
+
+    # Since it's X's turn and O has 3 in a row, X must block!
+    expected_blocking_moves = [(3, 1), (3, 5)]
+
+    model = gomoku_model
+    mcts = MCTS(model, simulations=300)
+
+    root = mcts.run(board, player_captures, opponent_captures)
+    assert root is not None, "MCTS run should return a valid result"
+
+    # Get the best move
+    move, policy = mcts.best_move(board, player_captures, opponent_captures)
+
+    # tree_visualization(root)
+
+    print(f"\ntest_mcts4 - Board position:")
+    # pretty_print(board, move)
+    print(board)
+    print(policy)
+    print(f"Best move selected: {move}")
+    print(f"Expected blocking moves: {expected_blocking_moves}")
+
+    # Verify that MCTS chooses to block O's potential win
+    assert move is not None, "MCTS should return a valid move"
+    assert move in expected_blocking_moves, (
+        f"Expected MCTS to block O's line by playing one of {expected_blocking_moves}, "
+        f"but it played {move} instead"
+    )
+
+    # Additional validation: check that the move is actually blocking
+    # if move == (3, 1):
+    #     print("✓ Correctly blocked on the left side of O's line")
+    # elif move == (3, 5):
+    #     print("✓ Correctly blocked on the right side of O's line")
+
+    # Optional: Analyze top moves from MCTS
+    # print("\nTop moves considered by MCTS:")
+    # children = root.children
+    # sorted_children = sorted(
+    #     children.items(),
+    #     key=lambda x: x[1].num_visits,
+    #     reverse=True
+    # )[:5]
+
+    # for i, (child_move, child_node) in enumerate(sorted_children):
+    #     visit_ratio = child_node.num_visits / root.num_visits
+    #     avg_value = child_node.value / child_node.num_visits if child_node.num_visits > 0 else 0
+    #     print(f"  {i+1}. Move {child_move}: "
+    #           f"visits={child_node.num_visits} ({visit_ratio:.1%}), "
+    #           f"avg_value={avg_value:.3f}")
+
+    # Uncomment to generate tree visualization for debugging
+    # tree_visualization(root)

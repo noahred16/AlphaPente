@@ -229,6 +229,7 @@ class GomokuSimpleNN(nn.Module):
         """
         # Set model to evaluation mode
         self.eval()
+        torch.manual_seed(42)  # Set a fixed seed
 
         # Preprocess the game state
         board_tensor, player_cap_tensor, opponent_cap_tensor = preprocess_game_state(

@@ -25,3 +25,17 @@ pip freeze > requirements.txt
 flask --app play run --debug
 
 
+
+
+## TODO
+Webapp:
+- allow white and black to be played by different players
+- better state management
+- better ai
+
+Training:
+- each position could be flipped and rotated to increase the training set (total of 16 positions)
+
+Generation:
+- anayze the bottleneck. each game takes a long time to generate
+- probably its the gpu part, I'd think. 

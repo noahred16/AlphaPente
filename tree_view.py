@@ -94,10 +94,10 @@ def tree_visualization(root: MCTSNode, exploration_constant: float = 1.0):
         # Add children to the queue for breadth-first traversal
         if node_count < NODE_LIMIT:
             # Sort children by move coordinates (row, column) in ascending order
-            sorted_children = sorted(
-                node.children.items(), key=lambda x: (x[0][0], x[0][1])
-            )
-            for move, child in sorted_children:
+            # sorted_children = sorted(
+            #     node.children.items(), key=lambda x: (x[0][0], x[0][1])
+            # )
+            for child in node.children:
                 queue.append(child)
 
     file_name = "mcts_tree"

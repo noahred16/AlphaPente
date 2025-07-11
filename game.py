@@ -81,7 +81,9 @@ def check_n_in_a_row(move, board, connect_n, current_player=1):
         count = 1
         nx, ny = x + dx, y + dy
         while (
-            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == current_player
+            0 <= nx < board_size[0]
+            and 0 <= ny < board_size[1]
+            and board[nx][ny] == current_player
         ):
             count += 1
             if count == connect_n:
@@ -90,7 +92,9 @@ def check_n_in_a_row(move, board, connect_n, current_player=1):
             ny += dy
         nx, ny = x - dx, y - dy
         while (
-            0 <= nx < board_size[0] and 0 <= ny < board_size[1] and board[nx][ny] == current_player
+            0 <= nx < board_size[0]
+            and 0 <= ny < board_size[1]
+            and board[nx][ny] == current_player
         ):
             count += 1
             if count == connect_n:

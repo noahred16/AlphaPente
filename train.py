@@ -26,23 +26,19 @@ checkpoint_path = f"./checkpoints/{MODEL}.pt"
 os.makedirs("./checkpoints", exist_ok=True)
 
 # Load checkpoint if it exists
-start_epoch = 0
 if os.path.exists(checkpoint_path):
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["optimizer_state"])
-    start_epoch = checkpoint.get("epoch", 0)  # TODO: what is this?
-    print(
-        f"Loaded checkpoint from {checkpoint_path}, starting from epoch {start_epoch}"
-    )
+    print(f"Loaded checkpoint from {checkpoint_path}")
 
 # Training parameters
 batch_size = 32  # Increased for better gradient estimates
 num_epochs = 100
 save_interval = 10  # Save checkpoint every N epochs
 
-# Training loop
-for epoch in range(start_epoch, num_epochs):
+# Training loop - always starts from epoch 0
+for epoch in range(num_epochs):
     # Fetch training data
     training_data = db.fetch_collection(
         TABLE_NAME, 10000
@@ -132,10 +128,9 @@ for epoch in range(start_epoch, num_epochs):
     print(f"  Average Value Loss: {avg_value_loss:.4f}")
     print(f"  Total samples trained: {len(training_data)}")
 
-    # Save checkpoint periodically
+    # Save checkpoint periodically (without epoch tracking)
     if (epoch + 1) % save_interval == 0 or epoch == num_epochs - 1:
         checkpoint = {
-            "epoch": epoch + 1,
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "policy_loss": avg_policy_loss,

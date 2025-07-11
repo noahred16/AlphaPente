@@ -29,8 +29,10 @@ def load_model(settings):
         checkpoint_path = f"./checkpoints/{settings['model']}.pt"
 
         if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path)
-            print(f"Checkpoint loaded successfully: {checkpoint.keys()}")  # Debugging statement
+            checkpoint = torch.load(checkpoint_path, weights_only=False)
+            print(
+                f"Checkpoint loaded successfully: {checkpoint.keys()}"
+            )  # Debugging statement
             model.load_state_dict(checkpoint["model_state"])
             model.eval()
             return model
@@ -77,16 +79,16 @@ def new_game():
     session["user_color"] = user_color
     session["user_value"] = -1 if user_color == "white" else 1
     session["ai_value"] = 1 if user_color == "white" else -1
-    
+
     # White goes first in this game
     session["current_player"] = -1  # -1 = white, 1 = black
-    
+
     session["game_over"] = False
     session["winner"] = None
     session["ai_move_type"] = None
 
     # If AI plays white (user chose black), AI needs to make first move
-    needs_ai_move = (user_color == "black")
+    needs_ai_move = user_color == "black"
 
     return jsonify(
         {
@@ -100,7 +102,7 @@ def new_game():
             "user_color": user_color,
             "user_value": session["user_value"],
             "ai_value": session["ai_value"],
-            "needs_ai_move": needs_ai_move
+            "needs_ai_move": needs_ai_move,
         }
     )
 
@@ -144,9 +146,11 @@ def make_move_api():
         winner = None
         if game_over:
             winner = "user"
-        
+
         # Check for draw (no legal moves left)
-        if not game_over and not get_legal_moves(board, num_moves + 1, settings["tournament_rules_enabled"]):
+        if not game_over and not get_legal_moves(
+            board, num_moves + 1, settings["tournament_rules_enabled"]
+        ):
             game_over = True
             winner = "draw"
 
@@ -171,7 +175,7 @@ def make_move_api():
                 "game_over": session["game_over"],
                 "winner": session["winner"],
                 "ai_move_type": session.get("ai_move_type"),
-                "needs_ai_move": needs_ai_move
+                "needs_ai_move": needs_ai_move,
             }
         )
 
@@ -206,7 +210,7 @@ def make_ai_move():
         legal_moves = get_legal_moves(
             board, num_moves, settings["tournament_rules_enabled"]
         )
-        
+
         if not legal_moves:
             raise ValueError("No legal moves available")
 
@@ -215,13 +219,12 @@ def make_ai_move():
         # Use MCTS to determine the best move
         model = load_model(settings)
         mcts = MCTS(model, simulations=100)
-        print("board:", board)
 
         # copy and flip board
         model_board = np.copy(board)
-        model_board *= -1  # Flip the board for the model
+        # model_board *= -1  # Flip the board for the model
 
-
+        print("board:", model_board)
         move, policy = mcts.best_move(model_board, player_captures, opponent_captures)
         print("best move:", move, "policy:", policy)
         if move is None:
@@ -235,9 +238,11 @@ def make_ai_move():
         winner = None
         if game_over:
             winner = "ai"
-            
+
         # Check for draw (no legal moves left)
-        if not game_over and not get_legal_moves(board, num_moves + 1, settings["tournament_rules_enabled"]):
+        if not game_over and not get_legal_moves(
+            board, num_moves + 1, settings["tournament_rules_enabled"]
+        ):
             game_over = True
             winner = "draw"
 

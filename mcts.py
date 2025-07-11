@@ -17,6 +17,7 @@ from game import (
     calculate_score,
     pretty_print,
 )
+import gc
 
 # from models.gomoku_simple_nn import predict_policy_and_value
 
@@ -45,7 +46,7 @@ class MCTSNode:
         self.opponent_captures = opponent_captures
         self.num_moves = num_moves
         self.parent = parent
-        self.children = {}
+        self.children = []
         self.num_visits = 0
         self.is_terminal = is_game_over(
             prev_move, self.board, player_captures, CONNECT_N, num_moves
@@ -111,7 +112,7 @@ class MCTSNode:
         best_node = None
         best_value = float("-inf")
 
-        for move, child in self.children.items():
+        for child in self.children:
             if greedy:
                 # value = child.total_value / child.num_visits if child.num_visits > 0 else 0
                 value = child.num_visits
@@ -144,8 +145,15 @@ class MCTS:
 
         self.root = None
 
-    def best_move(self, board, player_captures, opponent_captures):
-        root = self.run(board, player_captures, opponent_captures)
+    def best_move(
+        self,
+        board,
+        player_captures,
+        opponent_captures,
+        starting_point=None,
+        return_node=False,
+    ):
+        root = self.run(board, player_captures, opponent_captures, starting_point)
         if root is None:
             return None
 
@@ -156,14 +164,11 @@ class MCTS:
                 board, root.num_moves, TOURNAMENT_RULES_ENABLED
             )
             if legal_moves:
-                return random.choice(legal_moves), np.zeros(
-                    (BOARD_SIZE[0], BOARD_SIZE[1]), dtype=float
-                )
+                best = random.choice(root.children)
             else:
                 raise ValueError("No legal moves available for random selection.")
-            best = random.choice(root.children.values())
-
-        best = root.best_child(greedy=True)
+        else:
+            best = root.best_child(greedy=True)
 
         # TODO
         # policy is determined by using the move nums (num_visits)
@@ -171,9 +176,9 @@ class MCTS:
 
         moves_visits = []
         # loop through the moves from the root and
-        for move, child in root.children.items():
+        for child in root.children:
             if child.num_visits > 0:
-                moves_visits.append((move, child.num_visits))
+                moves_visits.append((child.prev_move, child.num_visits))
 
         # policy
         policy = np.zeros((BOARD_SIZE[0], BOARD_SIZE[1]), dtype=float)
@@ -185,22 +190,29 @@ class MCTS:
                 row, col = move
                 policy[row][col] = visits / total_visits
 
+        if return_node:
+            return best, policy
+
         return best.prev_move, policy
 
-    def run(self, board, player_captures, opponent_captures):
+    def run(self, board, player_captures, opponent_captures, starting_point=None):
         """
         Run MCTS for the specified number of simulations.
         :return: The best move based on the search.
         """
         num_moves = sum(1 for row in board for cell in row if cell != 0)
 
-        root_node = MCTSNode(
-            board=board,
-            policy_prior=None,
-            player_captures=player_captures,
-            opponent_captures=opponent_captures,
-            num_moves=num_moves,
-        )
+        if starting_point is not None:
+            root_node = starting_point
+        else:
+            root_node = MCTSNode(
+                board=board,
+                policy_prior=None,
+                player_captures=player_captures,
+                opponent_captures=opponent_captures,
+                num_moves=num_moves,
+            )
+
         self.root = root_node
         for _ in range(self.simulations):
             # 1.) SELECTION
@@ -282,7 +294,8 @@ class MCTS:
                 num_moves=node.num_moves + 1,
                 parent=node,
             )
-            node.children[move] = child_node
+            # node.children[move] = child_node
+            node.children.append(child_node)
             node.untried_moves.remove(move)
 
         return child_node
@@ -324,3 +337,17 @@ class MCTS:
     # move probabilities come from num_visits and the value comes from the value.
     # only collect samples from the greedy path?
     # it may make sense to collect using unique starting points. But we'll always use the root for collcetion
+    def clear_tree(self):
+        """
+        Clear the MCTS tree to free memory between games.
+        """
+        # Clear the root node and all its references
+        self.root = None
+
+        # Clear any collected samples
+        self.samples.clear()
+
+        # Force garbage collection to ensure memory is freed
+        import gc
+
+        gc.collect()

@@ -36,7 +36,7 @@ checkpoint_path = f"./checkpoints/{MODEL}.pt"
 
 # Load checkpoint if it exists
 if os.path.exists(checkpoint_path):
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
     model.load_state_dict(checkpoint["model_state"])
     print(f"Loaded checkpoint from {checkpoint_path}")
 
@@ -51,20 +51,20 @@ record_count = 0
 
 game_num = 0
 
-mcts = MCTS(model, simulations=100, random=0.3)
-
-# TODO Experiment with different MCTS configurations
-p1 = MCTS(model, simulations=400)
-p2 = MCTS(model, simulations=20)
-
-p1 = mcts
-p2 = mcts
-
 while True:
     game_num += 1
 
     # start a game
     board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
+    mcts = MCTS(model, simulations=100, random=0.3)
+
+    # TODO Experiment with different MCTS configurations
+    # p1 = MCTS(model, simulations=400)
+    # p2 = MCTS(model, simulations=20)
+
+    p1 = mcts
+    p2 = mcts
+
     num_moves = 0
 
     moves = []
@@ -79,11 +79,17 @@ while True:
             mcts = p2
 
         # generate the best move
-        move, policy = mcts.best_move(board, player_captures, opponent_captures)
+        move, policy = mcts.best_move(
+            board,
+            player_captures,
+            opponent_captures,
+            starting_point=move,
+            return_node=True,
+        )
         # moves.append move and policy
         moves.append(
             (
-                np.array(board, copy=True),
+                board.copy(),
                 player_captures,
                 opponent_captures,
                 num_moves,
@@ -93,9 +99,13 @@ while True:
 
         # pretty_print(board)
         # print(board)
+        # print(move)
+        # print(move.prev_move)
+
+        move_to_make = move.prev_move
 
         # make the move
-        make_move(move, board)
+        make_move(move_to_make, board)
 
         # flip board for display
 
@@ -105,7 +115,10 @@ while True:
         num_moves += 1
         # pretty_print(board, move=move)
         # print(board)
-        game_over = is_game_over(move, board, player_captures, CONNECT_N, num_moves)
+        # print(move)
+        game_over = is_game_over(
+            move_to_make, board, player_captures, CONNECT_N, num_moves
+        )
         if game_over:
             result = calculate_score(num_moves, BOARD_SIZE, CAPTURES_ENABLED)
             # print(f"Game Over! Result: {result}")
@@ -135,6 +148,9 @@ while True:
             result,
         )
         record_count += 1
+
+    p1.clear_tree()
+    p2.clear_tree()
 
     print(
         f"Records in DB: {record_count}/{record_limit} - Game {game_num} completed in {len(moves)} moves."
