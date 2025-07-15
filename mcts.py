@@ -27,6 +27,7 @@ class MCTSNode:
         self,
         board,
         policy_prior,
+        value,
         player_captures=0,
         opponent_captures=0,
         num_moves=0,
@@ -59,7 +60,7 @@ class MCTSNode:
         self.value = (
             calculate_score(num_moves, BOARD_SIZE, CAPTURES_ENABLED)
             if self.is_terminal
-            else None
+            else value
         )
         self.total_value = 0  # self.value if self.is_terminal else 0
         self.turn = 1
@@ -208,6 +209,7 @@ class MCTS:
             root_node = MCTSNode(
                 board=board,
                 policy_prior=None,
+                value=None,
                 player_captures=player_captures,
                 opponent_captures=opponent_captures,
                 num_moves=num_moves,
@@ -241,6 +243,11 @@ class MCTS:
             board, player_captures, opponent_captures
         )
         return value
+    
+    def get_policy_value(self, board, player_captures, opponent_captures):
+        return self.model.predict_policy_and_value(
+            board, player_captures, opponent_captures
+        )
 
     def selection(self, node: MCTSNode):
         """
@@ -274,7 +281,7 @@ class MCTS:
 
         # TODO apply the move to the board?
         # for each move in untried_moves:
-        policy_priors = self.get_policy_priors(
+        policy_priors, value = self.get_policy_value(
             board=node.board,
             player_captures=node.player_captures,
             opponent_captures=node.opponent_captures,
@@ -288,6 +295,7 @@ class MCTS:
                 policy_prior=policy_priors[move[0]][
                     move[1]
                 ],  # Use the prior for the move
+                value=value,
                 board=node.board,
                 player_captures=node.player_captures,
                 opponent_captures=node.opponent_captures,
@@ -309,11 +317,7 @@ class MCTS:
         if node.is_terminal:
             return node.value  # TODO account for turn?
 
-        value = self.get_value(
-            node.board,
-            node.player_captures,
-            node.opponent_captures,
-        )
+        value = node.value
         return value
 
     def backpropagation(self, node: MCTSNode, value: float):

@@ -22,7 +22,23 @@ import random
 import torch
 import os
 from mcts import MCTSNode, MCTS
+import argparse
 import numpy as np
+
+# python generate.py --simulations 100
+parser = argparse.ArgumentParser(description="AlphaPente Data Generator")
+parser.add_argument(
+    "--simulations",
+    type=int,
+    default=100,
+    help="Number of MCTS simulations per move (default: 100)",
+)
+args = parser.parse_args()
+
+simulations = args.simulations
+print(
+    f"Running AlphaPente data generation with {simulations} MCTS simulations per move."
+)
 
 # Initialize the database
 db = Database(DB_PATH, BOARD_SIZE)
@@ -56,7 +72,7 @@ while True:
 
     # start a game
     board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
-    mcts = MCTS(model, simulations=100, random=0.3)
+    mcts = MCTS(model, simulations=simulations, random=0.3)
 
     # TODO Experiment with different MCTS configurations
     # p1 = MCTS(model, simulations=400)
