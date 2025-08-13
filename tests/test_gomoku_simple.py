@@ -301,13 +301,12 @@ def test_mcts0(gomoku_model: GomokuSimpleNN):
     assert num_of_x == 23
     assert num_of_o == 23
 
-    # convert X to 1
-    # convert O to -1
-
-    board = np.where(board == "X", 1, board)
-    board = np.where(board == "O", -1, board)
-    board = np.where(board == " ", 0, board)
-    board = board.astype(np.int8)
+    # convert X to 1, O to -1, " " to 0
+    numeric_board = np.zeros((7, 7), dtype=np.int8)
+    numeric_board[board == "X"] = 1
+    numeric_board[board == "O"] = -1
+    numeric_board[board == " "] = 0
+    board = numeric_board
 
     model = gomoku_model
     mcts = MCTS(model, simulations=800)
@@ -399,13 +398,12 @@ def test_mcts1(gomoku_model: GomokuSimpleNN):
     assert num_of_x == 22
     assert num_of_o == 22
 
-    # convert X to 1
-    # convert O to -1
-
-    board = np.where(board == "X", 1, board)
-    board = np.where(board == "O", -1, board)
-    board = np.where(board == " ", 0, board)
-    board = board.astype(np.int8)
+    # convert X to 1, O to -1, " " to 0
+    numeric_board = np.zeros((7, 7), dtype=np.int8)
+    numeric_board[board == "X"] = 1
+    numeric_board[board == "O"] = -1
+    numeric_board[board == " "] = 0
+    board = numeric_board
 
     model = gomoku_model
     mcts = MCTS(model, simulations=1800)
@@ -475,13 +473,12 @@ def test_mcts2(gomoku_model: GomokuSimpleNN):
     assert num_of_x == 23
     assert num_of_o == 23
 
-    # convert X to 1
-    # convert O to -1
-
-    board = np.where(board == "X", 1, board)
-    board = np.where(board == "O", -1, board)
-    board = np.where(board == " ", 0, board)
-    board = board.astype(np.int8)
+    # convert X to 1, O to -1, " " to 0
+    numeric_board = np.zeros((7, 7), dtype=np.int8)
+    numeric_board[board == "X"] = 1
+    numeric_board[board == "O"] = -1
+    numeric_board[board == " "] = 0
+    board = numeric_board
 
     model = gomoku_model
     mcts = MCTS(model, simulations=200)
@@ -533,13 +530,12 @@ def test_mcts3(gomoku_model: GomokuSimpleNN):
     assert num_of_x == 3
     assert num_of_o == 3
 
-    # convert X to 1
-    # convert O to -1
-
-    board = np.where(board == "X", 1, board)
-    board = np.where(board == "O", -1, board)
-    board = np.where(board == " ", 0, board)
-    board = board.astype(np.int8)
+    # convert X to 1, O to -1, " " to 0
+    numeric_board = np.zeros((7, 7), dtype=np.int8)
+    numeric_board[board == "X"] = 1
+    numeric_board[board == "O"] = -1
+    numeric_board[board == " "] = 0
+    board = numeric_board
 
     model = gomoku_model
     mcts = MCTS(model, simulations=200)
@@ -593,10 +589,11 @@ def test_cases_mcts(gomoku_model: GomokuSimpleNN):
         board = case["board"]
         expected_moves = case["expected_moves"]
 
-        board = np.where(board == "X", 1, board)
-        board = np.where(board == "O", -1, board)
-        board = np.where(board == " ", 0, board)
-        board = board.astype(np.int8)
+        numeric_board = np.zeros((7, 7), dtype=np.int8)
+        numeric_board[board == "X"] = 1
+        numeric_board[board == "O"] = -1
+        numeric_board[board == " "] = 0
+        board = numeric_board
 
         mcts = MCTS(model, simulations=200)
         move, policy = mcts.best_move(board, player_captures, opponent_captures)

@@ -26,51 +26,10 @@ import argparse
 import numpy as np
 import time
 
-# python generate.py --simulations 100
-parser = argparse.ArgumentParser(description="AlphaPente Data Generator")
-parser.add_argument(
-    "--simulations",
-    type=int,
-    default=100,
-    help="Number of MCTS simulations per move (default: 100)",
-)
-args = parser.parse_args()
 
-simulations = args.simulations
-print(
-    f"Running AlphaPente data generation with {simulations} MCTS simulations per move."
-)
 
-# Initialize the database
-db = Database(DB_PATH, BOARD_SIZE)
-
-# Setup the database table for the game type
-db.setup(TABLE_NAME)
-
-# Initialize the model
-model = GomokuSimpleNN(BOARD_SIZE[0])
-checkpoint_path = f"./checkpoints/{MODEL}.pt"
-
-# Load checkpoint if it exists
-if os.path.exists(checkpoint_path):
-    checkpoint = torch.load(checkpoint_path, weights_only=False)
-    model.load_state_dict(checkpoint["model_state"])
-    print(f"Loaded checkpoint from {checkpoint_path}")
-
-# Start the game
-board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
-num_moves = 0
-
-# record_limit = 10_000
-record_limit = 1_000
-
-record_count = 0
-
-game_num = 0
-
-while True:
-    game_num += 1
-
+# plays a game given a model, returns moves. 
+def play_game(model, simulations=100):
     # Track game play time
     game_start_time = time.time()
 
@@ -135,6 +94,13 @@ while True:
     game_end_time = time.time()
     game_duration = game_end_time - game_start_time
 
+    p1.clear_tree()
+    p2.clear_tree()
+
+    return moves, result
+
+def store_moves(moves, result):
+    record_count = 0
     # Track DB store time
     db_start_time = time.time()
     # store the moves in the db with the result
@@ -142,8 +108,8 @@ while True:
     for i, (board, player_captures, opponent_captures, num_moves, policy) in enumerate(
         reversed(moves)
     ):
-        if record_count >= record_limit:
-            break
+        # if record_count >= record_limit:
+        #     break
 
         # skip over random moves (ones where policy is 0 for all
         if np.all(policy == 0):
@@ -152,30 +118,95 @@ while True:
         # flip the result for each opponent move
         result = result if i % 2 == 0 else -result
         # temp while speed check
-        # db.store(
-        #     TABLE_NAME,
-        #     board,
-        #     player_captures,
-        #     opponent_captures,
-        #     num_moves,
-        #     policy,
-        #     result,
-        # )
+        db.store(
+            TABLE_NAME,
+            board,
+            player_captures,
+            opponent_captures,
+            num_moves,
+            policy,
+            result,
+        )
         record_count += 1
     db_end_time = time.time()
     db_duration = db_end_time - db_start_time
 
-    p1.clear_tree()
-    p2.clear_tree()
+    # print(
+    #     f"Records in DB: {record_count}/{record_limit} - Game {game_num} completed in {len(moves)} moves."
+    # )
+    # print(f"Game {game_num} play time: {game_duration:.2f} seconds.")
+    # print(f"Game {game_num} DB store time: {db_duration:.2f} seconds.")
 
-    print(
-        f"Records in DB: {record_count}/{record_limit} - Game {game_num} completed in {len(moves)} moves."
-    )
-    print(f"Game {game_num} play time: {game_duration:.2f} seconds.")
-    print(f"Game {game_num} DB store time: {db_duration:.2f} seconds.")
+    return record_count
 
-    if record_count >= record_limit:
-        break
-
-    break  # temp
+    # break  # temp
 # generate until we hit 10 rows in the db using the model if it exists
+
+
+
+# if main
+if __name__ == "__main__":
+    
+
+
+    # python generate.py --simulations 100
+    parser = argparse.ArgumentParser(description="AlphaPente Data Generator")
+    parser.add_argument(
+        "--simulations",
+        type=int,
+        default=100,
+        help="Number of MCTS simulations per move (default: 100)",
+    )
+    args = parser.parse_args()
+
+    simulations = args.simulations
+    print(
+        f"Running AlphaPente data generation with {simulations} MCTS simulations per move."
+    )
+
+    # Initialize the database
+    db = Database(DB_PATH, BOARD_SIZE)
+
+    # Setup the database table for the game type
+    db.setup(TABLE_NAME)
+
+    # Initialize the model
+    model = GomokuSimpleNN(BOARD_SIZE[0])
+    checkpoint_path = f"./checkpoints/{MODEL}.pt"
+
+    # Load checkpoint if it exists
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        model.load_state_dict(checkpoint["model_state"])
+        print(f"Loaded checkpoint from {checkpoint_path}")
+
+    # Start the game
+    num_moves = 0
+
+    # record_limit = 10_000
+    record_limit = 1_000
+
+    record_count = 0
+
+    game_num = 0
+
+    while True:
+        game_num += 1
+
+        print(f"Generate starting game")
+
+        moves, result = play_game(model)
+        print(f"Worker DONE game, with num_moves: {len(moves)}")
+
+        # print("result", result)
+
+        num_records = store_moves(moves, result)
+
+        record_count += num_records
+
+        if record_count >= record_limit:
+            break
+
+
+
+
