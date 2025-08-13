@@ -171,3 +171,41 @@ class Database:
         conn.close()
         print(f"Cleared {affected_rows} rows from table '{table_name}'.")
         return affected_rows
+
+    def review_last_game(self, table_name):
+        # get rows where num_moves = 0
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM {table_name}
+            WHERE num_moves = 0
+            ORDER BY id DESC
+            LIMIT 2
+            """
+        )
+        starting_points = cursor.fetchall()
+        if len(starting_points) != 2:
+            print("No starting points found in the database.")
+            return []
+        # decode
+        data = []
+        for start in starting_points:
+            data.append(self.decode_row(start))
+
+        start_id = starting_points[0][0]
+        second_starting_point_id = starting_points[1][0]
+
+        # fetch all rows with id > second_starting_point_id
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM {table_name}
+            WHERE id > ?
+            """,
+            (second_starting_point_id,),
+        )
+        review_data = cursor.fetchall()
+        conn.close()
+        return review_data

@@ -57,6 +57,7 @@ def tree_visualization(root: MCTSNode, exploration_constant: float = 1.0):
             f"Exploration: {exploration:.2f}\\n"
             f"Exploitation: {exploitation:.2f}\\n"
             f"PUCT: {ucb}\\n"
+            f"policy_prior: {node.policy_prior if node.policy_prior is not None else 0.0:.2f}\\n"
             f"is_terminal: {node.is_terminal}\\n"
             f"value: {value:.2f}\\n"
             f"num_moves: {node.num_moves}\\n"

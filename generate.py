@@ -24,6 +24,7 @@ import os
 from mcts import MCTSNode, MCTS
 import argparse
 import numpy as np
+import time
 
 # python generate.py --simulations 100
 parser = argparse.ArgumentParser(description="AlphaPente Data Generator")
@@ -70,6 +71,9 @@ game_num = 0
 while True:
     game_num += 1
 
+    # Track game play time
+    game_start_time = time.time()
+
     # start a game
     board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
     mcts = MCTS(model, simulations=simulations, random=0.3)
@@ -82,13 +86,12 @@ while True:
     p2 = mcts
 
     num_moves = 0
-
     moves = []
     move = None
     result = None
+
     # while game is not over make moves
     while result is None:
-
         if num_moves % 2 == 0:
             mcts = p1
         else:
@@ -102,6 +105,7 @@ while True:
             starting_point=move,
             return_node=True,
         )
+        # break
         # moves.append move and policy
         moves.append(
             (
@@ -119,27 +123,20 @@ while True:
         # print(move.prev_move)
 
         move_to_make = move.prev_move
-
-        # make the move
         make_move(move_to_make, board)
-
-        # flip board for display
-
-        # print(
-        #     f"Player {'1' if num_moves % 2 == 0 else '2'} Move {num_moves + 1}: {move}"
-        # )
         num_moves += 1
-        # pretty_print(board, move=move)
-        # print(board)
-        # print(move)
         game_over = is_game_over(
             move_to_make, board, player_captures, CONNECT_N, num_moves
         )
         if game_over:
             result = calculate_score(num_moves, BOARD_SIZE, CAPTURES_ENABLED)
-            # print(f"Game Over! Result: {result}")
         board = board * -1
 
+    game_end_time = time.time()
+    game_duration = game_end_time - game_start_time
+
+    # Track DB store time
+    db_start_time = time.time()
     # store the moves in the db with the result
     # loop in reverse and flip the result
     for i, (board, player_captures, opponent_captures, num_moves, policy) in enumerate(
@@ -154,16 +151,19 @@ while True:
 
         # flip the result for each opponent move
         result = result if i % 2 == 0 else -result
-        db.store(
-            TABLE_NAME,
-            board,
-            player_captures,
-            opponent_captures,
-            num_moves,
-            policy,
-            result,
-        )
+        # temp while speed check
+        # db.store(
+        #     TABLE_NAME,
+        #     board,
+        #     player_captures,
+        #     opponent_captures,
+        #     num_moves,
+        #     policy,
+        #     result,
+        # )
         record_count += 1
+    db_end_time = time.time()
+    db_duration = db_end_time - db_start_time
 
     p1.clear_tree()
     p2.clear_tree()
@@ -171,13 +171,11 @@ while True:
     print(
         f"Records in DB: {record_count}/{record_limit} - Game {game_num} completed in {len(moves)} moves."
     )
+    print(f"Game {game_num} play time: {game_duration:.2f} seconds.")
+    print(f"Game {game_num} DB store time: {db_duration:.2f} seconds.")
 
     if record_count >= record_limit:
         break
-    # break
-    # print()
 
-    # from the moves, use the result and add to the db.
-
-
+    break  # temp
 # generate until we hit 10 rows in the db using the model if it exists

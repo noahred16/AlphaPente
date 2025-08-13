@@ -2,6 +2,7 @@ import pytest
 import torch
 import torch.nn as nn
 import numpy as np
+import random
 from models.gomoku_simple_nn import GomokuSimpleNN, preprocess_game_state
 from game import reset_game, get_legal_moves, make_move, pretty_print, is_game_over
 from db import Database
@@ -280,6 +281,56 @@ def test_gomoku_simple_game_logic():
     ), "Previous move should remain unchanged after flipping board"
 
 
+def test_mcts0(gomoku_model: GomokuSimpleNN):
+    board, player_captures, opponent_captures = reset_game(BOARD_SIZE)
+    board = np.array(
+        [
+            ["O", "X", "O", "X", "O", "X", "O"],
+            ["X", "O", "X", "X", "X", "O", "X"],
+            ["X", "O", "X", "O", "X", "O", "O"],
+            ["O", "X", "O", "O", "O", "O", "O"],
+            ["O", "X", "X", "O", "O", "X", "O"],
+            ["X", "X", "X", "X", "O", "X", "X"],
+            ["O", "O", " ", " ", " ", "X", "X"],
+        ]
+    )
+
+    num_of_x = np.count_nonzero(board == "X")
+    num_of_o = np.count_nonzero(board == "O")
+
+    assert num_of_x == 23
+    assert num_of_o == 23
+
+    # convert X to 1
+    # convert O to -1
+
+    board = np.where(board == "X", 1, board)
+    board = np.where(board == "O", -1, board)
+    board = np.where(board == " ", 0, board)
+    board = board.astype(np.int8)
+
+    model = gomoku_model
+    mcts = MCTS(model, simulations=800)
+
+    root = mcts.run(board, player_captures, opponent_captures)
+    assert root is not None, "MCTS run should return a valid result"
+
+    # Generate tree visualization for debugging
+    tree_visualization(root)
+
+    best_child = root.best_child(greedy=True)
+    move = best_child.prev_move
+
+    # print("Best move is", move)
+    # pretty_print(board, move)
+    # print("Best move is", move)
+    # print("")
+
+    assert move is not None
+    # best move is (5,3)
+    assert move == (6, 4), f"Expected best move to be (6, 4), got {move}"
+
+
 # command to run this test
 # pytest tests/test_gomoku_simple.py::test_mcts1
 def test_mcts1(gomoku_model: GomokuSimpleNN):
@@ -357,13 +408,13 @@ def test_mcts1(gomoku_model: GomokuSimpleNN):
     board = board.astype(np.int8)
 
     model = gomoku_model
-    mcts = MCTS(model, simulations=200)
+    mcts = MCTS(model, simulations=1800)
 
     root = mcts.run(board, player_captures, opponent_captures)
     assert root is not None, "MCTS run should return a valid result"
 
     # Generate tree visualization for debugging
-    # tree_visualization(root)
+    tree_visualization(root)
 
     best_child = root.best_child(greedy=True)
     move = best_child.prev_move
@@ -649,3 +700,137 @@ def test_mcts4(gomoku_model: GomokuSimpleNN):
 
     # Uncomment to generate tree visualization for debugging
     # tree_visualization(root)
+
+
+# test set to ensure that the model is learning.
+# any open 3 should be blocked.
+# generate 100 test cases with open 3s
+# and ensure that the model blocks them.
+def test_mcts_open_3_blocking(gomoku_model: GomokuSimpleNN):
+    """Test MCTS with multiple scenarios where it should block open 3s."""
+    model = gomoku_model
+    mcts = MCTS(model, simulations=300)
+
+    # np seed
+    np.random.seed(42)
+    random.seed(42)
+
+    opp = -1
+    user = 1
+
+    total = 1
+    cases = []
+
+    # Generate 100 test cases with open 3s
+    for i in range(total):
+        board = np.zeros((7, 7), dtype=np.int8)
+        # chose any point between (2,2) and (4,4) as the center of the open 3
+        center_row = np.random.randint(2, 5)
+        center_col = np.random.randint(2, 5)
+
+        # place 3 in a row horizontally
+        board[center_row, center_col - 1] = opp
+        board[center_row, center_col] = opp
+        board[center_row, center_col + 1] = opp
+
+        # place the user at the center if its not taken (3,3)
+        if board[3, 3] == 0:
+            board[3, 3] = user
+
+        blocking_moves = [
+            (center_row, center_col - 2),  # Block left side
+            (center_row, center_col + 2),  # Block right side
+        ]
+
+        # place 2 user stones randomly on the board where there is an empty space but not in a blocked position
+        for _ in range(2):
+            while True:
+                row = np.random.randint(0, 7)
+                col = np.random.randint(0, 7)
+                if board[row, col] == 0 and (row, col) not in blocking_moves:
+                    board[row, col] = user
+                    break
+
+        # print(f"Test case {i+1} - Board position:")
+        # pretty_print(board)
+
+        cases.append(
+            {
+                "board": board,
+                "blocking_moves": blocking_moves,
+            }
+        )
+
+    # TODO use batch predictions to see if the AI learned how to block yet...
+    # assert 100 cases
+    # assert len(cases) == 100, f"Expected 100 test cases, got {len(cases)}"
+
+    # # Run MCTS to find the best move
+    # root = mcts.run(board, 0, 0)
+    # assert root is not None, "MCTS run should return a valid result"
+
+    # move, policy = mcts.best_move(board, 0, 0)
+    # print(f"\nTest case {i+1} - Best move selected: {move}")
+
+    # # Verify that MCTS chooses to block the open 3
+    # assert move is not None, "MCTS should return a valid move"
+    # assert move in blocking_moves, (
+    #     f"Expected MCTS to block open 3 by playing one of {blocking_moves}, "
+    #     f"but it played {move} instead"
+    # )
+
+    # Example usage of the new batch prediction method:
+    # Create model
+
+    # Create sample batch of game states
+    # game_states = []
+    # for i in range(5):  # 5 different game states
+    #     # Random board state for example
+    #     board = np.random.choice([0, 1, -1], size=(7, 7), p=[0.7, 0.15, 0.15])
+    #     player_captures = np.random.randint(0, 5)
+    #     opponent_captures = np.random.randint(0, 5)
+    #     game_states.append((board, player_captures, opponent_captures))
+
+    # # Predict for entire batch
+    # policies, values = model.predict_batch(game_states)
+
+    # print(f"Predicted {len(policies)} policies and {len(values)} values")
+    # print(f"First policy shape: {policies[0].shape}")
+    # print(f"First value: {values[0]:.4f}")
+
+    game_states = []
+    for case in cases:
+        board = case["board"]
+        player_captures = 0
+        opponent_captures = 0
+        game_states.append((board, player_captures, opponent_captures))
+
+    # Predict for entire batch
+    policies, values = model.predict_batch(game_states)
+    print(f"Predicted {len(policies)} policies and {len(values)} values")
+
+    num_correct = 0
+
+    # Check if the model is blocking the open 3s
+    for i, case in enumerate(cases):
+        blocking_moves = case["blocking_moves"]
+        policy = policies[i]
+        value = values[i]
+
+        # Get the top move from the policy
+        top_move_idx = np.argmax(policy)
+        top_move_row = top_move_idx // 7
+        top_move_col = top_move_idx % 7
+        top_move = (top_move_row, top_move_col)
+
+        print(f"Test case {i+1} - Best move selected: {top_move}, Value: {value:.4f}")
+        print(f"Expected blocking moves: {blocking_moves}")
+        print(f"Policy:\n {np.round(policy.reshape(7, 7), 2)}")
+
+        if top_move in blocking_moves:
+            num_correct += 1
+    print(f"Number of correct blocking moves: {num_correct} out of {len(cases)}")
+
+    assert (
+        num_correct >= 80
+    ), f"Expected at least 80% correct blocking moves, got {num_correct} out of {len(cases)}"

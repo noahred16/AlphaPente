@@ -243,8 +243,9 @@ class MCTS:
             board, player_captures, opponent_captures
         )
         return value
-    
+
     def get_policy_value(self, board, player_captures, opponent_captures):
+        # print("Getting policy and value from model...")
         return self.model.predict_policy_and_value(
             board, player_captures, opponent_captures
         )
@@ -281,6 +282,7 @@ class MCTS:
 
         # TODO apply the move to the board?
         # for each move in untried_moves:
+        # print(node.board)
         policy_priors, value = self.get_policy_value(
             board=node.board,
             player_captures=node.player_captures,

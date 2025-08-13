@@ -1,4 +1,11 @@
-from game import reset_game, get_legal_moves, make_move, pretty_print, check_n_in_a_row
+from game import (
+    reset_game,
+    get_legal_moves,
+    make_move,
+    pretty_print,
+    check_n_in_a_row,
+    get_all_orientations,
+)
 from settings_loader import (
     BOARD_SIZE,
     TABLE_NAME,
@@ -40,9 +47,7 @@ save_interval = 10  # Save checkpoint every N epochs
 # Training loop - always starts from epoch 0
 for epoch in range(num_epochs):
     # Fetch training data
-    training_data = db.fetch_collection(
-        TABLE_NAME, 10000
-    )  # Get most recent 10k records
+    training_data = db.fetch_collection(TABLE_NAME, 1000)  # Get most recent 10k records
 
     if not training_data:
         print(f"No training data available")
@@ -73,22 +78,33 @@ for epoch in range(num_epochs):
                 db.decode_row(data)
             )
 
-            # Preprocess the game state
-            board_tensor, player_cap_tensor, opponent_cap_tensor = (
-                preprocess_game_state(board, player_captures, opponent_captures)
-            )
+            # turn and flip board and policy. 16 possible orientations
+            boards_orientations = get_all_orientations(board)
+            policies_orientations = get_all_orientations(policy)
 
-            board_states.append(board_tensor)
-            player_captures_list.append(player_cap_tensor)
-            opponent_captures_list.append(opponent_cap_tensor)
+            for i, (board_oriented, policy_oriented) in enumerate(
+                zip(boards_orientations, policies_orientations)
+            ):
+                # Preprocess the game state
+                board_tensor, player_cap_tensor, opponent_cap_tensor = (
+                    preprocess_game_state(
+                        board_oriented, player_captures, opponent_captures
+                    )
+                )
+                board_states.append(board_tensor)
+                player_captures_list.append(player_cap_tensor)
+                opponent_captures_list.append(opponent_cap_tensor)
 
-            # Convert policy and value to tensors
-            # Policy should be a flat tensor of shape (49,) for 7x7 board
-            policy_tensor = torch.tensor(policy, dtype=torch.float32)
-            value_tensor = torch.tensor(value, dtype=torch.float32)
+                # Convert policy and value to tensors
+                # Policy should be a flat tensor of shape (49,) for 7x7 board
+                # Make a copy to avoid negative stride issues
+                policy_tensor = torch.tensor(
+                    policy_oriented.copy(), dtype=torch.float32
+                )
+                value_tensor = torch.tensor(value, dtype=torch.float32)
 
-            policies.append(policy_tensor)
-            values.append(value_tensor)
+                policies.append(policy_tensor)
+                values.append(value_tensor)
 
         # Stack batch tensors
         batch = {

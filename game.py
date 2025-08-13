@@ -145,3 +145,46 @@ def pretty_print(board_ref, move=None, ASCII=False):
             else:
                 print(f"{symbols[piece]}", end=" ")
         print()
+
+
+def get_all_orientations(board):
+    """
+    Generate all 16 possible orientations of a board through rotations and flips.
+
+    The 16 orientations come from:
+    - 4 rotations (0°, 90°, 180°, 270°)
+    - 2 states for each rotation (original and horizontally flipped)
+    - 2 states for each of those (original and vertically flipped)
+
+    However, due to symmetries, we actually get 8 unique transformations:
+    - 4 rotations
+    - 4 rotations of the horizontally flipped board
+
+    Args:
+        board: numpy array representing the board
+
+    Returns:
+        list of 16 numpy arrays representing all possible orientations
+    """
+    orientations = []
+
+    # Original board - 4 rotations
+    for k in range(4):
+        orientations.append(np.rot90(board, k))
+
+    # Horizontally flipped board - 4 rotations
+    h_flipped = np.fliplr(board)
+    for k in range(4):
+        orientations.append(np.rot90(h_flipped, k))
+
+    # Vertically flipped board - 4 rotations
+    v_flipped = np.flipud(board)
+    for k in range(4):
+        orientations.append(np.rot90(v_flipped, k))
+
+    # Both horizontally and vertically flipped board - 4 rotations
+    hv_flipped = np.fliplr(np.flipud(board))
+    for k in range(4):
+        orientations.append(np.rot90(hv_flipped, k))
+
+    return orientations
