@@ -183,27 +183,35 @@ if __name__ == "__main__":
     # Start the game
     num_moves = 0
 
-    record_limit = 10_000
+    # record_limit = 10_000
     # record_limit = 1_000
+    record_limit = 100
 
     record_count = 0
 
     game_num = 0
 
+
+    # timer start
+    start_time = time.time()
+
     while True:
         game_num += 1
 
-        moves, result = play_game(model)
+        moves, result = play_game(model, simulations=simulations)
 
         num_records = store_moves(moves, result)
 
         record_count += num_records
 
-        print(f"Current total records in DB: {record_count}/{record_limit} = {(record_count/record_limit)*100:.2f}%")
+        print(f"GameNum: {game_num},  Current total records in DB: {record_count}/{record_limit} = {(record_count/record_limit)*100:.2f}%")
 
         if record_count >= record_limit:
             break
 
 
-
+    # timer end
+    end_time = time.time()
+    duration = end_time - start_time
+    print(f"Data generation for {record_count} records completed in {duration:.2f} seconds.")
 
