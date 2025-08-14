@@ -98,6 +98,8 @@ class MCTSNode:
         else:
             # This shouldn't happen since root node doesn't use PUCT
             prior = 1.0 / (BOARD_SIZE[0] * BOARD_SIZE[0])
+        
+        prior = 1.0 / (BOARD_SIZE[0] * BOARD_SIZE[0])
 
         exploration = (
             c_puct * prior * math.sqrt(self.parent.num_visits) / (1 + self.num_visits)
@@ -128,12 +130,13 @@ class MCTSNode:
 
 
 class MCTS:
-    def __init__(self, model, simulations=100, exploration_constant=1.0, random=0.0):
+    def __init__(self, model, simulations=100, exploration_constant=1.0, random=0.0, temperature=1.0):
         """
         Initialize the MCTS with the game state and model.
         :param game: The game instance.
         :param model: The neural network model for policy and value predictions.
         :param simulations: Number of simulations to run per move.
+        :param temperature: Temperature for move selection. Higher values = more exploration.
         """
         self.model = model
         self.simulations = simulations
@@ -142,6 +145,7 @@ class MCTS:
         # TODO: Initialize any additional data structures needed for MCTS.
 
         self.random = random
+        self.temperature = temperature
         self.samples = []
 
         self.root = None
@@ -169,7 +173,7 @@ class MCTS:
             else:
                 raise ValueError("No legal moves available for random selection.")
         else:
-            best = root.best_child(greedy=True)
+            best = self._temperature_based_selection(root)
 
         # TODO
         # policy is determined by using the move nums (num_visits)
@@ -184,17 +188,71 @@ class MCTS:
         # policy
         policy = np.zeros((BOARD_SIZE[0], BOARD_SIZE[1]), dtype=float)
 
-        # scale so the sum is 1
-        total_visits = sum(visits for _, visits in moves_visits)
-        if total_visits > 0:
-            for move, visits in moves_visits:
-                row, col = move
-                policy[row][col] = visits / total_visits
+        # Apply temperature scaling to policy
+        if moves_visits:
+            if self.temperature == 0:
+                # Greedy policy - only the most visited move gets probability 1
+                max_visits = max(visits for _, visits in moves_visits)
+                for move, visits in moves_visits:
+                    if visits == max_visits:
+                        row, col = move
+                        policy[row][col] = 1.0
+                        break
+            else:
+                # Temperature-scaled policy
+                visit_counts = np.array([visits for _, visits in moves_visits])
+                if self.temperature == float('inf'):
+                    # Uniform distribution
+                    prob = 1.0 / len(moves_visits)
+                    for move, _ in moves_visits:
+                        row, col = move
+                        policy[row][col] = prob
+                else:
+                    # Temperature scaling
+                    visit_logits = visit_counts / self.temperature
+                    visit_logits = visit_logits - np.max(visit_logits)
+                    exp_logits = np.exp(visit_logits)
+                    probabilities = exp_logits / np.sum(exp_logits)
+                    
+                    for (move, _), prob in zip(moves_visits, probabilities):
+                        row, col = move
+                        policy[row][col] = prob
 
         if return_node:
             return best, policy
 
         return best.prev_move, policy
+
+    def _temperature_based_selection(self, root):
+        """
+        Select a move based on visit counts and temperature.
+        Temperature controls exploration: higher = more random, lower = more greedy.
+        """
+        if not root.children:
+            return None
+            
+        if self.temperature == 0:
+            # Greedy selection - choose most visited
+            return root.best_child(greedy=True)
+        
+        # Get visit counts for all children
+        visit_counts = np.array([child.num_visits for child in root.children])
+        
+        # Apply temperature scaling
+        if self.temperature == float('inf'):
+            # Pure random selection
+            probabilities = np.ones(len(visit_counts)) / len(visit_counts)
+        else:
+            # Temperature-scaled probabilities
+            visit_logits = visit_counts / self.temperature
+            # Subtract max for numerical stability
+            visit_logits = visit_logits - np.max(visit_logits)
+            exp_logits = np.exp(visit_logits)
+            probabilities = exp_logits / np.sum(exp_logits)
+        
+        # Sample from the probability distribution
+        selected_idx = np.random.choice(len(root.children), p=probabilities)
+        return root.children[selected_idx]
 
     def run(self, board, player_captures, opponent_captures, starting_point=None):
         """
