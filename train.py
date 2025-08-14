@@ -47,7 +47,7 @@ save_interval = 10  # Save checkpoint every N epochs
 # Training loop - always starts from epoch 0
 for epoch in range(num_epochs):
     # Fetch training data
-    training_data = db.fetch_collection(TABLE_NAME, 1000)  # Get most recent 10k records
+    training_data = db.fetch_collection(TABLE_NAME, 10000)  # Get most recent 10k records
 
     if not training_data:
         print(f"No training data available")

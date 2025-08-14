@@ -183,8 +183,8 @@ if __name__ == "__main__":
     # Start the game
     num_moves = 0
 
-    # record_limit = 10_000
-    record_limit = 1_000
+    record_limit = 10_000
+    # record_limit = 1_000
 
     record_count = 0
 
@@ -193,16 +193,13 @@ if __name__ == "__main__":
     while True:
         game_num += 1
 
-        print(f"Generate starting game")
-
         moves, result = play_game(model)
-        print(f"Worker DONE game, with num_moves: {len(moves)}")
-
-        # print("result", result)
 
         num_records = store_moves(moves, result)
 
         record_count += num_records
+
+        print(f"Current total records in DB: {record_count}/{record_limit} = {(record_count/record_limit)*100:.2f}%")
 
         if record_count >= record_limit:
             break
