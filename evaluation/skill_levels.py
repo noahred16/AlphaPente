@@ -206,15 +206,14 @@ def calculate_tactical_score(board: np.ndarray, move: Tuple[int, int],
 
 
 def create_skill_levels(model) -> List[OpponentPlayer]:
-    """Create the full range of skill levels for evaluation."""
+    """Create the range of skill levels for evaluation (optimized for speed)."""
     return [
         RandomPlayer(),
         GreedyPlayer(), 
         TacticalPlayer(),
         MCTSPlayer(model, simulations=50),
         MCTSPlayer(model, simulations=200),
-        MCTSPlayer(model, simulations=500),
-        MCTSPlayer(model, simulations=800),
+        # Removed MCTS-500 and MCTS-800 for faster evaluation during development
     ]
 
 

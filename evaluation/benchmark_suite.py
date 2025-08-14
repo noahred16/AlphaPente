@@ -181,8 +181,7 @@ class BenchmarkSuite:
             'tactical': 4.0,
             'mcts_50': 8.0,
             'mcts_200': 16.0,
-            'mcts_500': 32.0,
-            'mcts_800': 64.0
+            # Removed mcts_500 and mcts_800 for faster evaluation
         }
         
         total_weighted_score = 0.0

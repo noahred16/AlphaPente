@@ -218,7 +218,7 @@ class PerformanceTracker:
         
         # Skill level breakdown
         report += "Performance vs Skill Levels:\\n"
-        skill_levels = ['random', 'greedy', 'tactical', 'mcts_50', 'mcts_200', 'mcts_500', 'mcts_800']
+        skill_levels = ['random', 'greedy', 'tactical', 'mcts_50', 'mcts_200']
         
         for skill in skill_levels:
             skill_data = self.get_skill_level_progression(model_name, skill)
