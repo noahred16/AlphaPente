@@ -170,6 +170,76 @@ run_training() {
     fi
 }
 
+# Function to run model evaluation
+run_evaluation() {
+    local gen_cycle=$1
+    local train_cycle=$2
+    log "=== MODEL EVALUATION $gen_cycle.$train_cycle ==="
+    
+    local eval_log="$LOG_DIR/evaluation_${gen_cycle}_${train_cycle}_$TIMESTAMP.log"
+    
+    # Calculate training step for tracking
+    local training_step=$(($gen_cycle * 1000 + $train_cycle * 100))
+    
+    log "Running model evaluation at training step $training_step..."
+    
+    if $PYTHON_CMD -c "
+import sys
+sys.path.append('.')
+from evaluation import integrate_with_schedule
+from evaluation.performance_tracker import PerformanceTracker
+from config_loader import config
+
+# Load model
+model_type = config.get('training', 'model_type', 'simple')
+ModelClass = config.get_model_class(model_type)
+model = ModelClass(7)
+
+# Load checkpoint
+import os
+import torch
+checkpoint_dir = config.get('pipeline', 'checkpoint_dir', './checkpoints')
+checkpoint_path = os.path.join(checkpoint_dir, f'{model_type}_model.pt')
+if os.path.exists(checkpoint_path):
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    model.load_state_dict(checkpoint['model_state'])
+    print(f'Loaded model from {checkpoint_path}')
+else:
+    print(f'No checkpoint found, evaluating untrained model')
+
+# Run evaluation
+tracker = PerformanceTracker()
+report = integrate_with_schedule(
+    model, 
+    model_name='${TRAIN_MODEL_TYPE}_pipeline', 
+    training_step=${training_step},
+    tracker=tracker
+)
+
+print(f'Evaluation complete: Strength={report.overall_strength_score:.1f}/100')
+" > "$eval_log" 2>&1; then
+        
+        log "Model evaluation completed successfully"
+        
+        # Show evaluation summary
+        if grep -q "Evaluation complete" "$eval_log"; then
+            grep "Evaluation complete" "$eval_log" | while read line; do
+                log "  $line"
+            done
+        fi
+        
+        # Show key metrics from evaluation
+        if grep -q "Overall Strength:" "$eval_log"; then
+            grep -A 3 "Overall Strength:" "$eval_log" | while read line; do
+                log "  $line"
+            done
+        fi
+    else
+        log "WARNING: Model evaluation failed. Check log: $eval_log"
+        log "Continuing with training pipeline..."
+    fi
+}
+
 # Function to check database size
 check_database_progress() {
     local current_records=$($PYTHON_CMD -c "
@@ -210,6 +280,9 @@ main_pipeline() {
         # Multiple training cycles per generation
         for (( train_cycle=1; train_cycle<=TRAINING_CYCLES_PER_GEN; train_cycle++ )); do
             run_training $gen_cycle $train_cycle
+            
+            # Run evaluation after each training cycle
+            run_evaluation $gen_cycle $train_cycle
         done
         
         # Check if we've reached target
