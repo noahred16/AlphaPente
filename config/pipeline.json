@@ -1,0 +1,53 @@
+{
+  "_comment": "AlphaPente Training Pipeline Configuration",
+  "_description": "This file controls all aspects of the training pipeline including data generation, model training, and pipeline coordination. Edit these values to customize the training process.",
+  "_usage": "Use ./schedule_v2.sh to run the full pipeline, or pass --config path/to/config.json to individual scripts",
+  
+  "generation": {
+    "_section_description": "Controls self-play game generation for training data",
+    "simulations": 100,
+    "record_limit": 1000,
+    "mcts_random": 0.3,
+    "mcts_temperature": 1.0,
+    "model_type": "simple",
+    "save_interval_games": 50
+  },
+  "training": {
+    "model_type": "simple",
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "num_epochs": 50,
+    "save_interval": 10,
+    "data_sample_size": 10000,
+    "sample_strategy": "top_random",
+    "sample_top_percent": 0.7,
+    "augmentation": {
+      "enabled": true,
+      "orientations": 8
+    },
+    "weight_decay": 1e-4
+  },
+  "pipeline": {
+    "generation_cycles": 3,
+    "training_cycles_per_generation": 2,
+    "total_records_target": 50000,
+    "checkpoint_dir": "./checkpoints"
+  },
+  "models": {
+    "simple": {
+      "class": "GomokuSimpleNN",
+      "file": "models.gomoku_simple_nn"
+    },
+    "resnet": {
+      "class": "GomokuResNet", 
+      "file": "models.gomoku_resnet"
+    }
+  },
+  "database": {
+    "sample_strategies": {
+      "recent": "ORDER BY id DESC",
+      "random": "ORDER BY RANDOM()",
+      "top_random": "ORDER BY id DESC LIMIT ? UNION ALL SELECT * FROM {table} WHERE id NOT IN (SELECT id FROM {table} ORDER BY id DESC LIMIT ?) ORDER BY RANDOM() LIMIT ?"
+    }
+  }
+}

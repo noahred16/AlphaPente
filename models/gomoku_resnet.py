@@ -1,3 +1,40 @@
+"""ResNet-Style Neural Network Architecture for AlphaPente/Gomoku
+
+This module implements an improved neural network architecture using residual connections
+for better gradient flow and representation learning in the AlphaPente game.
+
+Key Architecture Features:
+- Residual blocks with skip connections for deeper training
+- Separate optimized policy and value heads
+- Global average pooling to reduce overfitting
+- Batch normalization for training stability
+- Gradient clipping and weight decay for robust training
+
+Architecture Overview:
+    Input (2×7×7) → Initial Conv(128) → ResBlock(128) → ResBlock(128)
+    ├── Policy Head: Conv(32) → Conv(1) → Flatten → Softmax 
+    └── Value Head: Conv(32) → Global Pool → FC + Captures → Tanh
+
+Improvements over Simple CNN:
+- ~2x more parameters for increased capacity
+- Skip connections enable deeper networks without vanishing gradients
+- Separate head architectures optimized for policy vs value prediction
+- Better handling of spatial features through residual learning
+
+Compatibility:
+- Same interface as GomokuSimpleNN for drop-in replacement
+- Works with existing MCTS implementation
+- Supports batch prediction and training methods
+
+Usage:
+    model = GomokuResNet(board_size=7, num_residual_blocks=2)
+    policy, value = model.predict_policy_and_value(board, p_caps, o_caps)
+    
+Training:
+    batch = {...}  # Training data
+    losses = model.train_on_batch(batch, epochs=1)
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +42,14 @@ import numpy as np
 
 
 class ResidualBlock(nn.Module):
+    """
+    Basic residual block with skip connection.
+    
+    Architecture: Input → Conv → BN → ReLU → Conv → BN → (+Input) → ReLU
+    
+    The skip connection allows gradients to flow directly through the network,
+    enabling deeper architectures and better learning of complex patterns.
+    """
     def __init__(self, channels):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)

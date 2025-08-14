@@ -1,3 +1,36 @@
+"""Database Interface for AlphaPente Training Data Storage
+
+This module provides SQLite-based storage for training data generated during self-play games.
+It handles serialization/deserialization of game states and supports multiple sampling strategies.
+
+Key Features:
+- Efficient storage of board states, policies, and game results
+- Multiple sampling strategies for training data retrieval
+- Binary serialization of numpy arrays for space efficiency
+- Automatic database and table setup
+- Transaction management for data integrity
+
+Data Schema:
+    - id: Auto-incrementing primary key
+    - board: Serialized board state (7x7 numpy array)
+    - player_captures: Number of pieces captured by current player
+    - opponent_captures: Number of pieces captured by opponent
+    - num_moves: Move number in the game
+    - policy: Serialized policy distribution (7x7 numpy array)
+    - value: Game result from current player's perspective (-1 to 1)
+
+Sampling Strategies:
+    - 'recent': Most recent records (ORDER BY id DESC)
+    - 'random': Random sampling across all records
+    - 'top_random': Mix of 70% recent + 30% random older records
+
+Usage:
+    db = Database('game_data.db', (7, 7))
+    db.setup('training_data')
+    db.store('training_data', board, p_caps, o_caps, moves, policy, value)
+    records = db.fetch_collection('training_data', 1000, strategy='top_random')
+"""
+
 import numpy as np
 import sqlite3
 import os
@@ -68,19 +101,88 @@ class Database:
         conn.commit()
         conn.close()
 
-    def fetch_collection(self, table_name, n, columns="*"):
+    def fetch_collection(self, table_name, n, columns="*", strategy="recent"):
+        """
+        Fetch training records using specified sampling strategy.
+        
+        Args:
+            table_name: Name of the database table
+            n: Number of records to fetch
+            columns: Columns to select (default: all)
+            strategy: Sampling strategy ('recent', 'random', 'top_random')
+            
+        Returns:
+            List of database records as tuples
+            
+        Strategy Details:
+            - 'recent': Returns most recent n records (fastest, may overfit)
+            - 'random': Returns random n records from entire dataset
+            - 'top_random': Returns 70% from recent records + 30% random from older
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute(
-            f"""
-            SELECT {columns}
-            FROM {table_name}
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (n,),
-        )
+        if strategy == "recent":
+            # Get most recent records
+            cursor.execute(
+                f"""
+                SELECT {columns}
+                FROM {table_name}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (n,),
+            )
+        elif strategy == "random":
+            # Get completely random records
+            cursor.execute(
+                f"""
+                SELECT {columns}
+                FROM {table_name}
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (n,),
+            )
+        elif strategy == "top_random":
+            # Get mix of top records and random older records
+            top_n = int(n * 0.7)  # 70% from recent
+            random_n = n - top_n  # 30% from older records
+            
+            # Get top records
+            cursor.execute(
+                f"""
+                SELECT {columns}
+                FROM {table_name}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (top_n,),
+            )
+            top_results = cursor.fetchall()
+            
+            # Get random records from the rest
+            cursor.execute(
+                f"""
+                SELECT {columns}
+                FROM {table_name}
+                WHERE id NOT IN (
+                    SELECT id FROM {table_name}
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (top_n, random_n),
+            )
+            random_results = cursor.fetchall()
+            
+            results = top_results + random_results
+            conn.close()
+            return results
+        else:
+            raise ValueError(f"Unknown sampling strategy: {strategy}. Available: 'recent', 'random', 'top_random'")
 
         results = cursor.fetchall()
         conn.close()
