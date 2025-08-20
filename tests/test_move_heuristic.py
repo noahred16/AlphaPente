@@ -181,7 +181,8 @@ class TestMoveHeuristic(unittest.TestCase):
         # Place first move at center
         center = self.game.board_size // 2
         self.game.board[center, center] = 1
-        self.game.move_count = 1
+        self.game.board[2, 2] = -1  # Player 2's move
+        self.game.move_count = 2
         self.game.current_player = 1
         
         # Get legal moves for second move

@@ -20,7 +20,8 @@ class Pente(BaseGame):
         for i in range(self.board_size):
             for j in range(self.board_size):
                 if self.board[i, j] == 0:
-                    if self.tournament_rule and self.move_count == 1:
+                    # Tournament rule: Player 1's second move must be ≥3 from center
+                    if self.tournament_rule and self.move_count == 2 and self.current_player == 1:
                         distance = max(abs(i - center), abs(j - center))
                         if distance >= 3:
                             moves.append((i, j))
