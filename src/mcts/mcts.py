@@ -85,7 +85,7 @@ class MCTS:
             # Backpropagation
             leaf.backpropagate(result)
         
-        # Return move with highest visit count
+        # Return move with best combination of visits and win rate
         if not root.children:
             # Fallback to heuristic ordering if no expansions
             legal_moves = game_state.get_legal_moves()
@@ -95,7 +95,19 @@ class MCTS:
                 return scored_moves[0][0]
             return (0, 0)  # Should not happen
         
-        best_child = max(root.children, key=lambda child: child.visits)
+        # Sort by win rate first (primary), then by visits (secondary)
+        def move_priority(child):
+            child_win_rate = child.wins / child.visits if child.visits > 0 else 0.0
+            # Convert child's perspective to root player's perspective
+            root_perspective_win_rate = 1.0 - child_win_rate
+            # Prioritize win rate, but require minimum visits for reliability
+            min_visits = max(1, self.max_iterations // 50)  # At least 2% of iterations
+            if child.visits >= min_visits:
+                return (root_perspective_win_rate, child.visits)
+            else:
+                return (0.0, child.visits)  # Low priority for insufficient data
+        
+        best_child = max(root.children, key=move_priority)
         return best_child.move
     
     def _select_and_expand(self, node: MCTSNode) -> MCTSNode:
@@ -117,6 +129,7 @@ class MCTS:
     def _simulate(self, game_state: Pente) -> float:
         """Run a random simulation from the given game state."""
         simulation_game = game_state.clone()
+        original_player = game_state.current_player  # Store the original player
         
         while not simulation_game.is_terminal():
             legal_moves = simulation_game.get_legal_moves()
@@ -144,11 +157,11 @@ class MCTS:
             
             simulation_game.make_move(selected_move)
         
-        # Return result from perspective of the player who made the root move
+        # Return result from perspective of the original player (not current player)
         winner = simulation_game.get_winner()
         if winner is None:
             return 0.5  # Draw
-        elif winner == game_state.current_player:
+        elif winner == original_player:
             return 1.0  # Win
         else:
             return 0.0  # Loss
@@ -164,7 +177,9 @@ class MCTS:
         
         statistics = []
         for child in root.children:
-            win_rate = child.wins / child.visits if child.visits > 0 else 0.0
-            statistics.append((child.move, child.visits, win_rate))
+            child_win_rate = child.wins / child.visits if child.visits > 0 else 0.0
+            # Convert child's perspective to root player's perspective
+            root_perspective_win_rate = 1.0 - child_win_rate
+            statistics.append((child.move, child.visits, root_perspective_win_rate))
         
         return sorted(statistics, key=lambda x: x[1], reverse=True)
