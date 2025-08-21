@@ -1,6 +1,7 @@
 # AlphaPente
 Pente AI agent inspired by AlphaZero
 
+```
 mcts_board_games/
 ├── README.md
 ├── requirements.txt
@@ -15,9 +16,9 @@ mcts_board_games/
 │   │   ├── gomoku.py             
 │   │   ├── pente.py              
 │   │   └── game_encoder.py       # Convert game states to NN input
+```
 
-
-
+```
 mcts_board_games/
 ├── README.md
 ├── requirements.txt
@@ -126,3 +127,4 @@ mcts_board_games/
     ├── train_model.py           # Train neural network
     ├── evaluate_model.py        # Test model performance
     └── play_interactive.py      # Play against the AI
+```
