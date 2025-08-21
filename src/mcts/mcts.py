@@ -15,11 +15,11 @@ class MCTSNode:
         self.visits = 0
         self.wins = 0.0
         self.untried_moves = game_state.get_legal_moves()
-        self.heuristic = MoveHeuristic(game_state)
         
         # Sort moves by heuristic score for better ordering
         if self.untried_moves:
-            scored_moves = self.heuristic.evaluate_moves(self.untried_moves)
+            heuristic = MoveHeuristic(game_state)
+            scored_moves = heuristic.evaluate_moves(self.untried_moves)
             self.untried_moves = [move for move, score in scored_moves]
     
     def is_fully_expanded(self) -> bool:
@@ -70,6 +70,7 @@ class MCTS:
     def __init__(self, exploration_weight: float = 1.414, max_iterations: int = 1000):
         self.exploration_weight = exploration_weight
         self.max_iterations = max_iterations
+        self._heuristic = None  # Shared heuristic instance
     
     def search(self, game_state: Pente) -> Tuple[int, int]:
         """Run MCTS and return the best move."""
@@ -79,7 +80,7 @@ class MCTS:
             # Selection and Expansion
             leaf = self._select_and_expand(root)
             
-            # Simulation
+            # Simulation with move/undo pattern
             result = self._simulate(leaf.game_state)
             
             # Backpropagation
@@ -127,9 +128,10 @@ class MCTS:
         return current
     
     def _simulate(self, game_state: Pente) -> float:
-        """Run a random simulation from the given game state."""
+        """Run a random simulation from the given game state using move/undo."""
+        # Clone the game state for simulation to avoid modifying the original
         simulation_game = game_state.clone()
-        original_player = game_state.current_player  # Store the original player
+        original_player = simulation_game.current_player  # Store the original player
         
         while not simulation_game.is_terminal():
             legal_moves = simulation_game.get_legal_moves()
@@ -157,7 +159,7 @@ class MCTS:
             
             simulation_game.make_move(selected_move)
         
-        # Return result from perspective of the original player (not current player)
+        # Return result from perspective of the original player
         winner = simulation_game.get_winner()
         if winner is None:
             return 0.5  # Draw

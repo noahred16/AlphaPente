@@ -69,15 +69,11 @@ class MoveHeuristic:
     
     def _is_blocking_win(self, move: Tuple[int, int], opponent: int) -> bool:
         """Check if move blocks opponent's winning move."""
-        # Temporarily switch to opponent
-        original_player = self.game.current_player
-        self.game.current_player = opponent
-        
-        is_blocking = self._is_winning_move(move, opponent)
-        
-        # Restore original player
-        self.game.current_player = original_player
-        return is_blocking
+        # Use cloning to avoid modifying shared state
+        game_copy = self.game.clone()
+        game_copy.current_player = opponent
+        game_copy.make_move(move)
+        return game_copy.get_winner() == opponent
     
     def _creates_capture(self, move: Tuple[int, int], player: int) -> bool:
         """Check if move creates a capture opportunity."""
