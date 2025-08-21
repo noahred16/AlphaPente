@@ -38,6 +38,9 @@ class TestMCTSAnalysis(unittest.TestCase):
         # Place opponent stones
         for row, col in scenario['opponent_stones']:
             game.board[row, col] = -1
+        
+        # Synchronize legal moves cache after manual board setup
+        game._sync_legal_moves_cache()
             
         game.current_player = 1
         return game, player
@@ -183,6 +186,9 @@ class TestMCTSAnalysis(unittest.TestCase):
         opponent_stones = [(5, 1), (5, 2), (5, 3), (5, 4)]  # Threat at (5,5) or (5,0)
         for row, col in opponent_stones:
             game.board[row, col] = -1
+        
+        # Synchronize legal moves cache after manual board setup
+        game._sync_legal_moves_cache()
             
         game.current_player = 1
         
@@ -227,8 +233,8 @@ class TestMCTSAnalysis(unittest.TestCase):
         game = Pente(board_size=self.board_size, tournament_rule=False)
         player = MCTSPlayer(name="MCTS Test", player_id=1, max_iterations=self.mcts_iterations)
         
-        # Critical threat - opponent about to win
-        critical_threat = [(3, 1), (3, 2), (3, 3), (3, 4)]  # Block at (3,0) or (3,5)
+        # Critical threat - opponent about to win (only one blocking position)
+        critical_threat = [(3, 0), (3, 1), (3, 2), (3, 3)]  # Block at (3,4) only
         for row, col in critical_threat:
             game.board[row, col] = -1
             
@@ -243,6 +249,9 @@ class TestMCTSAnalysis(unittest.TestCase):
         game.board[1, 3] = -1
         # Can capture at (1,4)
         
+        # Synchronize legal moves cache after manual board setup
+        game._sync_legal_moves_cache()
+        
         game.current_player = 1
 
         # print game board
@@ -255,7 +264,7 @@ class TestMCTSAnalysis(unittest.TestCase):
             move = player.get_move(game)
             
             # Categorize the move
-            if move in [(3, 0), (3, 5)]:
+            if move == (3, 4):  # Only one blocking position
                 category = "CRITICAL_BLOCK"
                 priority = 4
             elif move in [(5, 1), (5, 4)]:

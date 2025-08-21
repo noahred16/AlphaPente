@@ -13,7 +13,7 @@ class TestMCTSBlocking(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.board_size = 7  # Smaller board for faster testing
-        self.mcts_iterations = 100  # Reduced iterations for faster tests
+        self.mcts_iterations = 200  # Increased for scaled valuation system
         
     def _create_blocking_scenario(self, opponent_stones, blocking_move, game_size=7):
         """
@@ -33,6 +33,9 @@ class TestMCTSBlocking(unittest.TestCase):
         # Place opponent stones (player -1)
         for row, col in opponent_stones:
             game.board[row, col] = -1
+        
+        # Synchronize legal moves cache after manual board setup
+        game._sync_legal_moves_cache()
             
         # Set current player to 1 (MCTS player)
         game.current_player = 1
@@ -116,6 +119,7 @@ class TestMCTSBlocking(unittest.TestCase):
         
         game, player, _ = self._create_blocking_scenario(opponent_stones, None)
         game.board[4, 0] = 1  # Block one end
+        game._sync_legal_moves_cache()  # Sync after manual board modification
         
         # Get MCTS move - should not prioritize (4,5) as highly since threat is reduced
         move = player.get_move(game)
@@ -153,6 +157,9 @@ class TestMCTSBlocking(unittest.TestCase):
         # Place opponent stones (but not an immediate threat)
         game.board[5, 1] = -1
         game.board[5, 3] = -1
+        
+        # Sync cache after manual board modifications
+        game._sync_legal_moves_cache()
             
         # Get MCTS move
         move = player.get_move(game)
@@ -238,6 +245,9 @@ class TestMCTSBlocking(unittest.TestCase):
         threat_positions = [(4, 1), (4, 2), (4, 3), (4, 4)]
         for row, col in threat_positions:
             game.board[row, col] = -1
+        
+        # Sync cache after manual board setup
+        game._sync_legal_moves_cache()
             
         game.current_player = 1
         

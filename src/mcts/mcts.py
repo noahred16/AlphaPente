@@ -1,7 +1,7 @@
 import math
 import random
 from typing import List, Tuple, Optional
-from games.pente import Pente
+from src.games.pente import Pente
 from .move_heuristic import MoveHeuristic
 
 class MCTSNode:
@@ -35,7 +35,11 @@ class MCTSNode:
         if self.visits == 0:
             return float('inf')
         
-        exploitation = self.wins / self.visits
+        # Normalize scaled values to [0,1] range for UCB1 calculation
+        # Scaled values range from [-1, 1], so we map to [0, 1]
+        avg_scaled_value = self.wins / self.visits
+        exploitation = (avg_scaled_value + 1.0) / 2.0  # Map [-1,1] to [0,1]
+        
         exploration = exploration_weight * math.sqrt(math.log(self.parent.visits) / self.visits)
         return exploitation + exploration
     
@@ -61,8 +65,8 @@ class MCTSNode:
         """Backpropagate result up the tree."""
         self.update(result)
         if self.parent:
-            # Flip result for opponent
-            self.parent.backpropagate(1.0 - result)
+            # Flip result for opponent (negate scaled values)
+            self.parent.backpropagate(-result)
 
 class MCTS:
     """Monte Carlo Tree Search with move ordering heuristics."""
@@ -75,13 +79,14 @@ class MCTS:
     def search(self, game_state: Pente) -> Tuple[int, int]:
         """Run MCTS and return the best move."""
         root = MCTSNode(game_state)
+        root_player = game_state.current_player  # Store root player for consistent evaluation
         
         for _ in range(self.max_iterations):
             # Selection and Expansion
             leaf = self._select_and_expand(root)
             
-            # Simulation with move/undo pattern
-            result = self._simulate(leaf.game_state)
+            # Simulation with consistent perspective from root player
+            result = self._simulate(leaf.game_state, root_player)
             
             # Backpropagation
             leaf.backpropagate(result)
@@ -96,17 +101,37 @@ class MCTS:
                 return scored_moves[0][0]
             return (0, 0)  # Should not happen
         
-        # Sort by win rate first (primary), then by visits (secondary)
+        # Special case: if any move has critical heuristic score (100), prioritize it
+        # even with limited visits (for blocking/winning moves)
+        from .move_heuristic import MoveHeuristic
+        heuristic = MoveHeuristic(game_state)
+        
+        for child in root.children:
+            if child.visits > 0 and child.move:
+                move_score = heuristic._evaluate_move(child.move)
+                if move_score >= 100:  # Critical move (win/block)
+                    # If critical move has positive value, prioritize it
+                    child_avg_value = child.wins / child.visits
+                    root_perspective_value = -child_avg_value
+                    if root_perspective_value > 0:
+                        return child.move
+        
+        # Sort by average scaled value (higher is better for root player)
         def move_priority(child):
-            child_win_rate = child.wins / child.visits if child.visits > 0 else 0.0
-            # Convert child's perspective to root player's perspective
-            root_perspective_win_rate = 1.0 - child_win_rate
-            # Prioritize win rate, but require minimum visits for reliability
-            min_visits = max(1, self.max_iterations // 50)  # At least 2% of iterations
+            if child.visits == 0:
+                return (0.0, 0)
+            
+            # Average scaled value from child's perspective
+            child_avg_value = child.wins / child.visits
+            # Convert to root player's perspective (negate since child represents opponent's move)
+            root_perspective_value = -child_avg_value
+            
+            # Prioritize higher values, but require minimum visits for reliability  
+            min_visits = max(1, self.max_iterations // 100)  # At least 1% of iterations (more lenient)
             if child.visits >= min_visits:
-                return (root_perspective_win_rate, child.visits)
+                return (root_perspective_value, child.visits)
             else:
-                return (0.0, child.visits)  # Low priority for insufficient data
+                return (-1.0, child.visits)  # Low priority for insufficient data
         
         best_child = max(root.children, key=move_priority)
         return best_child.move
@@ -127,11 +152,12 @@ class MCTS:
         
         return current
     
-    def _simulate(self, game_state: Pente) -> float:
+    def _simulate(self, game_state: Pente, root_player: int = None) -> float:
         """Run a random simulation from the given game state using move/undo."""
         # Clone the game state for simulation to avoid modifying the original
         simulation_game = game_state.clone()
-        original_player = simulation_game.current_player  # Store the original player
+        # Use root player for consistent evaluation perspective, fallback to current player
+        evaluation_player = root_player if root_player is not None else simulation_game.current_player
         
         while not simulation_game.is_terminal():
             legal_moves = simulation_game.get_legal_moves()
@@ -159,29 +185,57 @@ class MCTS:
             
             simulation_game.make_move(selected_move)
         
-        # Return result from perspective of the original player
+        # Return result from perspective of the evaluation player with move-count scaling
         winner = simulation_game.get_winner()
-        if winner is None:
-            return 0.5  # Draw
-        elif winner == original_player:
-            return 1.0  # Win
-        else:
-            return 0.0  # Loss
+        move_count = simulation_game.move_count
+        
+        return self._calculate_scaled_valuation(winner, evaluation_player, move_count)
     
     def get_move_statistics(self, game_state: Pente) -> List[Tuple[Tuple[int, int], int, float]]:
         """Get detailed statistics for all explored moves."""
         root = MCTSNode(game_state)
+        root_player = game_state.current_player
         
         for _ in range(self.max_iterations):
             leaf = self._select_and_expand(root)
-            result = self._simulate(leaf.game_state)
+            result = self._simulate(leaf.game_state, root_player)
             leaf.backpropagate(result)
         
         statistics = []
         for child in root.children:
-            child_win_rate = child.wins / child.visits if child.visits > 0 else 0.0
-            # Convert child's perspective to root player's perspective
-            root_perspective_win_rate = 1.0 - child_win_rate
-            statistics.append((child.move, child.visits, root_perspective_win_rate))
+            if child.visits > 0:
+                child_avg_value = child.wins / child.visits
+                # Convert to root player's perspective (negate since child represents opponent's move)
+                root_perspective_value = -child_avg_value
+            else:
+                root_perspective_value = 0.0
+            statistics.append((child.move, child.visits, root_perspective_value))
         
         return sorted(statistics, key=lambda x: x[1], reverse=True)
+    
+    def _calculate_scaled_valuation(self, winner, original_player, move_count):
+        """
+        Calculate scaled valuation that favors faster wins and slower losses.
+        
+        Args:
+            winner: The winning player (1, -1, or None for tie)
+            original_player: The player from whose perspective to evaluate
+            move_count: Number of moves played in the game
+            
+        Returns:
+            Scaled valuation:
+            - Ties: 0.0
+            - Wins: 0.2 to 1.0 (1.0 for fast wins, 0.2 for slow wins)
+            - Losses: -0.2 to -1.0 (-1.0 for fast losses, -0.2 for slow losses)
+        """
+        if winner is None:
+            return 0.0  # Tie is always neutral
+        
+        # Calculate scaling factor that decreases with more moves
+        # Fast games (low move_count) get high scaling, slow games get low scaling
+        scale_factor = 0.2 + 0.8 * math.exp(-move_count / 50.0)
+        
+        if winner == original_player:
+            return scale_factor  # Win: positive value, higher for faster wins
+        else:
+            return -scale_factor  # Loss: negative value, more negative for faster losses

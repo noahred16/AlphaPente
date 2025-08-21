@@ -1,6 +1,6 @@
 from typing import List, Tuple, Dict
 import numpy as np
-from games.pente import Pente
+from src.games.pente import Pente
 
 class MoveHeuristic:
     """Heuristic evaluation for Pente moves with priority-based ordering."""
