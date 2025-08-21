@@ -30,6 +30,9 @@ class TestMCTSOptimization(unittest.TestCase):
         for i, move in enumerate(test_moves):
             game.board[move[0], move[1]] = 1 if i % 2 == 0 else -1
         
+        # Sync cache after manual board modifications
+        game._sync_legal_moves_cache()
+        
         original_player = game.current_player
         original_board_sum = game.board.sum()
         original_captures = game.captures.copy()
@@ -208,6 +211,8 @@ class TestMCTSOptimization(unittest.TestCase):
         for row, col, player in positions:
             game.board[row, col] = player
             
+        # Sync cache after manual board modifications
+        game._sync_legal_moves_cache()
         game.current_player = 1
         original_board_sum = game.board.sum()
         

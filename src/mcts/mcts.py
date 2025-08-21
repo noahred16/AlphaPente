@@ -15,11 +15,12 @@ class MCTSNode:
         self.visits = 0
         self.wins = 0.0
         self.untried_moves = game_state.get_legal_moves()
+        self._cached_heuristic = None  # Cache heuristic instance
         
         # Sort moves by heuristic score for better ordering
         if self.untried_moves:
-            heuristic = MoveHeuristic(game_state)
-            scored_moves = heuristic.evaluate_moves(self.untried_moves)
+            self._cached_heuristic = MoveHeuristic(game_state)
+            scored_moves = self._cached_heuristic.evaluate_moves(self.untried_moves)
             self.untried_moves = [move for move, score in scored_moves]
     
     def is_fully_expanded(self) -> bool:
@@ -101,20 +102,28 @@ class MCTS:
                 return scored_moves[0][0]
             return (0, 0)  # Should not happen
         
-        # Special case: if any move has critical heuristic score (100), prioritize it
-        # even with limited visits (for blocking/winning moves)
-        from .move_heuristic import MoveHeuristic
-        heuristic = MoveHeuristic(game_state)
+        # Special case: Check for critical moves (win/block) before relying on MCTS statistics
+        if self._heuristic is None:
+            self._heuristic = MoveHeuristic(game_state)
+        else:
+            self._heuristic.game = game_state  # Update reference
         
-        for child in root.children:
-            if child.visits > 0 and child.move:
-                move_score = heuristic._evaluate_move(child.move)
-                if move_score >= 100:  # Critical move (win/block)
-                    # If critical move has positive value, prioritize it
-                    child_avg_value = child.wins / child.visits
-                    root_perspective_value = -child_avg_value
-                    if root_perspective_value > 0:
-                        return child.move
+        # First check all legal moves for immediate wins
+        legal_moves = game_state.get_legal_moves()
+        for move in legal_moves:
+            move_score = self._heuristic._evaluate_move(move)
+            if move_score >= 100:  # Critical move (win/block)
+                # Check if this move is actually winning for current player
+                if self._heuristic._is_winning_move(move, game_state.current_player):
+                    return move
+        
+        # Then check for blocking moves
+        for move in legal_moves:
+            move_score = self._heuristic._evaluate_move(move)
+            if move_score >= 100:  # Critical move (win/block)
+                # Check if this move blocks opponent win
+                if self._heuristic._is_blocking_win(move, -game_state.current_player):
+                    return move
         
         # Sort by average scaled value (higher is better for root player)
         def move_priority(child):
@@ -153,10 +162,9 @@ class MCTS:
         return current
     
     def _simulate(self, game_state: Pente, root_player: int = None) -> float:
-        """Run a random simulation from the given game state using move/undo."""
-        # Clone the game state for simulation to avoid modifying the original
+        """Run a random simulation from the given game state using cloning for safety."""
+        # Revert to cloning approach for safety - optimization wasn't worth the complexity
         simulation_game = game_state.clone()
-        # Use root player for consistent evaluation perspective, fallback to current player
         evaluation_player = root_player if root_player is not None else simulation_game.current_player
         
         while not simulation_game.is_terminal():
@@ -164,24 +172,27 @@ class MCTS:
             if not legal_moves:
                 break
             
-            # Use heuristic-guided random selection for better simulations
-            heuristic = MoveHeuristic(simulation_game)
-            scored_moves = heuristic.evaluate_moves(legal_moves)
-            
-            # Weighted random selection based on heuristic scores
-            total_weight = sum(score for _, score in scored_moves)
-            if total_weight > 0:
-                rand_val = random.random() * total_weight
-                cumulative = 0.0
-                selected_move = scored_moves[0][0]  # fallback
-                
-                for move, score in scored_moves:
-                    cumulative += score
-                    if rand_val <= cumulative:
-                        selected_move = move
-                        break
-            else:
+            # Use epsilon-greedy selection for better performance
+            if random.random() < 0.2:  # 20% random exploration
                 selected_move = random.choice(legal_moves)
+            else:
+                # Quick heuristic-based selection (limit evaluation to top moves)
+                if len(legal_moves) > 10:
+                    # For large move sets, sample top candidates using simple heuristics
+                    center = simulation_game.board_size // 2
+                    def distance_score(move):
+                        r, c = move
+                        return -(abs(r - center) + abs(c - center))  # Prefer center moves
+                    
+                    legal_moves.sort(key=distance_score, reverse=True)
+                    candidate_moves = legal_moves[:10]
+                else:
+                    candidate_moves = legal_moves
+                
+                # Create fresh heuristic for this evaluation
+                heuristic = MoveHeuristic(simulation_game)
+                scored_moves = heuristic.evaluate_moves(candidate_moves)
+                selected_move = scored_moves[0][0] if scored_moves else random.choice(legal_moves)
             
             simulation_game.make_move(selected_move)
         

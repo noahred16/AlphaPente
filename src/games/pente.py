@@ -13,10 +13,19 @@ class Pente(BaseGame):
         self.move_count = 0
         
         # Initialize legal moves cache with all empty positions
+        # Use both set (for fast operations) and bitset (for memory efficiency)
         self._legal_moves_cache = set()
         for i in range(board_size):
             for j in range(board_size):
                 self._legal_moves_cache.add((i, j))
+        
+        # For large boards (>8x8), bitset becomes too large for Python int
+        # Only use bitset for smaller boards as a memory optimization
+        self._use_bitset = board_size <= 8
+        if self._use_bitset:
+            self._legal_moves_bitset = (1 << (board_size * board_size)) - 1  # All positions initially legal
+        else:
+            self._legal_moves_bitset = None
         
         # Cache for tournament rule constrained moves (computed lazily)
         self._tournament_legal_moves_cache = None
@@ -37,21 +46,34 @@ class Pente(BaseGame):
     
     def _verify_cache_consistency(self):
         """Verify cache is consistent with board state and auto-sync if needed."""
-        # Quick check: if cache size seems reasonable, skip expensive verification
+        # Quick size check first - if sizes match, cache is likely consistent
         expected_size = self.board_size * self.board_size - np.count_nonzero(self.board)
         if len(self._legal_moves_cache) == expected_size:
-            return  # Cache size matches, likely consistent
+            # Even if sizes match, do a quick spot check for robustness
+            # Check a few positions from cache to see if they're actually empty
+            sample_size = min(5, len(self._legal_moves_cache))
+            sample_moves = list(self._legal_moves_cache)[:sample_size]
+            for r, c in sample_moves:
+                if self.board[r, c] != 0:
+                    # Found inconsistency, need full resync
+                    break
+            else:
+                return  # Spot check passed, assume consistent
             
-        # Full verification when cache size is suspicious
-        actual_legal = set()
-        for i in range(self.board_size):
-            for j in range(self.board_size):
-                if self.board[i, j] == 0:
-                    actual_legal.add((i, j))
+        # Full resync needed
+        # Use numpy operations for faster scanning
+        empty_positions = np.where(self.board == 0)
+        actual_legal = set(zip(empty_positions[0], empty_positions[1]))
         
         if actual_legal != self._legal_moves_cache:
             # Silently auto-sync for robustness
             self._legal_moves_cache = actual_legal
+            if self._use_bitset:
+                # Rebuild bitset representation
+                self._legal_moves_bitset = 0
+                for r, c in actual_legal:
+                    bit_index = r * self.board_size + c
+                    self._legal_moves_bitset |= (1 << bit_index)
             self._tournament_cache_valid = False
     
     def _update_tournament_cache(self):
@@ -79,6 +101,10 @@ class Pente(BaseGame):
         
         # Update legal moves cache - remove the occupied position
         self._legal_moves_cache.discard((row, col))
+        # Update bitset representation (only for small boards)
+        if self._use_bitset:
+            bit_index = row * self.board_size + col
+            self._legal_moves_bitset &= ~(1 << bit_index)
         self._tournament_cache_valid = False  # Invalidate tournament cache
         
         captured = self._check_captures(row, col)
@@ -111,6 +137,10 @@ class Pente(BaseGame):
                             self.board[cap_r, cap_c] = 0
                             # Add captured positions back to legal moves cache
                             self._legal_moves_cache.add((cap_r, cap_c))
+                            # Update bitset representation (only for small boards)
+                            if self._use_bitset:
+                                bit_index = cap_r * self.board_size + cap_c
+                                self._legal_moves_bitset |= (1 << bit_index)
                         total_captured += len(captured_stones)
                         self._tournament_cache_valid = False  # Invalidate tournament cache
         
@@ -130,6 +160,10 @@ class Pente(BaseGame):
         
         # Add the undone move position back to legal moves cache
         self._legal_moves_cache.add((row, col))
+        # Update bitset representation (only for small boards)
+        if self._use_bitset:
+            bit_index = row * self.board_size + col
+            self._legal_moves_bitset |= (1 << bit_index)
         self._tournament_cache_valid = False  # Invalidate tournament cache
         
         self._restore_captured_stones(row, col, previous_player)
@@ -156,6 +190,12 @@ class Pente(BaseGame):
                     # Remove restored stones from legal moves cache
                     self._legal_moves_cache.discard((r1, c1))
                     self._legal_moves_cache.discard((r2, c2))
+                    # Update bitset representation (only for small boards)
+                    if self._use_bitset:
+                        bit_index1 = r1 * self.board_size + c1
+                        bit_index2 = r2 * self.board_size + c2
+                        self._legal_moves_bitset &= ~(1 << bit_index1)
+                        self._legal_moves_bitset &= ~(1 << bit_index2)
                     self.captures[player] -= 2
                     self._tournament_cache_valid = False  # Invalidate tournament cache
     
@@ -214,8 +254,10 @@ class Pente(BaseGame):
         new_game.move_history = self.move_history.copy()
         new_game.move_count = self.move_count
         
-        # Copy legal moves cache
+        # Copy legal moves cache and bitset
         new_game._legal_moves_cache = self._legal_moves_cache.copy()
+        new_game._use_bitset = self._use_bitset
+        new_game._legal_moves_bitset = self._legal_moves_bitset
         new_game._tournament_cache_valid = self._tournament_cache_valid
         if self._tournament_legal_moves_cache is not None:
             new_game._tournament_legal_moves_cache = self._tournament_legal_moves_cache.copy()
@@ -229,10 +271,16 @@ class Pente(BaseGame):
         Used primarily for testing scenarios where board positions are set manually.
         """
         self._legal_moves_cache.clear()
+        if self._use_bitset:
+            self._legal_moves_bitset = 0
         for i in range(self.board_size):
             for j in range(self.board_size):
                 if self.board[i, j] == 0:
                     self._legal_moves_cache.add((i, j))
+                    # Update bitset representation (only for small boards)
+                    if self._use_bitset:
+                        bit_index = i * self.board_size + j
+                        self._legal_moves_bitset |= (1 << bit_index)
         
         # Invalidate tournament cache since board changed
         self._tournament_cache_valid = False
