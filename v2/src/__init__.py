@@ -1,1 +1,0 @@
-# AlphaPente source package
