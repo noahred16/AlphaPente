@@ -31,6 +31,10 @@ class Pente(BaseGame):
         self._tournament_legal_moves_cache = None
         self._tournament_cache_valid = False
         
+        # Winner detection optimization
+        self._cached_winner = None
+        self._winner_cache_valid = True  # Start valid (no winner initially)
+        
     def get_legal_moves(self) -> List[Tuple[int, int]]:
         """Return list of legal moves using cached results."""
         # Verify cache consistency and auto-sync if needed (for robustness with tests)
@@ -106,6 +110,7 @@ class Pente(BaseGame):
             bit_index = row * self.board_size + col
             self._legal_moves_bitset &= ~(1 << bit_index)
         self._tournament_cache_valid = False  # Invalidate tournament cache
+        self._winner_cache_valid = False  # Invalidate winner cache
         
         captured = self._check_captures(row, col)
         self.captures[self.current_player] += captured
@@ -143,6 +148,7 @@ class Pente(BaseGame):
                                 self._legal_moves_bitset |= (1 << bit_index)
                         total_captured += len(captured_stones)
                         self._tournament_cache_valid = False  # Invalidate tournament cache
+                        self._winner_cache_valid = False  # Invalidate winner cache (captures affect board)
         
         return total_captured
     
@@ -165,6 +171,7 @@ class Pente(BaseGame):
             bit_index = row * self.board_size + col
             self._legal_moves_bitset |= (1 << bit_index)
         self._tournament_cache_valid = False  # Invalidate tournament cache
+        self._winner_cache_valid = False  # Invalidate winner cache
         
         self._restore_captured_stones(row, col, previous_player)
         
@@ -198,6 +205,7 @@ class Pente(BaseGame):
                         self._legal_moves_bitset &= ~(1 << bit_index2)
                     self.captures[player] -= 2
                     self._tournament_cache_valid = False  # Invalidate tournament cache
+                    self._winner_cache_valid = False  # Invalidate winner cache (restored captures affect board)
     
     def is_terminal(self) -> bool:
         """Check if game has ended."""
@@ -207,41 +215,69 @@ class Pente(BaseGame):
     
     def get_winner(self) -> Optional[int]:
         """Return winner (1, -1) or None."""
+        # Check capture wins first (always current)
         for player in [1, -1]:
             if self.captures[player] >= self.captures_to_win:
                 return player
         
-        winner = self._check_five_in_row()
-        return winner
+        # Use cached winner if valid
+        if self._winner_cache_valid:
+            return self._cached_winner
+        
+        # Recalculate and cache winner
+        self._cached_winner = self._check_five_in_row()
+        self._winner_cache_valid = True
+        return self._cached_winner
     
     def _check_five_in_row(self) -> Optional[int]:
-        """Check for five in a row."""
+        """Check for five in a row, optimized to only check around recent moves."""
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
         
-        for i in range(self.board_size):
-            for j in range(self.board_size):
-                if self.board[i, j] != 0:
-                    player = self.board[i, j]
-                    
-                    for dr, dc in directions:
-                        count = 1
-                        
-                        r, c = i + dr, j + dc
-                        while (0 <= r < self.board_size and 0 <= c < self.board_size and 
-                               self.board[r, c] == player):
-                            count += 1
-                            r += dr
-                            c += dc
-                        
-                        r, c = i - dr, j - dc
-                        while (0 <= r < self.board_size and 0 <= c < self.board_size and 
-                               self.board[r, c] == player):
-                            count += 1
-                            r -= dr
-                            c -= dc
-                        
-                        if count >= 5:
-                            return player
+        # If no moves have been made, no winner possible
+        if not self.move_history:
+            return None
+        
+        # Check positions around recent moves (last few moves)
+        # This covers newly created lines and recently modified areas
+        check_positions = set()
+        
+        # Check around last 3 moves to catch sequences and captures
+        recent_moves = self.move_history[-min(3, len(self.move_history)):]
+        for move in recent_moves:
+            row, col = move
+            # Add positions in a 2-radius around each recent move
+            for dr in range(-2, 3):
+                for dc in range(-2, 3):
+                    r, c = row + dr, col + dc
+                    if 0 <= r < self.board_size and 0 <= c < self.board_size:
+                        if self.board[r, c] != 0:
+                            check_positions.add((r, c))
+        
+        # Check each position for five-in-a-row
+        for i, j in check_positions:
+            player = self.board[i, j]
+            
+            for dr, dc in directions:
+                count = 1
+                
+                # Count forward
+                r, c = i + dr, j + dc
+                while (0 <= r < self.board_size and 0 <= c < self.board_size and 
+                       self.board[r, c] == player):
+                    count += 1
+                    r += dr
+                    c += dc
+                
+                # Count backward  
+                r, c = i - dr, j - dc
+                while (0 <= r < self.board_size and 0 <= c < self.board_size and 
+                       self.board[r, c] == player):
+                    count += 1
+                    r -= dr
+                    c -= dc
+                
+                if count >= 5:
+                    return player
         
         return None
     
@@ -261,6 +297,10 @@ class Pente(BaseGame):
         new_game._tournament_cache_valid = self._tournament_cache_valid
         if self._tournament_legal_moves_cache is not None:
             new_game._tournament_legal_moves_cache = self._tournament_legal_moves_cache.copy()
+        
+        # Copy winner cache state
+        new_game._cached_winner = self._cached_winner
+        new_game._winner_cache_valid = self._winner_cache_valid
         
         return new_game
     
@@ -284,3 +324,4 @@ class Pente(BaseGame):
         
         # Invalidate tournament cache since board changed
         self._tournament_cache_valid = False
+        self._winner_cache_valid = False  # Invalidate winner cache since board changed
