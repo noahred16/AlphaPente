@@ -1,11 +1,46 @@
+# C++ Build artifacts
+build/
+bin/
+*.exe
+*.out
+*.app
+
+# C++ Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# C++ Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# C++ Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Conan artifacts
+conandata.yml
+conaninfo.txt
+conanbuildinfo.*
+conan_toolchain.cmake
+conan_deps.cmake
+CMakeUserPresets.json
+CMakePresets.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 **/__pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
-*.so
 
 # Distribution / packaging
 .Python

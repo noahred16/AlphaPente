@@ -17,6 +17,6 @@ find_package(GTest REQUIRED)
 # Main executable (start simple)
 add_executable(alphapente src/main.cpp)
 
-# Enable testing (will add tests subdirectory later)
-# enable_testing()
-# add_subdirectory(tests)
+# Enable testing
+enable_testing()
+add_subdirectory(tests)

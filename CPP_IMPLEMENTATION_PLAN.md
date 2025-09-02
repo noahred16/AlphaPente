@@ -5,6 +5,7 @@ This document outlines the high-level plan for implementing the AlphaPente MCTS 
 
 ## Commands
 - `make run`: run main.cpp
+- `make test`: run all unit tests in tests/unit/
 
 ## Performance Goals
 - **Simulation Rate**: 10,000+ MCTS simulations per second
