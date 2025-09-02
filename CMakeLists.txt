@@ -18,6 +18,8 @@ find_package(GTest REQUIRED)
 add_library(alphapente_core 
     src/core/bitboard.cpp
     src/core/game_state.cpp
+    src/core/distance_rings.cpp
+    src/core/move_generator.cpp
 )
 
 # Main executable (start simple)

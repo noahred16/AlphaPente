@@ -1,4 +1,5 @@
 #include "core/game_state.hpp"
+#include <algorithm>
 
 namespace core {
 
@@ -12,6 +13,7 @@ MoveDelta GameState::make_move(int row, int col) noexcept {
     
     // Place the stone
     board_.set_stone(row, col, player);
+    stone_positions_.emplace_back(static_cast<int8_t>(row), static_cast<int8_t>(col));
     
     // Detect and execute captures
     detect_and_execute_captures(row, col, player, delta);
@@ -36,11 +38,13 @@ void GameState::undo_move() noexcept {
     
     // Remove the placed stone
     board_.remove_stone(last_move.move_pos.row, last_move.move_pos.col);
+    stone_positions_.pop_back();  // Placed stone is always the last one added
     
     // Restore captured stones
     for (uint8_t i = 0; i < last_move.capture_count; ++i) {
         Position captured = last_move.captured_stones[i];
         board_.set_stone(captured.row, captured.col, -current_player());
+        stone_positions_.push_back(captured);  // Add back to position vector
     }
     
     // Restore capture counts
@@ -100,9 +104,22 @@ void GameState::detect_and_execute_captures(int row, int col, int player, MoveDe
                 board_.remove_stone(r1, c1);
                 board_.remove_stone(r2, c2);
                 
+                // Remove captured stones from position vector
+                Position captured1{static_cast<int8_t>(r1), static_cast<int8_t>(c1)};
+                Position captured2{static_cast<int8_t>(r2), static_cast<int8_t>(c2)};
+                
+                auto it1 = std::find(stone_positions_.begin(), stone_positions_.end(), captured1);
+                if (it1 != stone_positions_.end()) {
+                    stone_positions_.erase(it1);
+                }
+                auto it2 = std::find(stone_positions_.begin(), stone_positions_.end(), captured2);
+                if (it2 != stone_positions_.end()) {
+                    stone_positions_.erase(it2);
+                }
+                
                 // Record captured positions for undo
-                delta.captured_stones[delta.capture_count++] = Position{static_cast<int8_t>(r1), static_cast<int8_t>(c1)};
-                delta.captured_stones[delta.capture_count++] = Position{static_cast<int8_t>(r2), static_cast<int8_t>(c2)};
+                delta.captured_stones[delta.capture_count++] = captured1;
+                delta.captured_stones[delta.capture_count++] = captured2;
                 
                 // Update capture count
                 if (player == 1) {
@@ -120,6 +137,7 @@ void GameState::reset() noexcept {
     move_history_.clear();
     is_player1_turn_ = true;
     captures_ = {0, 0};
+    stone_positions_.clear();
 }
 
 } // namespace core

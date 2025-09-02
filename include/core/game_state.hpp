@@ -13,6 +13,9 @@ private:
     bool is_player1_turn_ = true;
     std::array<int, 2> captures_ = {0, 0};
     
+    // Fast stone position lookup for move generation
+    std::vector<Position> stone_positions_;
+    
     void detect_and_execute_captures(int row, int col, int player, MoveDelta& delta) noexcept;
     
 public:
@@ -48,6 +51,11 @@ public:
     // Game state queries
     inline int get_captures(int player) const noexcept {
         return player == 1 ? captures_[0] : captures_[1];
+    }
+    
+    // Fast stone position access for move generation
+    inline const std::vector<Position>& get_stone_positions() const noexcept {
+        return stone_positions_;
     }
     
     // Win conditions
