@@ -56,6 +56,8 @@ public:
         return get_stone(row, col) == 0;
     }
     
+    bool check_five_in_a_row(int row, int col, int player) const noexcept;
+    
     // For testing - get raw bit arrays
     // Might not need, can just use the get_stone method
     // const std::array<uint64_t, 6>& get_player1_bits() const noexcept { return player1_bits_; }

@@ -14,8 +14,14 @@ include_directories(include)
 # Find dependencies
 find_package(GTest REQUIRED)
 
+# Core library
+add_library(alphapente_core 
+    src/core/bitboard.cpp
+)
+
 # Main executable (start simple)
 add_executable(alphapente src/main.cpp)
+target_link_libraries(alphapente alphapente_core)
 
 # Enable testing
 enable_testing()

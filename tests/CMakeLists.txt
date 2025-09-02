@@ -1,9 +1,11 @@
 # Unit tests
 add_executable(unit_tests
     unit/test_bitboard.cpp
+    unit/test_win_detection.cpp
 )
 
 target_link_libraries(unit_tests
+    alphapente_core
     GTest::gtest
     GTest::gtest_main
 )
