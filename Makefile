@@ -1,35 +1,18 @@
-.PHONY: all clean build test benchmark install deps
+.PHONY: build test clean benchmark
 
-BUILD_DIR = build
-SRC_DIR = src
-INCLUDE_DIR = include
-TEST_DIR = tests
-
-all: build
-
-deps:
-	conan install . --output-folder=$(BUILD_DIR) --build=missing
-
-build: deps
-	cmake --preset conan-default
-	cmake --build $(BUILD_DIR)
-
-clean:
-	rm -rf $(BUILD_DIR)
+build:
+	conan install . --output-folder=build --build=missing
+	cd build && cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+	cd build && cmake --build .
 
 test: build
-	cd $(BUILD_DIR) && ./tests
+	cd build && ctest --output-on-failure
 
 benchmark: build
-	cd $(BUILD_DIR) && ./benchmarks
+	cd build && ./benchmark
 
-install: build
-	cmake --install $(BUILD_DIR)
+clean:
+	rm -rf build/
 
-debug:
-	cmake -DCMAKE_BUILD_TYPE=Debug --preset conan-default
-	cmake --build $(BUILD_DIR)
-
-release:
-	cmake -DCMAKE_BUILD_TYPE=Release --preset conan-default
-	cmake --build $(BUILD_DIR)
+run: build
+	cd build && ./alphapente

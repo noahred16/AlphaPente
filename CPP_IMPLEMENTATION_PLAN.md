@@ -3,6 +3,9 @@
 ## Overview
 This document outlines the high-level plan for implementing the AlphaPente MCTS bitboard Pente program in C++ for maximum performance. Based on the Python implementation and detailed specifications, this C++ version targets 10,000+ simulations per second and complete games in under 100ms.
 
+## Commands
+- `make run`: run main.cpp
+
 ## Performance Goals
 - **Simulation Rate**: 10,000+ MCTS simulations per second
 - **Move Generation**: < 1 microsecond per move
