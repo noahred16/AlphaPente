@@ -2,6 +2,7 @@
 add_executable(unit_tests
     unit/test_bitboard.cpp
     unit/test_win_detection.cpp
+    unit/test_capture_detection.cpp
 )
 
 target_link_libraries(unit_tests

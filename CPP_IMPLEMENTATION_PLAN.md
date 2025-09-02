@@ -72,14 +72,6 @@ struct MoveDelta {
     uint8_t capture_count = 0;               // How many stones captured THIS move
     std::array<int, 2> captures_before; // Both players' counts BEFORE this move
 };
-struct CaptureInfo {
-    std::array<Position, 8> captured_stones;  // Max 8 captures per move
-    int capture_count = 0;
-    
-    void add_capture(int row, int col) {
-        captured_stones[capture_count++] = Position{row, col};
-    }
-};
 
 class GameState {
 private:
@@ -87,7 +79,6 @@ private:
     std::vector<MoveDelta> move_history_;  // For efficient undo
     bool is_player1_turn_ = true;  // true = player 1, false = player -1
     std::array<int, 2> captures_ = {0, 0};
-    CaptureInfo detect_captures(Position move_pos, int player) const;
     
 public:
     MoveDelta make_move(Position pos);     // Returns undo information

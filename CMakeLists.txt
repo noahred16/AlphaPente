@@ -17,6 +17,7 @@ find_package(GTest REQUIRED)
 # Core library
 add_library(alphapente_core 
     src/core/bitboard.cpp
+    src/core/game_state.cpp
 )
 
 # Main executable (start simple)

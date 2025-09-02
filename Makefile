@@ -6,7 +6,11 @@ build:
 	cd build && cmake --build .
 
 test: build
+ifdef FILTER
+	cd build && ./tests/unit_tests --gtest_filter="$(FILTER)"
+else
 	cd build && ctest --output-on-failure
+endif
 
 benchmark: build
 	cd build && ./benchmark
