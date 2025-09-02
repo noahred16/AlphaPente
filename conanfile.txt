@@ -1,0 +1,13 @@
+[requires]
+gtest/1.13.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+gtest:shared=False
+
+[imports]
+bin, *.dll -> ./bin
+lib, *.dylib* -> ./bin
