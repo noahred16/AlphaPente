@@ -8,6 +8,7 @@ add_executable(unit_tests
     unit/test_mcts_node.cpp
     unit/test_rollout.cpp
     unit/test_mcts_engine.cpp
+    unit/test_tree_reuse.cpp
 )
 
 target_link_libraries(unit_tests

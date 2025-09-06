@@ -36,6 +36,10 @@ public:
     
     // Get best move for final selection
     MCTSNode* get_most_visited_child() const noexcept;
+    
+    // Tree reuse support
+    MCTSNode* find_child_with_move(const core::Position& move) const noexcept;
+    std::unique_ptr<MCTSNode> extract_child(const core::Position& move) noexcept;
 
 private:
     // Hot data (accessed every simulation) - keep together for cache efficiency

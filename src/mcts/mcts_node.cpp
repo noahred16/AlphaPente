@@ -109,4 +109,31 @@ void MCTSNode::initialize_untried_moves(core::GameState& state, const core::Move
     std::shuffle(untried_moves_.begin(), untried_moves_.end(), g);
 }
 
+MCTSNode* MCTSNode::find_child_with_move(const core::Position& move) const noexcept {
+    for (const auto& child : children_) {
+        const core::Position& child_move = child->get_move();
+        if (child_move.row == move.row && child_move.col == move.col) {
+            return child.get();
+        }
+    }
+    return nullptr;
+}
+
+std::unique_ptr<MCTSNode> MCTSNode::extract_child(const core::Position& move) noexcept {
+    for (auto it = children_.begin(); it != children_.end(); ++it) {
+        const core::Position& child_move = (*it)->get_move();
+        if (child_move.row == move.row && child_move.col == move.col) {
+            // Extract the child and remove from children vector
+            std::unique_ptr<MCTSNode> extracted_child = std::move(*it);
+            children_.erase(it);
+            
+            // Update parent pointer to null (will become new root)
+            extracted_child->parent_ = nullptr;
+            
+            return extracted_child;
+        }
+    }
+    return nullptr; // Child not found
+}
+
 } // namespace mcts

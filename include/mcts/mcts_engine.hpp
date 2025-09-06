@@ -27,7 +27,15 @@ public:
     
     // Statistics
     int get_total_simulations() const { return total_simulations_; }
-    void reset_statistics() { total_simulations_ = 0; }
+    void reset_statistics() { total_simulations_ = 0; tree_reuse_count_ = 0; tree_fallback_count_ = 0; }
+    
+    // Tree reuse statistics  
+    int get_tree_reuse_count() const { return tree_reuse_count_; }
+    int get_tree_fallback_count() const { return tree_fallback_count_; }
+    double get_tree_reuse_rate() const { 
+        int total_updates = tree_reuse_count_ + tree_fallback_count_;
+        return total_updates > 0 ? static_cast<double>(tree_reuse_count_) / total_updates : 0.0;
+    }
 
 private:
     // Single shared state for all simulations - no copying!
@@ -42,6 +50,10 @@ private:
     // Statistics
     int total_simulations_ = 0;
     int moves_applied_ = 0;  // Track moves applied to shared state for proper undo
+    
+    // Tree reuse statistics
+    int tree_reuse_count_ = 0;    // Successful tree reuses
+    int tree_fallback_count_ = 0; // Times we had to create new tree
     
     // MCTS phases
     MCTSNode* select_node(MCTSNode* node);

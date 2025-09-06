@@ -52,18 +52,25 @@ core::Position MCTSEngine::search(int max_iterations, double time_limit_ms) {
 }
 
 void MCTSEngine::update_root(core::Position opponent_move) {
-    // Find child node corresponding to opponent's move
-    MCTSNode* new_root = nullptr;
+    // Try to find the child node corresponding to opponent's move
+    std::unique_ptr<MCTSNode> new_root = root_->extract_child(opponent_move);
     
-    // Search through children of current root
-    for (size_t i = 0; i < root_->child_count(); i++) {
-        // Note: We would need to add a way to access children by index
-        // For now, we'll create a new root (tree reuse can be added later)
+    if (new_root != nullptr) {
+        // Successfully found and extracted the subtree
+        root_ = std::move(new_root);
+        tree_reuse_count_++;
+        
+        // Optional: Log successful tree reuse
+        // std::cout << "Tree reuse: preserved " << root_->get_visits() 
+        //           << " visits from subtree" << std::endl;
+    } else {
+        // Opponent's move was not explored in our tree, create fresh root
+        root_ = std::make_unique<MCTSNode>();
+        tree_fallback_count_++;
+        
+        // Optional: Log tree fallback
+        // std::cout << "Tree fallback: opponent move not in explored tree" << std::endl;
     }
-    
-    // For now, create a new root (simpler implementation)
-    // Tree reuse optimization can be added later
-    root_ = std::make_unique<MCTSNode>();
 }
 
 MCTSNode* MCTSEngine::select_node(MCTSNode* node) {
