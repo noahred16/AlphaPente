@@ -20,6 +20,9 @@ add_library(alphapente_core
     src/core/game_state.cpp
     src/core/distance_rings.cpp
     src/core/move_generator.cpp
+    src/mcts/mcts_node.cpp
+    src/mcts/rollout.cpp
+    src/mcts/mcts_engine.cpp
 )
 
 # Main executable (start simple)

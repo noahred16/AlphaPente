@@ -5,6 +5,9 @@ add_executable(unit_tests
     unit/test_capture_detection.cpp
     unit/test_distance_rings.cpp
     unit/test_move_generator.cpp
+    unit/test_mcts_node.cpp
+    unit/test_rollout.cpp
+    unit/test_mcts_engine.cpp
 )
 
 target_link_libraries(unit_tests
@@ -13,5 +16,6 @@ target_link_libraries(unit_tests
     GTest::gtest_main
 )
 
-# Add test to CTest
-add_test(NAME BitBoardTests COMMAND unit_tests)
+# Use GTest discovery to automatically find all test cases
+include(GoogleTest)
+gtest_discover_tests(unit_tests)

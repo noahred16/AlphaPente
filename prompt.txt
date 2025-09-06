@@ -1,0 +1,5 @@
+Review the CPP_IMPLEMENTATION_PLAN.md file for the high plan of this project. Then review the more low level plan files in the cpp_plan directory. 
+
+Currently I'm on step cpp_plan/08_basic_mcts_node_structure.md. 
+
+Lets first discuss our current project setup and then start planning on how to implement this step.

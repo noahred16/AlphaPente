@@ -1,15 +1,28 @@
-.PHONY: build test clean benchmark
+.PHONY: build test test-case clean benchmark
 
 build:
-	conan install . --output-folder=build --build=missing
-	cd build && cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-	cd build && cmake --build .
+	@echo "Installing dependencies..."
+	@conan install . --output-folder=build --build=missing > /dev/null 2>&1
+	@echo "Configuring build..."
+	@cd build && cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
+	@echo "Building..."
+	@cd build && cmake --build . > /dev/null 2>&1
+	@echo "Build complete."
 
 test: build
-ifdef FILTER
-	cd build && ./tests/unit_tests --gtest_filter="$(FILTER)"
+	@echo "Running all tests..."
+	@cd build && ctest --output-on-failure
+
+test-case: build
+ifeq ($(CASE),)
+	@echo "Usage: make test-case CASE=TestSuite.TestName"
+	@echo "Examples:"
+	@echo "  make test-case CASE=MCTSNodeTest.*"
+	@echo "  make test-case CASE=*Performance*"
+	@echo "  make test-case CASE=MCTSNodeTest.UCB1CalculationWithExploration"
 else
-	cd build && ctest --output-on-failure
+	@echo "Running test case: $(CASE)"
+	@cd build && ./tests/unit_tests --gtest_filter="$(CASE)"
 endif
 
 benchmark: build
