@@ -20,3 +20,16 @@ target_link_libraries(unit_tests
 # Use GTest discovery to automatically find all test cases
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
+
+# Integration tests
+add_executable(integration_tests
+    integration/test_complete_games.cpp
+)
+
+target_link_libraries(integration_tests
+    alphapente_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(integration_tests)
