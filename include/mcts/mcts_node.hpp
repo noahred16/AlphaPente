@@ -41,7 +41,7 @@ public:
     MCTSNode* find_child_with_move(const core::Position& move) const noexcept;
     std::unique_ptr<MCTSNode> extract_child(const core::Position& move) noexcept;
     
-    // Debug support - get top N children by visit count
+    // Debug support - get top N children by visit count (or all if count = -1)
     std::vector<const MCTSNode*> get_top_children(int count = 10) const;
 
 private:

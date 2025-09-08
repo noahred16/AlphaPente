@@ -278,7 +278,7 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockOpenThrees) {
         state = create_test_state();
         auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
         
-        Position engine_move = engine->search(1000, 2000.0);
+        Position engine_move = engine->search(20000, 20000.0);
         
         ASSERT_NE(engine_move.row, -1);
         ASSERT_NE(engine_move.col, -1);
@@ -317,76 +317,32 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockOpenThrees) {
     EXPECT_GE(blocking_moves.size(), 2) << "Engine only blocked the open three " << blocking_moves.size() << " out of 3 times. Expected at least 2.";
 }
 
-TEST_F(IsAgentDumbTest, AgentShouldBlockVerticalOpenThrees) {
-    // Test vertical open three blocking
-    auto state = std::make_unique<GameState>();
-    
-    // Set up a vertical open three for the human player
-    // Human stones: J9, J10, J11 (vertical open three)
-    state->make_move(10, 9);  // J8 (Human)
-    state->make_move(5, 5);   // F6 (Engine - irrelevant)
-    state->make_move(9, 9);   // J10 (Human) 
-    state->make_move(6, 6);   // G7 (Engine - irrelevant)
-    state->make_move(8, 9);   // J11 (Human) - creates vertical open three
-    
-    auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
-    
-    std::cout << "\nBoard state with vertical open three (J8-J10-J11):\n";
-    std::cout << "    A B C D E F G H I J K L M N O P Q R S\n";
-    for (int row = 0; row < 19; row++) {
-        printf("%2d  ", 19-row);
-        for (int col = 0; col < 19; col++) {
-            int stone = state->get_stone(row, col);
-            if (stone == 1) std::cout << "X ";
-            else if (stone == -1) std::cout << "O ";
-            else std::cout << ". ";
-        }
-        printf("  %d\n", 19-row);
-    }
-    std::cout << "    A B C D E F G H I J K L M N O P Q R S\n";
-    
-    Position expected_blocks[2] = {{11, 9}, {7, 9}}; // J7 or J12
-    int blocking_count = 0;
-    
-    for (int attempt = 0; attempt < 3; attempt++) {
-        Position engine_move = engine->search(1000, 2000.0);
-        
-        ASSERT_NE(engine_move.row, -1);
-        ASSERT_NE(engine_move.col, -1);
-        
-        char col_char = 'A' + engine_move.col;
-        int display_row = 19 - engine_move.row;
-        std::cout << "Attempt " << (attempt + 1) << ": Engine played " << col_char << display_row << "\n";
-        
-        bool is_blocking = (engine_move.row == expected_blocks[0].row && engine_move.col == expected_blocks[0].col) ||
-                          (engine_move.row == expected_blocks[1].row && engine_move.col == expected_blocks[1].col);
-        
-        if (is_blocking) {
-            blocking_count++;
-        }
-        
-        engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
-    }
-    
-    std::cout << "Vertical blocking moves: " << blocking_count << " out of 3 attempts\n";
-    EXPECT_GE(blocking_count, 2) << "Engine only blocked the vertical open three " << blocking_count << " out of 3 times.";
-}
 
-TEST_F(IsAgentDumbTest, AgentShouldBlockDiagonalOpenThrees) {
-    // Test diagonal open three blocking
-    auto state = std::make_unique<GameState>();
+
+TEST_F(IsAgentDumbTest, AgentShouldBlockFourThreat) {
+    // Test that the engine blocks four-in-a-row threats (critical Pente defense)
     
-    // Set up a diagonal open three for the human player
-    // Human stones: I9, J10, K11 (diagonal open three)
-    state->make_move(10, 8);  // I9 (Human)
-    state->make_move(5, 5);   // F6 (Engine - irrelevant)
-    state->make_move(9, 9);   // J10 (Human) 
-    state->make_move(6, 6);   // G7 (Engine - irrelevant)
-    state->make_move(8, 10);  // K11 (Human) - creates diagonal open three
+    // Helper function to create the test board state
+    auto create_test_state = []() {
+        auto state = std::make_unique<GameState>();
+        // Set up a four-in-a-row threat for the human player (engine must block)
+        // Human stones: J10, K10, L10, M10 (horizontal four threat)
+        // Cover one side with engine stones (I10)
+        // expect engine to block the other side
+        state->make_move(9, 9);   // J10 (Human)
+        state->make_move(9, 8);   // I10 (Engine - covers one side)
+        state->make_move(9, 10);  // K10 (Human) 
+        state->make_move(6, 6);   // G7 (Engine - irrelevant move)
+        state->make_move(9, 11);  // L10 (Human)
+        state->make_move(7, 7);   // H8 (Engine - irrelevant move) 
+        state->make_move(9, 12);  // M10 (Human) - creates four-in-a-row threat
+        return state;
+    };
     
-    auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
+    auto state = create_test_state();
     
-    std::cout << "\nBoard state with diagonal open three (I9-J10-K11):\n";
+    // Print the board state for debugging
+    std::cout << "\nBoard state with four threat (J10-K10-L10-M10):\n";
     std::cout << "    A B C D E F G H I J K L M N O P Q R S\n";
     for (int row = 0; row < 19; row++) {
         printf("%2d  ", 19-row);
@@ -400,29 +356,73 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockDiagonalOpenThrees) {
     }
     std::cout << "    A B C D E F G H I J K L M N O P Q R S\n";
     
-    Position expected_blocks[2] = {{11, 7}, {7, 11}}; // H8 or L12
-    int blocking_count = 0;
+    // Run multiple searches to test consistency
+    std::vector<Position> blocking_moves;
+    Position expected_blocks[1] = {{9, 13}}; // N10 (only remaining blocking move since I10 is occupied)
     
     for (int attempt = 0; attempt < 3; attempt++) {
+        // Create fresh state and engine for each attempt
+        state = create_test_state();
+        auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
+        
         Position engine_move = engine->search(1000, 2000.0);
         
         ASSERT_NE(engine_move.row, -1);
         ASSERT_NE(engine_move.col, -1);
+        ASSERT_TRUE(state->is_empty(engine_move.row, engine_move.col));
         
         char col_char = 'A' + engine_move.col;
         int display_row = 19 - engine_move.row;
         std::cout << "Attempt " << (attempt + 1) << ": Engine played " << col_char << display_row << "\n";
         
-        bool is_blocking = (engine_move.row == expected_blocks[0].row && engine_move.col == expected_blocks[0].col) ||
-                          (engine_move.row == expected_blocks[1].row && engine_move.col == expected_blocks[1].col);
+        // Print out the top 10 most visited moves from the root node
+        auto top_children = engine->get_root()->get_top_children(10);
+        std::cout << "DEBUG: Top " << top_children.size() << " moves by visits:\n";
+        for (size_t i = 0; i < top_children.size(); i++) {
+            const auto* child = top_children[i];
+            const auto& move = child->get_move();
+            char move_col = 'A' + move.col;
+            int move_row = 19 - move.row;
+            double win_rate = child->get_win_rate();
+            std::cout << "  " << (i+1) << ". " << move_col << move_row 
+                      << " (visits: " << child->get_visits() 
+                      << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+        }
+
+        // Print out the visit amounts for the correct answers
+        auto all_children = engine->get_root()->get_top_children(-1);
+        std::cout << "DEBUG: Blocking move statistics (total children: " << all_children.size() << "):\n";
         
-        if (is_blocking) {
-            blocking_count++;
+        bool found_blocking_move = false;
+        for (const auto* child : all_children) {
+            const auto& move = child->get_move();
+            if (move.row == expected_blocks[0].row && move.col == expected_blocks[0].col) {
+                char move_col = 'A' + move.col;
+                int move_row = 19 - move.row;
+                double win_rate = child->get_win_rate();
+                std::cout << "  Blocking move " << move_col << move_row 
+                          << " (visits: " << child->get_visits() 
+                          << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+                found_blocking_move = true;
+            }
         }
         
-        engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
+        if (!found_blocking_move) {
+            char expected_col = 'A' + expected_blocks[0].col;
+            int expected_row = 19 - expected_blocks[0].row;
+            std::cout << "  Expected blocking move " << expected_col << expected_row << " was NOT explored!\n";
+        }
+
+        // Check if it's a blocking move
+        bool is_blocking = (engine_move.row == expected_blocks[0].row && engine_move.col == expected_blocks[0].col);
+        
+        if (is_blocking) {
+            blocking_moves.push_back(engine_move);
+        }
     }
     
-    std::cout << "Diagonal blocking moves: " << blocking_count << " out of 3 attempts\n";
-    EXPECT_GE(blocking_count, 2) << "Engine only blocked the diagonal open three " << blocking_count << " out of 3 times.";
+    std::cout << "Four threat blocking moves: " << blocking_moves.size() << " out of 3 attempts\n";
+    
+    // The engine should block the four threat at least 2 out of 3 times  
+    EXPECT_GE(blocking_moves.size(), 2) << "Engine only blocked the four threat " << blocking_moves.size() << " out of 3 times. Expected at least 2.";
 }

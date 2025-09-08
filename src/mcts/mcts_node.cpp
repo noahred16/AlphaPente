@@ -160,8 +160,8 @@ std::vector<const MCTSNode*> MCTSNode::get_top_children(int count) const {
                   return a->get_visits() > b->get_visits();
               });
     
-    // Return top N children
-    if (static_cast<int>(children_ptrs.size()) > count) {
+    // Return top N children, or all children if count is -1
+    if (count > 0 && static_cast<int>(children_ptrs.size()) > count) {
         children_ptrs.resize(count);
     }
     
