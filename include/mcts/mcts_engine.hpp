@@ -36,6 +36,9 @@ public:
         int total_updates = tree_reuse_count_ + tree_fallback_count_;
         return total_updates > 0 ? static_cast<double>(tree_reuse_count_) / total_updates : 0.0;
     }
+    
+    // Debug access to root node
+    const MCTSNode* get_root() const { return root_.get(); }
 
 private:
     // Single shared state for all simulations - no copying!

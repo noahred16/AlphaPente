@@ -17,9 +17,9 @@ private:
     std::unique_ptr<mcts::MCTSEngine> engine_;
     
     // Engine settings
-    int engine_iterations_ = 1000;
-    double engine_time_limit_ = 2000.0; // 2 seconds
-    
+    int engine_iterations_ = 10000;
+    double engine_time_limit_ = 10000.0; // 10 seconds
+
     // Move history for undo (pairs of human+engine moves)
     std::vector<std::pair<core::Position, core::Position>> move_pairs_;
     
@@ -216,8 +216,10 @@ public:
                 // Store human move for pairing
                 current_human_move = move;
                 
-                // Update engine with human move
-                engine_->update_root(move);
+                // Update engine with human move (disabled tree reuse for debugging)
+                // engine_->update_root(move);
+                // Create fresh engine to avoid tree reuse bugs
+                engine_ = std::make_unique<mcts::MCTSEngine>(game_state_, *move_generator_);
                 
             } else {
                 // Engine turn
@@ -256,8 +258,10 @@ public:
                     current_human_move = {-1, -1}; // Reset
                 }
                 
-                // Update engine with its own move for tree reuse
-                engine_->update_root(engine_move);
+                // Update engine with its own move for tree reuse (disabled for debugging)
+                // engine_->update_root(engine_move);
+                // Create fresh engine to avoid tree reuse bugs  
+                engine_ = std::make_unique<mcts::MCTSEngine>(game_state_, *move_generator_);
             }
         }
         

@@ -1,4 +1,4 @@
-.PHONY: build test test-case clean benchmark
+.PHONY: build test test-case test-integration clean benchmark
 
 build:
 	@echo "Installing dependencies..."
@@ -23,6 +23,18 @@ ifeq ($(CASE),)
 else
 	@echo "Running test case: $(CASE)"
 	@cd build && ./tests/unit_tests --gtest_filter="$(CASE)"
+endif
+
+test-integration: build
+ifeq ($(CASE),)
+	@echo "Usage: make test-integration CASE=TestSuite.TestName"
+	@echo "Examples:"
+	@echo "  make test-integration CASE=IsAgentDumbTest.*"
+	@echo "  make test-integration CASE=CompleteGamesTest.*"
+	@echo "  make test-integration CASE=IsAgentDumbTest.AgentShouldPlayNearExistingStones"
+else
+	@echo "Running integration test case: $(CASE)"
+	@cd build && ./tests/integration_tests --gtest_filter="$(CASE)"
 endif
 
 benchmark: build

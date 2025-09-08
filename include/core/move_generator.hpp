@@ -40,9 +40,9 @@ public:
         
         static ProgressiveWidening get_limits(int visits) {
             if (visits < 10) return {15, 1};        // Very focused search
-            if (visits < 100) return {30, 2};       // Moderate expansion  
-            if (visits < 1000) return {50, 3};      // Standard search
-            return {80, 5};                         // Full exploration
+            if (visits < 100) return {25, 2};       // Moderate expansion  
+            if (visits < 500) return {40, 2};       // Conservative standard search
+            return {60, 3};                         // More conservative full search
         }
     };
 };

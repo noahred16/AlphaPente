@@ -1,6 +1,7 @@
 #include "mcts/mcts_engine.hpp"
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 
 namespace mcts {
 
@@ -47,6 +48,20 @@ core::Position MCTSEngine::search(int max_iterations, double time_limit_ms) {
     
     // Select best move based on visit count (most robust)
     MCTSNode* best_child = root_->get_most_visited_child();
+    
+    // DEBUG: Print top children for debugging
+    std::cout << "DEBUG: Top MCTS children:\n";
+    for (size_t i = 0; i < root_->child_count() && i < 5; i++) {
+        // We need a way to iterate children - for now just show we found best
+        if (best_child) {
+            core::Position move = best_child->get_move();
+            char col_char = 'A' + move.col;
+            int display_row = 19 - move.row;
+            std::cout << "  Best child: " << col_char << display_row 
+                      << " (visits: " << best_child->get_visits() << ")\n";
+            break;
+        }
+    }
     
     return best_child ? best_child->get_move() : core::Position{-1, -1};
 }

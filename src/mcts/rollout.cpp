@@ -1,5 +1,6 @@
 #include "mcts/rollout.hpp"
 #include <algorithm>
+#include <cmath>
 
 namespace mcts {
 
@@ -45,9 +46,18 @@ core::Position RolloutPolicy::select_rollout_move(const core::GameState& state,
         return {-1, -1}; // No legal moves
     }
     
-    // Simple random selection from distance-ordered moves
-    // Could be enhanced with more sophisticated heuristics
-    std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
+    // Prefer closer moves using weighted selection
+    // Moves are already ordered by distance (closest first)
+    size_t num_moves = moves.size();
+    
+    // Use weighted selection favoring earlier (closer) moves
+    std::vector<double> weights(num_moves);
+    for (size_t i = 0; i < num_moves; i++) {
+        // Exponential decay: earlier moves get much higher weight
+        weights[i] = std::exp(-0.5 * i); // e^(-0.5*i)
+    }
+    
+    std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
     return moves[dist(rng_)];
 }
 

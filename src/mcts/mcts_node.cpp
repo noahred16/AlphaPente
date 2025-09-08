@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <limits>
 #include <random>
+#include <iostream>
 
 namespace mcts {
 
@@ -100,13 +101,21 @@ MCTSNode* MCTSNode::get_most_visited_child() const noexcept {
 }
 
 void MCTSNode::initialize_untried_moves(core::GameState& state, const core::MoveGenerator& move_gen) {
-    // Get legal moves for current position
-    untried_moves_ = move_gen.generate_ordered_moves(state);
+    // Get legal moves for current position - keep distance ordering!
+    // Pass visit count for progressive widening
+    untried_moves_ = move_gen.generate_ordered_moves(state, visits_);
     
-    // Shuffle to add randomization
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(untried_moves_.begin(), untried_moves_.end(), g);
+    // DEBUG: Print first few untried moves
+    std::cout << "DEBUG: Initialized " << untried_moves_.size() << " untried moves, node has " << visits_ << " visits, first 10:\n";
+    // print out first 10 untried moves
+    for (size_t i = 0; i < std::min(size_t(10), untried_moves_.size()); i++) {
+        char col_char = 'A' + untried_moves_[i].col;
+        int display_row = 19 - untried_moves_[i].row;
+        std::cout << "  " << (i+1) << ". " << col_char << display_row << "\n";
+    }
+    
+    // Don't shuffle! Distance ring ordering is important for move quality
+    // MCTS will naturally explore the tree, no need for artificial randomization
 }
 
 MCTSNode* MCTSNode::find_child_with_move(const core::Position& move) const noexcept {
@@ -134,6 +143,29 @@ std::unique_ptr<MCTSNode> MCTSNode::extract_child(const core::Position& move) no
         }
     }
     return nullptr; // Child not found
+}
+
+std::vector<const MCTSNode*> MCTSNode::get_top_children(int count) const {
+    std::vector<const MCTSNode*> children_ptrs;
+    children_ptrs.reserve(children_.size());
+    
+    // Convert unique_ptr vector to raw pointer vector for sorting
+    for (const auto& child : children_) {
+        children_ptrs.push_back(child.get());
+    }
+    
+    // Sort by visit count (descending)
+    std::sort(children_ptrs.begin(), children_ptrs.end(), 
+              [](const MCTSNode* a, const MCTSNode* b) {
+                  return a->get_visits() > b->get_visits();
+              });
+    
+    // Return top N children
+    if (static_cast<int>(children_ptrs.size()) > count) {
+        children_ptrs.resize(count);
+    }
+    
+    return children_ptrs;
 }
 
 } // namespace mcts

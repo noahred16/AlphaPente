@@ -40,6 +40,9 @@ public:
     // Tree reuse support
     MCTSNode* find_child_with_move(const core::Position& move) const noexcept;
     std::unique_ptr<MCTSNode> extract_child(const core::Position& move) noexcept;
+    
+    // Debug support - get top N children by visit count
+    std::vector<const MCTSNode*> get_top_children(int count = 10) const;
 
 private:
     // Hot data (accessed every simulation) - keep together for cache efficiency

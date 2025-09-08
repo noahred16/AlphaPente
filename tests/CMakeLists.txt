@@ -24,6 +24,7 @@ gtest_discover_tests(unit_tests)
 # Integration tests
 add_executable(integration_tests
     integration/test_complete_games.cpp
+    integration/test_is_agent_dumb.cpp
 )
 
 target_link_libraries(integration_tests
