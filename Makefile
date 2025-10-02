@@ -45,3 +45,6 @@ clean:
 
 run: build
 	cd build && ./alphapente
+
+debug-mcts: build
+	cd build && ./debug_mcts_tree

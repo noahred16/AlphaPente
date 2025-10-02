@@ -10,6 +10,13 @@ struct Position {
     
     Position() = default;
     Position(int8_t r, int8_t c) : row(r), col(c) {}
+
+    // accessors
+    char get_col_label() const noexcept { return 'A' + col; }
+    int get_row_label() const noexcept { return 19 - row; }
+    std::string to_string() const noexcept {
+        return std::string(1, get_col_label()) + std::to_string(get_row_label());
+    }
     
     bool operator==(const Position& other) const noexcept {
         return row == other.row && col == other.col;

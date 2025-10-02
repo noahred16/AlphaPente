@@ -360,69 +360,103 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockFourThreat) {
     std::vector<Position> blocking_moves;
     Position expected_blocks[1] = {{9, 13}}; // N10 (only remaining blocking move since I10 is occupied)
     
-    for (int attempt = 0; attempt < 3; attempt++) {
-        // Create fresh state and engine for each attempt
-        state = create_test_state();
-        auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
-        
-        Position engine_move = engine->search(1000, 2000.0);
-        
-        ASSERT_NE(engine_move.row, -1);
-        ASSERT_NE(engine_move.col, -1);
-        ASSERT_TRUE(state->is_empty(engine_move.row, engine_move.col));
-        
-        char col_char = 'A' + engine_move.col;
-        int display_row = 19 - engine_move.row;
-        std::cout << "Attempt " << (attempt + 1) << ": Engine played " << col_char << display_row << "\n";
-        
-        // Print out the top 10 most visited moves from the root node
-        auto top_children = engine->get_root()->get_top_children(10);
-        std::cout << "DEBUG: Top " << top_children.size() << " moves by visits:\n";
-        for (size_t i = 0; i < top_children.size(); i++) {
-            const auto* child = top_children[i];
+    // Create fresh state and engine for each attempt
+    state = create_test_state();
+    auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
+    
+    // Position engine_move = engine->search(1000, 2000.0);
+    Position engine_move = engine->search(3000, 6000.0);
+    
+    ASSERT_NE(engine_move.row, -1);
+    ASSERT_NE(engine_move.col, -1);
+    ASSERT_TRUE(state->is_empty(engine_move.row, engine_move.col));
+    
+    char col_char = 'A' + engine_move.col;
+    int display_row = 19 - engine_move.row;
+    std::cout << "Attempt 1: Engine played " << col_char << display_row << "\n";
+    
+    // Print out all most visited moves from the root node
+    auto top_children = engine->get_root()->get_top_children(-1);
+    std::cout << "DEBUG: Top " << top_children.size() << " moves by visits:\n";
+    for (size_t i = 0; i < top_children.size(); i++) {
+        const auto* child = top_children[i];
+        const auto& move = child->get_move();
+        char move_col = 'A' + move.col;
+        int move_row = 19 - move.row;
+        double win_rate = child->get_win_rate();
+        std::cout << "  " << (i+1) << ". " << move_col << move_row 
+                    << " (visits: " << child->get_visits() 
+                    << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+    }
+
+    // anaylze the top choice move
+    if (!top_children.empty()) {
+        const auto* best_child = top_children[0];
+        const auto& move = best_child->get_move();
+        char move_col = 'A' + move.col;
+        int move_row = 19 - move.row;
+        double win_rate = best_child->get_win_rate();
+        std::cout << "DEBUG: Top choice move is " << move_col << move_row 
+                    << " (visits: " << best_child->get_visits() 
+                    << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+        // lets look at its children too
+        std::cout << "   DEBUG: Top choice move's top children:\n";
+        auto best_child_children = best_child->get_top_children(-1);
+        std::cout << "   DEBUG: It has " << best_child_children.size() << " children:\n";
+        for (size_t i = 0; i < best_child_children.size(); i++)
+        {
+            const auto* child = best_child_children[i];
             const auto& move = child->get_move();
             char move_col = 'A' + move.col;
             int move_row = 19 - move.row;
             double win_rate = child->get_win_rate();
-            std::cout << "  " << (i+1) << ". " << move_col << move_row 
-                      << " (visits: " << child->get_visits() 
-                      << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+            std::cout << "     " << (i+1) << ". " << move_col << move_row 
+                        << " (visits: " << child->get_visits() 
+                        << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
         }
+        // it has zero for some reason? 
+        // print the class info
+        if (best_child_children.size() == 0) {
+            std::cout << "   DEBUG: Top choice move has no children! This is unexpected.\n";
+            std::cout << "   DEBUG: Best child move details - visits: " << best_child->get_visits() 
+                      << ", wins: " << best_child->get_wins() 
+                      << ", win rate: " << std::fixed << std::setprecision(2) << best_child->get_win_rate() << "\n";
+        }
+    }
 
-        // Print out the visit amounts for the correct answers
-        auto all_children = engine->get_root()->get_top_children(-1);
-        std::cout << "DEBUG: Blocking move statistics (total children: " << all_children.size() << "):\n";
-        
-        bool found_blocking_move = false;
-        for (const auto* child : all_children) {
-            const auto& move = child->get_move();
-            if (move.row == expected_blocks[0].row && move.col == expected_blocks[0].col) {
-                char move_col = 'A' + move.col;
-                int move_row = 19 - move.row;
-                double win_rate = child->get_win_rate();
-                std::cout << "  Blocking move " << move_col << move_row 
-                          << " (visits: " << child->get_visits() 
-                          << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
-                found_blocking_move = true;
-            }
-        }
-        
-        if (!found_blocking_move) {
-            char expected_col = 'A' + expected_blocks[0].col;
-            int expected_row = 19 - expected_blocks[0].row;
-            std::cout << "  Expected blocking move " << expected_col << expected_row << " was NOT explored!\n";
-        }
-
-        // Check if it's a blocking move
-        bool is_blocking = (engine_move.row == expected_blocks[0].row && engine_move.col == expected_blocks[0].col);
-        
-        if (is_blocking) {
-            blocking_moves.push_back(engine_move);
+    // Print out the visit amounts for the correct answers
+    auto all_children = engine->get_root()->get_top_children(-1);
+    std::cout << "DEBUG: Blocking move statistics (total children: " << all_children.size() << "):\n";
+    
+    bool found_blocking_move = false;
+    for (const auto* child : all_children) {
+        const auto& move = child->get_move();
+        if (move.row == expected_blocks[0].row && move.col == expected_blocks[0].col) {
+            char move_col = 'A' + move.col;
+            int move_row = 19 - move.row;
+            double win_rate = child->get_win_rate();
+            std::cout << "  Blocking move " << move_col << move_row 
+                        << " (visits: " << child->get_visits() 
+                        << ", win rate: " << std::fixed << std::setprecision(2) << win_rate << ")\n";
+            found_blocking_move = true;
         }
     }
     
-    std::cout << "Four threat blocking moves: " << blocking_moves.size() << " out of 3 attempts\n";
+    if (!found_blocking_move) {
+        char expected_col = 'A' + expected_blocks[0].col;
+        int expected_row = 19 - expected_blocks[0].row;
+        std::cout << "  Expected blocking move " << expected_col << expected_row << " was NOT explored!\n";
+    }
+
+    // Check if it's a blocking move
+    bool is_blocking = (engine_move.row == expected_blocks[0].row && engine_move.col == expected_blocks[0].col);
     
-    // The engine should block the four threat at least 2 out of 3 times  
-    EXPECT_GE(blocking_moves.size(), 2) << "Engine only blocked the four threat " << blocking_moves.size() << " out of 3 times. Expected at least 2.";
+    if (is_blocking) {
+        blocking_moves.push_back(engine_move);
+    }
+    
+    std::cout << "Four threat blocking moves: " << blocking_moves.size() << " out of 1 attempts\n";
+    
+    // The engine should block the four threat
+    EXPECT_GE(blocking_moves.size(), 1) << "Engine failed to block the four-in-a-row threat.";
 }

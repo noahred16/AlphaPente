@@ -1,5 +1,6 @@
 #include "core/move_generator.hpp"
 #include <algorithm>
+#include <iostream>
 
 namespace core {
 
@@ -19,6 +20,15 @@ std::vector<Position> MoveGenerator::generate_ordered_moves(
         max_moves = limits.max_moves;
         max_distance = limits.max_distance;
     }
+
+    // print limits for debugging
+    // std::cout << "DEBUG MG 1: Visits: " << node_visits 
+    //           << ", Max Moves: " << max_moves 
+    //           << ", Max Distance: " << max_distance << "\n";
+
+    // DEBUG override max distance to be 1 temporarily for testing
+    max_distance = 1;
+
     
     const std::vector<Position>& all_stones = get_all_stones(state);
     

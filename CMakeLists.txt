@@ -29,6 +29,10 @@ add_library(alphapente_core
 add_executable(alphapente src/main.cpp)
 target_link_libraries(alphapente alphapente_core)
 
+# Debug executable for MCTS tree analysis
+add_executable(debug_mcts_tree debug_mcts_tree.cpp)
+target_link_libraries(debug_mcts_tree alphapente_core)
+
 # Enable testing
 enable_testing()
 add_subdirectory(tests)

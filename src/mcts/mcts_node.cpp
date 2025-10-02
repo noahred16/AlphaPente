@@ -49,6 +49,14 @@ MCTSNode* MCTSNode::select_best_child() const noexcept {
 }
 
 MCTSNode* MCTSNode::expand(core::GameState& state, const core::MoveGenerator& move_gen) {
+    // if to_string of position = 'N10' print debug message
+    if (move_.to_string() == "N10") {
+        std::cout << "DEBUG NS 0: Expanding node for move N10\n";
+    } else {
+        std::cout << "DEBUG NS 0: Expanding node for move " << move_.to_string() << " \n";
+        std::cout << "DEBUG NS 0: col: " << move_.col << " row: " << move_.row << "\n";
+    }
+    
     // Initialize untried moves if not done yet
     if (untried_moves_.empty() && children_.empty()) {
         initialize_untried_moves(state, move_gen);
@@ -106,12 +114,14 @@ void MCTSNode::initialize_untried_moves(core::GameState& state, const core::Move
     untried_moves_ = move_gen.generate_ordered_moves(state, visits_);
     
     // DEBUG: Print first few untried moves
-    std::cout << "DEBUG: Initialized " << untried_moves_.size() << " untried moves, node has " << visits_ << " visits, first 10:\n";
+    std::cout << "DEBUG NS 1: Initialized " << untried_moves_.size() << " untried moves, node has " << visits_ << " visits, first 10:\n";
     // print out first 10 untried moves
-    for (size_t i = 0; i < std::min(size_t(10), untried_moves_.size()); i++) {
-        char col_char = 'A' + untried_moves_[i].col;
-        int display_row = 19 - untried_moves_[i].row;
-        std::cout << "  " << (i+1) << ". " << col_char << display_row << "\n";
+    // for (size_t i = 0; i < std::min(size_t(10), untried_moves_.size()); i++) {
+
+    // print all untried moves
+    for (size_t i = 0; i < untried_moves_.size(); i++) {
+        std::string label = untried_moves_[i].to_string();
+        std::cout << "  " << (i+1) << ". " << label << "\n";
     }
     
     // Don't shuffle! Distance ring ordering is important for move quality
@@ -160,7 +170,7 @@ std::vector<const MCTSNode*> MCTSNode::get_top_children(int count) const {
                   return a->get_visits() > b->get_visits();
               });
     
-    // Return top N children, or all children if count is -1
+    // Return top N children, or all children if count <= 0
     if (count > 0 && static_cast<int>(children_ptrs.size()) > count) {
         children_ptrs.resize(count);
     }
