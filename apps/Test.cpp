@@ -10,20 +10,33 @@ int main(int argc, char* argv[]) {
     PenteGame game;
     game.reset();
 
+    // white open 3 test
     game.makeMove(9, 9); // Black
-    game.makeMove(10, 9); // White
+    game.makeMove(9, 10); // White
+    game.makeMove(9, 8); // Black
+    game.makeMove(4, 4); // White
+    game.makeMove(9, 7); // Black
+    game.makeMove(4, 14); // White
+    game.makeMove(9, 6); // Black
+    // game.makeMove(15, 14); // White
+
 
     // print
     game.print();
 
-    // undo
-    game.undoMove();
-    game.print();
-
-
     // Test getting the current player
-    PenteGame::Player currentPlayer = game.getCurrentPlayer();
-    std::cout << "Current player: " << (currentPlayer == PenteGame::BLACK ? "Black" : "White") << std::endl;
+    // PenteGame::Player currentPlayer = game.getCurrentPlayer();
+    // std::cout << "Current player: " << (currentPlayer == PenteGame::BLACK ? "Black" : "White") << std::endl;
+
+
+    MCTS::Config config;
+    config.maxIterations = 100000;
+    config.explorationConstant = 1.414;
+
+    MCTS mcts(config);
+    PenteGame::Move bestMove = mcts.search(game);
+    mcts.printStats();
+    mcts.printBestMoves(10);
 
     return 0;
 }

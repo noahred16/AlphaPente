@@ -172,8 +172,9 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
             if (!occupied.getBit(x, y)) {
                 // Check if there's a stone within distance 2
                 bool nearStone = false;
-                for (int dx = -2; dx <= 2 && !nearStone; dx++) {
-                    for (int dy = -2; dy <= 2 && !nearStone; dy++) {
+                int distance = 1; // Could be more dynamic. Hardcoded for now.
+                for (int dx = -distance; dx <= distance && !nearStone; dx++) {
+                    for (int dy = -distance; dy <= distance && !nearStone; dy++) {
                         if (dx == 0 && dy == 0) continue;
                         int nx = x + dx;
                         int ny = y + dy;
@@ -319,9 +320,9 @@ void PenteGame::print() const {
         std::cout << (y < 9 ? " " : "") << (y + 1) << " ";
         for (int x = 0; x < BOARD_SIZE; x++) {
             if (blackStones.getBit(x, y)) {
-                std::cout << "● ";
-            } else if (whiteStones.getBit(x, y)) {
                 std::cout << "○ ";
+            } else if (whiteStones.getBit(x, y)) {
+                std::cout << "● ";
             } else {
                 std::cout << "· ";
             }
