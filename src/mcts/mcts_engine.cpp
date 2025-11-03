@@ -31,13 +31,9 @@ core::Position MCTSEngine::search(int max_iterations, double time_limit_ms) {
             break;
         }
 
-        std::cout << "\n=== MCTS ITERATION " << iterations + 1 << " ===\n";
-
         // MCTS iteration: Selection -> Expansion -> Simulation -> Backpropagation
         MCTSNode* selected_node = select_node(root_.get());
         MCTSNode* expanded_node = expand_node(selected_node);
-
-        std::cout << "DEBUG MAIN: expanded_node is " << (expanded_node ? "NOT NULL" : "NULL") << "\n";
 
         double result = simulate_from_node(expanded_node ? expanded_node : selected_node);
         backpropagate(expanded_node ? expanded_node : selected_node, result);
@@ -45,12 +41,6 @@ core::Position MCTSEngine::search(int max_iterations, double time_limit_ms) {
         iterations++;
         total_simulations_++;
 
-        // Stop after a few iterations for debugging
-        if (iterations >= 5) {
-            std::cout << "DEBUG: Stopping after 5 iterations for analysis\n";
-            break;
-        }
-        
         // Early stopping if one move dominates significantly
         if (iterations >= 100 && should_stop_early()) {
             break;
@@ -59,21 +49,7 @@ core::Position MCTSEngine::search(int max_iterations, double time_limit_ms) {
     
     // Select best move based on visit count (most robust)
     MCTSNode* best_child = root_->get_most_visited_child();
-    
-    // DEBUG: Print top children for debugging
-    std::cout << "DEBUG: Top MCTS children:\n";
-    for (size_t i = 0; i < root_->child_count() && i < 5; i++) {
-        // We need a way to iterate children - for now just show we found best
-        if (best_child) {
-            core::Position move = best_child->get_move();
-            char col_char = 'A' + move.col;
-            int display_row = 19 - move.row;
-            std::cout << "  Best child: " << col_char << display_row 
-                      << " (visits: " << best_child->get_visits() << ")\n";
-            break;
-        }
-    }
-    
+
     return best_child ? best_child->get_move() : core::Position{-1, -1};
 }
 
@@ -100,71 +76,33 @@ void MCTSEngine::update_root(core::Position opponent_move) {
 }
 
 MCTSNode* MCTSEngine::select_node(MCTSNode* node) {
-    std::cout << "DEBUG SELECT: Starting selection from " << (node == root_.get() ? "ROOT" : "non-root") << "\n";
-
-    int depth = 0;
     while (!node->is_leaf()) {
-        std::cout << "DEBUG SELECT: At depth " << depth << ", node has " << node->child_count() << " children\n";
         node = node->select_best_child();
         if (node == nullptr) {
-            std::cout << "DEBUG SELECT: select_best_child returned nullptr!\n";
-            break;
-        }
-        const auto& move = node->get_move();
-        std::cout << "DEBUG SELECT: Selected child with move " << move.to_string()
-                  << " (visits: " << node->get_visits() << ")\n";
-        depth++;
-        if (depth > 10) {
-            std::cout << "DEBUG SELECT: Breaking due to excessive depth!\n";
             break;
         }
     }
-
-    std::cout << "DEBUG SELECT: Final selected node - move: " << node->get_move().to_string()
-              << ", visits: " << node->get_visits()
-              << ", is_leaf: " << node->is_leaf()
-              << ", is_fully_expanded: " << node->is_fully_expanded() << "\n";
 
     return node;
 }
 
 MCTSNode* MCTSEngine::expand_node(MCTSNode* node) {
-    std::cout << "DEBUG EXPAND: Attempting to expand node with move " << node->get_move().to_string() << "\n";
-    std::cout << "DEBUG EXPAND: Node state - visits: " << node->get_visits()
-              << ", is_fully_expanded: " << node->is_fully_expanded()
-              << ", child_count: " << node->child_count() << "\n";
-
-    if (node->is_fully_expanded()) {
-        std::cout << "DEBUG EXPAND: Cannot expand - node is fully expanded\n";
-        return nullptr;
-    }
-
+    // Terminal state check - can't expand if game is over
     if (shared_state_.is_terminal()) {
-        std::cout << "DEBUG EXPAND: Cannot expand - game state is terminal\n";
         return nullptr;
     }
 
     // Apply moves from root to current node
-    std::cout << "DEBUG EXPAND: Applying moves to reach target node\n";
     apply_moves_to_state(node);
 
     // Check if state is terminal after applying moves
     if (shared_state_.is_terminal()) {
-        std::cout << "DEBUG EXPAND: Game state became terminal after applying moves\n";
         restore_state_to_root();
         return nullptr;
     }
 
-    // Expand the node
-    std::cout << "DEBUG EXPAND: Calling node->expand()\n";
+    // Expand the node - this will initialize untried_moves if needed
     MCTSNode* new_node = node->expand(shared_state_, move_generator_);
-
-    if (new_node == nullptr) {
-        std::cout << "DEBUG EXPAND: node->expand() returned nullptr\n";
-    } else {
-        std::cout << "DEBUG EXPAND: Successfully created new child with move "
-                  << new_node->get_move().to_string() << "\n";
-    }
 
     // Restore state back to root
     restore_state_to_root();

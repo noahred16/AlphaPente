@@ -49,34 +49,26 @@ MCTSNode* MCTSNode::select_best_child() const noexcept {
 }
 
 MCTSNode* MCTSNode::expand(core::GameState& state, const core::MoveGenerator& move_gen) {
-    // if to_string of position = 'N10' print debug message
-    if (move_.to_string() == "N10") {
-        std::cout << "DEBUG NS 0: Expanding node for move N10\n";
-    } else {
-        std::cout << "DEBUG NS 0: Expanding node for move " << move_.to_string() << " \n";
-        std::cout << "DEBUG NS 0: col: " << move_.col << " row: " << move_.row << "\n";
-    }
-    
     // Initialize untried moves if not done yet
     if (untried_moves_.empty() && children_.empty()) {
         initialize_untried_moves(state, move_gen);
     }
-    
+
     // No moves to expand
     if (untried_moves_.empty()) {
         return nullptr;
     }
-    
+
     // Take the first untried move
     core::Position move = untried_moves_.back();
     untried_moves_.pop_back();
-    
+
     // Create new child node
     auto child = std::make_unique<MCTSNode>(this, move);
     MCTSNode* child_ptr = child.get();
-    
+
     children_.push_back(std::move(child));
-    
+
     return child_ptr;
 }
 
@@ -112,18 +104,7 @@ void MCTSNode::initialize_untried_moves(core::GameState& state, const core::Move
     // Get legal moves for current position - keep distance ordering!
     // Pass visit count for progressive widening
     untried_moves_ = move_gen.generate_ordered_moves(state, visits_);
-    
-    // DEBUG: Print first few untried moves
-    std::cout << "DEBUG NS 1: Initialized " << untried_moves_.size() << " untried moves, node has " << visits_ << " visits, first 10:\n";
-    // print out first 10 untried moves
-    // for (size_t i = 0; i < std::min(size_t(10), untried_moves_.size()); i++) {
 
-    // print all untried moves
-    for (size_t i = 0; i < untried_moves_.size(); i++) {
-        std::string label = untried_moves_[i].to_string();
-        std::cout << "  " << (i+1) << ". " << label << "\n";
-    }
-    
     // Don't shuffle! Distance ring ordering is important for move quality
     // MCTS will naturally explore the tree, no need for artificial randomization
 }
