@@ -23,6 +23,38 @@ AlphaPente/
 └── README.md
 ```
 
+## Build Instructions
+
+### Initial Setup
+```bash
+cd build
+cmake ..
+make
+```
+
+### Rebuild After Changes
+```bash
+cd build
+make
+```
+
+### Clean Rebuild
+```bash
+cd build
+rm -rf *
+cmake ..
+make
+```
+
+## Running the Executables
+
+From the `build/` directory:
+
+```bash
+./train   # Training AlphaPente
+./play    # Playing Pente
+./test    # Testing AlphaPente
+```
 
 ## PenteGame
 
