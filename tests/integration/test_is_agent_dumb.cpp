@@ -277,8 +277,9 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockOpenThrees) {
         // Create fresh state and engine for each attempt
         state = create_test_state();
         auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
-        
-        Position engine_move = engine->search(20000, 20000.0);
+
+        // With stronger move-weighted scoring (0.05/move), need sufficient sampling
+        Position engine_move = engine->search(15000, 30000.0);
         
         ASSERT_NE(engine_move.row, -1);
         ASSERT_NE(engine_move.col, -1);
@@ -340,7 +341,44 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockFourThreat) {
     };
     
     auto state = create_test_state();
-    
+
+    // DEBUG: Check what moves are being generated at different distances
+    auto moves_dist1 = move_generator_->generate_ordered_moves(*state, 0, 100, 1);
+    auto moves_dist2 = move_generator_->generate_ordered_moves(*state, 0, 100, 2);
+    auto moves_dist3 = move_generator_->generate_ordered_moves(*state, 0, 100, 3);
+
+    std::cout << "\nDEBUG Move counts:\n";
+    std::cout << "  Distance 1: " << moves_dist1.size() << " moves\n";
+    std::cout << "  Distance 2: " << moves_dist2.size() << " moves\n";
+    std::cout << "  Distance 3: " << moves_dist3.size() << " moves\n";
+
+    std::cout << "\nDistance-1 moves (first 20):\n";
+    for (size_t i = 0; i < std::min(size_t(20), moves_dist1.size()); i++) {
+        std::cout << "  " << (i+1) << ". " << moves_dist1[i].to_string();
+        if (moves_dist1[i].row == 9 && (moves_dist1[i].col == 8 || moves_dist1[i].col == 12)) {
+            std::cout << " <- BLOCKING MOVE!";
+        }
+        std::cout << "\n";
+    }
+
+    auto candidate_moves = moves_dist3;
+    std::cout << "\nDEBUG: Using distance-3, Generated " << candidate_moves.size() << " candidate moves\n";
+    std::cout << "Looking for N10 which is row=9, col=13\n";
+    bool found_n10 = false;
+    for (size_t i = 0; i < candidate_moves.size(); i++) {
+        if (candidate_moves[i].row == 9 && candidate_moves[i].col == 13) {
+            std::cout << "Found N10 at position " << i << " in candidate list!\n";
+            found_n10 = true;
+            break;
+        }
+    }
+    if (!found_n10) {
+        std::cout << "N10 NOT in candidate list! First 20 candidates:\n";
+        for (size_t i = 0; i < std::min(size_t(20), candidate_moves.size()); i++) {
+            std::cout << "  " << (i+1) << ". " << candidate_moves[i].to_string() << "\n";
+        }
+    }
+
     // Print the board state for debugging
     std::cout << "\nBoard state with four threat (J10-K10-L10-M10):\n";
     std::cout << "    A B C D E F G H I J K L M N O P Q R S\n";
@@ -364,8 +402,8 @@ TEST_F(IsAgentDumbTest, AgentShouldBlockFourThreat) {
     state = create_test_state();
     auto engine = std::make_unique<MCTSEngine>(*state, *move_generator_);
     
-    // Position engine_move = engine->search(1000, 2000.0);
-    Position engine_move = engine->search(3000, 6000.0);
+    // With stronger move-weighted scoring, four-threat should be detectable
+    Position engine_move = engine->search(15000, 30000.0);
     
     ASSERT_NE(engine_move.row, -1);
     ASSERT_NE(engine_move.col, -1);

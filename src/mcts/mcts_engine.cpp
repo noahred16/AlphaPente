@@ -76,7 +76,8 @@ void MCTSEngine::update_root(core::Position opponent_move) {
 }
 
 MCTSNode* MCTSEngine::select_node(MCTSNode* node) {
-    while (!node->is_leaf()) {
+    // Descend the tree until we find a node that's not fully expanded or is terminal
+    while (node->is_fully_expanded() && !node->is_leaf()) {
         node = node->select_best_child();
         if (node == nullptr) {
             break;

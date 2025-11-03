@@ -13,7 +13,7 @@ std::vector<Position> MoveGenerator::generate_ordered_moves(
     int node_visits,
     int max_moves,
     int max_distance) const {
-    
+
     // Apply progressive widening if no overrides provided
     if (node_visits > 0 && max_moves == 50 && max_distance == 3) {
         auto limits = ProgressiveWidening::get_limits(node_visits);
@@ -21,15 +21,6 @@ std::vector<Position> MoveGenerator::generate_ordered_moves(
         max_distance = limits.max_distance;
     }
 
-    // print limits for debugging
-    // std::cout << "DEBUG MG 1: Visits: " << node_visits 
-    //           << ", Max Moves: " << max_moves 
-    //           << ", Max Distance: " << max_distance << "\n";
-
-    // DEBUG override max distance to be 1 temporarily for testing
-    max_distance = 1;
-
-    
     const std::vector<Position>& all_stones = get_all_stones(state);
     
     // Handle empty board case
@@ -49,7 +40,7 @@ std::vector<Position> MoveGenerator::generate_ordered_moves(
     if (static_cast<int>(legal_moves.size()) > max_moves) {
         legal_moves.resize(max_moves);
     }
-    
+
     return legal_moves;
 }
 

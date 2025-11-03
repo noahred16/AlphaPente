@@ -72,9 +72,9 @@ TEST_F(MoveGeneratorTest, ProgressiveWidening) {
     auto moves_max = generator->generate_ordered_moves(*game, 2000); // 1000+ visits
     
     // Should have progressively more moves
-    EXPECT_LE(moves_low.size(), 15);   // Max 15 for low visits
-    EXPECT_LE(moves_med.size(), 30);   // Max 30 for medium visits
-    EXPECT_LE(moves_high.size(), 50);  // Max 50 for high visits  
+    EXPECT_LE(moves_low.size(), 50);   // Max 50 for low visits (< 100)
+    EXPECT_LE(moves_med.size(), 60);   // Max 60 for medium visits (< 500)
+    EXPECT_LE(moves_high.size(), 80);  // Max 80 for high visits (>= 500)
     EXPECT_LE(moves_max.size(), 80);   // Max 80 for max visits
     
     // Verify progressive expansion

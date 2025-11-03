@@ -37,12 +37,12 @@ public:
     struct ProgressiveWidening {
         int max_moves;
         int max_distance;
-        
+
         static ProgressiveWidening get_limits(int visits) {
-            if (visits < 10) return {15, 1};        // Very focused search
-            if (visits < 100) return {25, 2};       // Moderate expansion  
-            if (visits < 500) return {40, 2};       // Conservative standard search
-            return {60, 3};                         // More conservative full search
+            if (visits < 10) return {30, 1};        // Start tight - focus on immediate moves
+            if (visits < 100) return {50, 2};       // Moderate expansion
+            if (visits < 500) return {60, 3};       // Conservative standard search
+            return {80, 3};                         // Full search
         }
     };
 };
