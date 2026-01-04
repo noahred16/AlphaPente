@@ -10,6 +10,13 @@
 
 class MCTS {
 public:
+    // Solved status for minimax backpropagation
+    enum class SolvedStatus {
+        UNSOLVED,      // Not proven yet
+        SOLVED_WIN,    // Proven win for the player who made the move
+        SOLVED_LOSS    // Proven loss for the player who made the move
+    };
+
     // Configuration parameters
     struct Config {
         double explorationConstant;                   // UCB1 exploration parameter
@@ -17,7 +24,7 @@ public:
         int maxSimulationDepth = 200;                  // Max playout depth
         bool useProgressiveBias = false;               // Enable domain knowledge
         int numThreads = 1;                            // Parallel MCTS support
-        
+
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
@@ -25,15 +32,16 @@ public:
     struct Node {
         PenteGame::Move move;                          // Move that led to this node
         PenteGame::Player player;                      // Player who made the move
-        
+
     int visits = 0;                                // Number of times visited
     double wins = 0.0;                             // Total wins (can be fractional)
     double totalValue = 0.0;                       // Sum of simulation results (for avg score)
-        
+        SolvedStatus solvedStatus = SolvedStatus::UNSOLVED; // Minimax proof status
+
         Node* parent = nullptr;                        // Parent node
         std::vector<std::unique_ptr<Node>> children;   // Child nodes
         std::vector<PenteGame::Move> untriedMoves;     // Legal moves not yet expanded
-        
+
         bool isFullyExpanded() const;
         bool isTerminal() const;
         double getUCB1Value(double explorationConstant, int parentVisits) const;
@@ -71,7 +79,10 @@ private:
     Node* expand(Node* node, PenteGame& game);
     double simulate(const PenteGame& game);
     void backpropagate(Node* node, double result);
-    
+
+    // Minimax backpropagation helpers
+    void updateSolvedStatus(Node* node);
+
     // Helper methods
     Node* selectBestChild(Node* node, bool useExploration) const;
     double evaluateTerminalState(const PenteGame& game, int depth = 0) const;

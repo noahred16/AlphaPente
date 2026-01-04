@@ -1,6 +1,9 @@
 # Pente AlphaZero Implementation
 C++ implementation of AlphaZero for the game of Pente.
 
+## TODOS
+- Virtual loss/mean for parallezation of search
+- Add logic for solved wins/losses, Minimax Backprop
 
 
 ## Project Structure
@@ -57,4 +60,5 @@ From the `build/` directory:
 ```
 
 ## PenteGame
+Pente is an amusing two-player strategy board game where the objective is to get five of your pieces in a row or capture five pairs of your opponent's pieces. The game is played on a 19x19 grid.
 

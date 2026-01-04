@@ -18,13 +18,21 @@ bool MCTS::Node::isTerminal() const {
 }
 
 double MCTS::Node::getUCB1Value(double explorationConstant, int parentVisits) const {
+    // Prioritize solved nodes
+    if (solvedStatus == SolvedStatus::SOLVED_WIN) {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (solvedStatus == SolvedStatus::SOLVED_LOSS) {
+        return -std::numeric_limits<double>::infinity();
+    }
+
     if (visits == 0) {
         return std::numeric_limits<double>::infinity();
     }
-    
+
     double exploitation = totalValue / visits;
     double exploration = explorationConstant * std::sqrt(std::log(parentVisits) / visits);
-    
+
     return exploitation + exploration;
 }
 
@@ -130,18 +138,25 @@ PenteGame::Move MCTS::getBestMove() const {
     if (!root_ || root_->children.empty()) {
         return PenteGame::Move(); // Invalid move
     }
-    
-    // Select child with most visits (most robust)
+
+    // First, check if any child is a proven win - always choose that
+    for (const auto& child : root_->children) {
+        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            return child->move;
+        }
+    }
+
+    // Select child with most visits (most robust), excluding proven losses
     Node* bestChild = nullptr;
     int maxVisits = -1;
-    
+
     for (const auto& child : root_->children) {
-        if (child->visits > maxVisits) {
+        if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
             maxVisits = child->visits;
             bestChild = child.get();
         }
     }
-    
+
     return bestChild ? bestChild->move : PenteGame::Move();
 }
 
@@ -167,32 +182,45 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     if (node->untriedMoves.empty()) {
         return node;
     }
-    
+
     // Pick a random untried move
     std::uniform_int_distribution<size_t> dist(0, node->untriedMoves.size() - 1);
     size_t moveIndex = dist(rng_);
     PenteGame::Move move = node->untriedMoves[moveIndex];
-    
+
     // Remove from untried moves
     node->untriedMoves.erase(node->untriedMoves.begin() + moveIndex);
-    
+
     // Apply move to game
     game.makeMove(move.x, move.y);
-    
+
     // Create new child node
     auto child = std::make_unique<Node>();
     child->move = move;
     child->player = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
     child->parent = node;
-    
+
     // Get legal moves for this new state
     if (!game.isGameOver()) {
         child->untriedMoves = game.getLegalMoves();
+    } else {
+        // Terminal node - determine solved status
+        // Note: node->player is the player who made the move (before this child)
+        // child->player is the opponent (whose turn it would be, but game is over)
+        PenteGame::Player winner = game.getWinner();
+        if (winner == node->player) {
+            // This move led to a win for the player who made it
+            child->solvedStatus = SolvedStatus::SOLVED_WIN;
+        } else if (winner != PenteGame::NONE) {
+            // This move led to a loss for the player who made it
+            child->solvedStatus = SolvedStatus::SOLVED_LOSS;
+        }
+        // If winner == NONE (draw), leave as UNSOLVED
     }
-    
+
     Node* childPtr = child.get();
     node->children.push_back(std::move(child));
-    
+
     return childPtr;
 }
 
@@ -216,14 +244,62 @@ double MCTS::simulate(const PenteGame& game) {
     return evaluateTerminalState(simGame, depth);
 }
 
+void MCTS::updateSolvedStatus(Node* node) {
+    if (!node || !node->isFullyExpanded()) {
+        return; // Can't determine solved status until fully expanded
+    }
+
+    if (node->children.empty()) {
+        return; // Terminal node, status set during expansion
+    }
+
+    // Check for proven wins/losses based on children
+    bool hasWinningChild = false;
+    bool hasLosingChild = false;
+    bool allChildrenLosses = true;
+    bool allChildrenWins = true;
+
+    for (const auto& child : node->children) {
+        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            hasWinningChild = true;
+            allChildrenLosses = false;
+        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            hasLosingChild = true;
+            allChildrenWins = false;
+        } else {
+            // Child is unsolved
+            allChildrenLosses = false;
+            allChildrenWins = false;
+        }
+    }
+
+    // Apply minimax logic:
+    // If ANY child is a SOLVED_WIN, this node is SOLVED_WIN (we can choose to go there)
+    if (hasWinningChild) {
+        node->solvedStatus = SolvedStatus::SOLVED_WIN;
+    }
+    // If ALL children are SOLVED_LOSS, this node is SOLVED_LOSS (all moves lose)
+    else if (allChildrenLosses && !node->children.empty()) {
+        node->solvedStatus = SolvedStatus::SOLVED_LOSS;
+    }
+}
+
 void MCTS::backpropagate(Node* node, double result) {
-    // Propagate result up the tree
-    while (node != nullptr) {
-        node->visits++;
-        node->wins += result; // If you want to keep win rate
-        node->totalValue += result; // For average score
-        result = 1.0 - result;
-        node = node->parent;
+    // Standard update: propagate result up the tree
+    Node* current = node;
+    double currentResult = result;
+
+    while (current != nullptr) {
+        current->visits++;
+        current->wins += currentResult;
+        current->totalValue += currentResult;
+
+        // Update solved status based on children
+        updateSolvedStatus(current);
+
+        // Flip result for parent (opponent's perspective)
+        currentResult = 1.0 - currentResult;
+        current = current->parent;
     }
 }
 
@@ -391,8 +467,9 @@ void MCTS::printBestMoves(int topN) const {
               << std::setw(10) << "Visits"
               << std::setw(12) << "Win Rate"
               << std::setw(14) << "Avg Score"
-              << std::setw(12) << "UCB1\n";
-    std::cout << std::string(54, '-') << "\n";
+              << std::setw(12) << "UCB1"
+              << std::setw(12) << "Status\n";
+    std::cout << std::string(66, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
@@ -403,11 +480,21 @@ void MCTS::printBestMoves(int topN) const {
         char col = 'A' + child->move.x;
         int row = child->move.y + 1;
 
+        std::string status;
+        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            status = "WIN";
+        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            status = "LOSS";
+        } else {
+            status = "-";
+        }
+
         std::cout << std::setw(8) << (std::string(1, col) + std::to_string(row))
                   << std::setw(10) << child->visits
                   << std::setw(12) << std::fixed << std::setprecision(3) << winRate
                   << std::setw(14) << std::fixed << std::setprecision(3) << avgScore
                   << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
+                  << std::setw(12) << status
                   << "\n";
     }
 
@@ -448,24 +535,35 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
     std::cout << std::setw(8) << "Move"
               << std::setw(10) << "Visits"
               << std::setw(12) << "Win Rate"
-              << std::setw(12) << "UCB1\n";
-    std::cout << std::string(42, '-') << "\n";
-    
+              << std::setw(12) << "UCB1"
+              << std::setw(12) << "Status\n";
+    std::cout << std::string(54, '-') << "\n";
+
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
         double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
         double ucb1 = child->getUCB1Value(config_.explorationConstant, node->visits);
-        
+
         char col = 'A' + child->move.x;
         int row = child->move.y + 1;
-        
+
+        std::string status;
+        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            status = "WIN";
+        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            status = "LOSS";
+        } else {
+            status = "-";
+        }
+
         std::cout << std::setw(8) << (std::string(1, col) + std::to_string(row))
                   << std::setw(10) << child->visits
                   << std::setw(12) << std::fixed << std::setprecision(3) << winRate
                   << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
+                  << std::setw(12) << status
                   << "\n";
     }
-    
+
     std::cout << "===================\n\n";
 }
 
