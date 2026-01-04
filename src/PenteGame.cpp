@@ -310,7 +310,7 @@ PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
 }
 
 void PenteGame::print() const {
-    std::cout << "  ";
+    std::cout << "   ";
     for (int x = 0; x < BOARD_SIZE; x++) {
         std::cout << (char)('A' + x) << " ";
     }

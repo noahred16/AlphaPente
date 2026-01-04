@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     game.makeMove(9, 7); // Black
     game.makeMove(4, 14); // White
     game.makeMove(9, 6); // Black
-    // game.makeMove(15, 14); // White
+    game.makeMove(15, 14); // White if white doesnt cover black wins
 
 
     // print
@@ -30,13 +30,14 @@ int main(int argc, char* argv[]) {
 
 
     MCTS::Config config;
-    config.maxIterations = 100000;
+    config.maxIterations = 10000;
     config.explorationConstant = 1.414;
 
     MCTS mcts(config);
     PenteGame::Move bestMove = mcts.search(game);
     mcts.printStats();
     mcts.printBestMoves(10);
+    mcts.printBranch(10, 6, 10);
 
     return 0;
 }

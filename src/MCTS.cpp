@@ -22,7 +22,7 @@ double MCTS::Node::getUCB1Value(double explorationConstant, int parentVisits) co
         return std::numeric_limits<double>::infinity();
     }
     
-    double exploitation = wins / visits;
+    double exploitation = totalValue / visits;
     double exploration = explorationConstant * std::sqrt(std::log(parentVisits) / visits);
     
     return exploitation + exploration;
@@ -220,15 +220,9 @@ void MCTS::backpropagate(Node* node, double result) {
     // Propagate result up the tree
     while (node != nullptr) {
         node->visits++;
-        
-        // Result is from perspective of player who made the move at this node
-        // If current node's player matches the winning player, add the win
-        // The result should be from the perspective of the player to move at root
-        node->wins += result;
-        
-        // Alternate perspective for parent
+        node->wins += result; // If you want to keep win rate
+        node->totalValue += result; // For average score
         result = 1.0 - result;
-        
         node = node->parent;
     }
 }
@@ -393,8 +387,66 @@ void MCTS::printBestMoves(int topN) const {
         [](Node* a, Node* b) { return a->visits > b->visits; });
     
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
-    std::cout << std::setw(8) << "Move" 
-              << std::setw(10) << "Visits" 
+    std::cout << std::setw(8) << "Move"
+              << std::setw(10) << "Visits"
+              << std::setw(12) << "Win Rate"
+              << std::setw(14) << "Avg Score"
+              << std::setw(12) << "UCB1\n";
+    std::cout << std::string(54, '-') << "\n";
+
+    for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
+        Node* child = children[i];
+        double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
+        double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
+        double ucb1 = child->getUCB1Value(config_.explorationConstant, root_->visits);
+
+        char col = 'A' + child->move.x;
+        int row = child->move.y + 1;
+
+        std::cout << std::setw(8) << (std::string(1, col) + std::to_string(row))
+                  << std::setw(10) << child->visits
+                  << std::setw(12) << std::fixed << std::setprecision(3) << winRate
+                  << std::setw(14) << std::fixed << std::setprecision(3) << avgScore
+                  << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
+                  << "\n";
+    }
+
+    std::cout << "===================\n\n";
+}
+
+
+MCTS::Node* MCTS::findChildNode(MCTS::Node* parent, int x, int y) const {
+    if (!parent) {
+        return nullptr;
+    }
+    
+    for (const auto& child : parent->children) {
+        if (child->move.x == x && child->move.y == y) {
+            return child.get();
+        }
+    }
+    
+    return nullptr;
+}
+
+void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
+    if (!node || node->children.empty()) {
+        std::cout << "No moves analyzed for this position.\n";
+        return;
+    }
+    
+    // Collect and sort children by visits
+    std::vector<Node*> children;  // This is fine since we're inside MCTS scope
+    for (const auto& child : node->children) {
+        children.push_back(child.get());
+    }
+    
+    std::sort(children.begin(), children.end(), 
+        [](Node* a, Node* b) { return a->visits > b->visits; });
+    
+    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
+    std::cout << std::setw(8) << "Move"
+              << std::setw(10) << "Visits"
               << std::setw(12) << "Win Rate"
               << std::setw(12) << "UCB1\n";
     std::cout << std::string(42, '-') << "\n";
@@ -402,7 +454,7 @@ void MCTS::printBestMoves(int topN) const {
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
         double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
-        double ucb1 = child->getUCB1Value(config_.explorationConstant, root_->visits);
+        double ucb1 = child->getUCB1Value(config_.explorationConstant, node->visits);
         
         char col = 'A' + child->move.x;
         int row = child->move.y + 1;
@@ -415,6 +467,38 @@ void MCTS::printBestMoves(int topN) const {
     }
     
     std::cout << "===================\n\n";
+}
+
+void MCTS::printBranch(int x, int y, int topN) const {
+    if (!root_) {
+        std::cout << "No search tree exists yet.\n";
+        return;
+    }
+    
+    // Find the child node corresponding to move (x, y)
+    Node* targetNode = findChildNode(root_.get(), x, y);  // Node* is fine here
+    
+    if (!targetNode) {
+        char col = 'A' + x;
+        int row = y + 1;
+        std::cout << "Move " << col << row << " not found in search tree.\n";
+        std::cout << "This move may not have been explored yet.\n";
+        return;
+    }
+    
+    // Print info about the move itself
+    char col = 'A' + x;
+    int row = y + 1;
+    double winRate = targetNode->visits > 0 ? targetNode->wins / targetNode->visits : 0.0;
+    
+    std::cout << "\n=== Analysis for move " << col << row << " ===\n";
+    std::cout << "Visits: " << targetNode->visits << "\n";
+    std::cout << "Win Rate: " << std::fixed << std::setprecision(3) << winRate << "\n";
+    std::cout << "Player: " << (targetNode->player == PenteGame::BLACK ? "Black" : "White") << "\n";
+    
+    // Print the best responses/continuations from this position
+    std::cout << "\nBest responses:\n";
+    printMovesFromNode(targetNode, topN);
 }
 
 // ============================================================================

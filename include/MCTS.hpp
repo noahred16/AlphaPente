@@ -26,8 +26,9 @@ public:
         PenteGame::Move move;                          // Move that led to this node
         PenteGame::Player player;                      // Player who made the move
         
-        int visits = 0;                                // Number of times visited
-        double wins = 0.0;                             // Total wins (can be fractional)
+    int visits = 0;                                // Number of times visited
+    double wins = 0.0;                             // Total wins (can be fractional)
+    double totalValue = 0.0;                       // Sum of simulation results (for avg score)
         
         Node* parent = nullptr;                        // Parent node
         std::vector<std::unique_ptr<Node>> children;   // Child nodes
@@ -58,6 +59,7 @@ public:
     int getTreeSize() const;
     void printStats() const;
     void printBestMoves(int topN = 5) const;
+    void printBranch(int x, int y, int topN = 5) const;
     
     // Configuration
     void setConfig(const Config& config);
@@ -80,7 +82,11 @@ private:
     
     // Memory management
     void pruneTree(Node* keepNode);
-    
+
+    // Print helpers
+    Node* findChildNode(Node* parent, int x, int y) const;
+    void printMovesFromNode(Node* node, int topN) const;
+
     // Member variables
     Config config_;
     std::unique_ptr<Node> root_;
