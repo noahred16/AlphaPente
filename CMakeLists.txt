@@ -26,3 +26,7 @@ target_link_libraries(play pente_core)
 # Executable: Test
 add_executable(test apps/Test.cpp)
 target_link_libraries(test pente_core)
+
+# Executable: Compete
+add_executable(compete apps/Compete.cpp)
+target_link_libraries(compete pente_core)

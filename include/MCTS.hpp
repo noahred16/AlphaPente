@@ -22,8 +22,8 @@ public:
         double explorationConstant;                   // UCB1 exploration parameter
         int maxIterations = 10000;                     // Number of MCTS iterations
         int maxSimulationDepth = 200;                  // Max playout depth
-        bool useProgressiveBias = false;               // Enable domain knowledge
-        int numThreads = 1;                            // Parallel MCTS support
+        // bool useProgressiveBias = false;               // TODO: Enable domain knowledge
+        // int numThreads = 1;                            // TODO: Parallel MCTS support
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
@@ -67,6 +67,7 @@ public:
     int getTreeSize() const;
     void printStats() const;
     void printBestMoves(int topN = 5) const;
+    void printBranch(const char* moveStr, int topN = 5) const;
     void printBranch(int x, int y, int topN = 5) const;
     
     // Configuration

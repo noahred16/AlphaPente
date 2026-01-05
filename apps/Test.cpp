@@ -3,6 +3,10 @@
 #include "BitBoard.hpp"
 #include <iostream>
 
+void moveTwoAnalysis(PenteGame& game);
+void setupSimpleOpenThreeThreat(PenteGame& game);
+void setupOneSidedFourThreat(PenteGame& game);
+
 int main(int argc, char* argv[]) {
     std::cout << "Testing AlphaPente..." << std::endl;
 
@@ -10,16 +14,15 @@ int main(int argc, char* argv[]) {
     PenteGame game;
     game.reset();
 
-    // white open 3 test
-    game.makeMove(9, 9); // Black
-    game.makeMove(9, 10); // White
-    game.makeMove(9, 8); // Black
-    game.makeMove(4, 4); // White
-    game.makeMove(9, 7); // Black
-    game.makeMove(4, 14); // White
-    game.makeMove(9, 6); // Black
-    game.makeMove(15, 14); // White if white doesnt cover black wins
 
+    moveTwoAnalysis(game);
+    char expectedMove[] = "K10";
+    
+    // setupSimpleOpenThreeThreat(game);
+    // char expectedMove[] = "M10";
+
+    // setupOneSidedFourThreat(game);
+    // char expectedMove[] = "K7";
 
     // print
     game.print();
@@ -37,7 +40,39 @@ int main(int argc, char* argv[]) {
     PenteGame::Move bestMove = mcts.search(game);
     mcts.printStats();
     mcts.printBestMoves(10);
-    mcts.printBranch(10, 6, 10);
+    mcts.printBranch(expectedMove, 10);
 
     return 0;
 }
+
+void moveTwoAnalysis(PenteGame& game) {
+    game.makeMove("J10"); // Black
+    game.makeMove("K11"); // White
+}
+
+void setupSimpleOpenThreeThreat(PenteGame& game) {
+    // white one-sided four threat test
+    game.makeMove("J10"); // Black
+    game.makeMove("C17"); // White
+    game.makeMove("K10"); // Black
+    game.makeMove("E5"); // White
+    game.makeMove("L10"); // Black
+    game.makeMove("E15"); // White
+
+    // needs to cover either I10 or M10 to block black win
+}
+
+void setupOneSidedFourThreat(PenteGame& game) {
+    // white one-sided four threat test
+    game.makeMove("J10"); // Black
+    game.makeMove("J11"); // White
+    game.makeMove("J9"); // Black
+    game.makeMove("E5"); // White
+    game.makeMove("J8"); // Black
+    game.makeMove("E15"); // White
+
+    game.makeMove("J7"); // Black
+    game.makeMove("P15"); // White if white doesnt cover black wins
+    // K7 is winning move for black
+}
+

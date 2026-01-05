@@ -4,6 +4,7 @@ C++ implementation of AlphaZero for the game of Pente.
 ## TODOS
 - Virtual loss/mean for parallezation of search
 - Add logic for solved wins/losses, Minimax Backprop
+- Organize the parsing of "J11" functions
 
 
 ## Project Structure
@@ -18,6 +19,7 @@ AlphaPente/
 │   ├── PenteGame.cpp
 │   └── MCTS.cpp
 ├── apps/             # Main programs/executables
+│   ├── Compete.cpp
 │   ├── Train.cpp
 │   ├── Play.cpp
 │   └── Test.cpp

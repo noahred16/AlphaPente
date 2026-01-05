@@ -20,6 +20,25 @@ void PenteGame::reset() {
     }
 }
 
+// takes a move like "J11" and converts to (x,y) coordinates
+// lol damn. most sites, skip over I. so A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, J=8, K=9, L=10, M=11, N=12, O=13, P=14, Q=15, R=16, S=17, T=18
+bool PenteGame::makeMove(const char* move) {
+    // map
+    // A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, J=8, K=9, L=10, M=11, N=12, O=13, P=14, Q=15, R=16, S=17, T=18
+    const char* columns = "ABCDEFGHJKLMNOPQRST";
+    char colChar = move[0];
+    int x = -1;
+    for (int i = 0; i < 19; i++) {
+        if (columns[i] == colChar) {
+            x = i;
+            break;
+        }
+    }
+    int y = std::atoi(move + 1) - 1;
+
+    return makeMove(x, y);
+}
+
 bool PenteGame::makeMove(int x, int y) {
     if (!isLegalMove(x, y)) {
         return false;
@@ -330,7 +349,7 @@ void PenteGame::print() const {
         std::cout << (y + 1) << "\n";
     }
     
-    std::cout << "  ";
+    std::cout << "   ";
     for (int x = 0; x < BOARD_SIZE; x++) {
         std::cout << (char)('A' + x) << " ";
     }

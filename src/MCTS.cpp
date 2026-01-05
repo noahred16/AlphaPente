@@ -567,6 +567,17 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
     std::cout << "===================\n\n";
 }
 
+void MCTS::printBranch(const char* moveStr, int topN) const {
+    int x = moveStr[0] - 'A';
+    int y = std::atoi(moveStr + 1) - 1;
+    
+    // warning, deprecated. 
+    std::cout << "printBranch(const char* moveStr) is deprecated. Use printBranch(int x, int y) instead.\n";
+    std::cout << "or fix the function to call from a single source within pentegame.\n";
+    printBranch(x, y, topN);
+
+}
+
 void MCTS::printBranch(int x, int y, int topN) const {
     if (!root_) {
         std::cout << "No search tree exists yet.\n";

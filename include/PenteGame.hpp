@@ -52,6 +52,7 @@ public:
     
     // Core game functions
     void reset();
+    bool makeMove(const char* move); // Overloaded to accept string moves like "J11"
     bool makeMove(int x, int y);  // Returns false if illegal
     void undoMove();               // Undo last move using stack
     
