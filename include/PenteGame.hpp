@@ -5,6 +5,9 @@
 #include <vector>
 #include <cstdint>
 #include <stack>
+#include <cstring>
+#include <string>
+#include <cstdlib>
 
 class PenteGame {
 public:
@@ -80,6 +83,33 @@ public:
     // Debug
     void print() const;
     Player getStoneAt(int x, int y) const;
+
+    // Utils
+    // convert move string like "J11" to x,y
+    static std::pair<int, int> parseMove(const char* move) {
+        if (strlen(move) < 2) {
+            return {-1, -1};
+        }
+        
+        char colChar = move[0];
+        if (colChar >= 'I') {
+            colChar--; // Skip 'I'
+        }
+        int x = colChar - 'A';
+        
+        int y = std::atoi(move + 1) - 1;
+        
+        return {x, y};
+    }
+
+    // convert x,y to move string like "J11" (skips over 'I')
+    static std::string displayMove(int x, int y) {
+        char colChar = 'A' + x;
+        if (colChar >= 'I') {
+            colChar++; // Skip 'I'
+        }
+        return std::string(1, colChar) + std::to_string(y + 1);
+    }
 };
 
 #endif // PENTE_HPP

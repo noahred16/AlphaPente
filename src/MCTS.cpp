@@ -462,7 +462,9 @@ void MCTS::printBestMoves(int topN) const {
     std::sort(children.begin(), children.end(), 
         [](Node* a, Node* b) { return a->visits > b->visits; });
     
-    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
+    int movesConsidered = root_->children.size();
+    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of "
+              << movesConsidered << " Considered ===\n";
     std::cout << std::setw(8) << "Move"
               << std::setw(10) << "Visits"
               << std::setw(12) << "Win Rate"
@@ -477,8 +479,7 @@ void MCTS::printBestMoves(int topN) const {
         double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         double ucb1 = child->getUCB1Value(config_.explorationConstant, root_->visits);
 
-        char col = 'A' + child->move.x;
-        int row = child->move.y + 1;
+        std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
 
         std::string status;
         if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
@@ -489,7 +490,7 @@ void MCTS::printBestMoves(int topN) const {
             status = "-";
         }
 
-        std::cout << std::setw(8) << (std::string(1, col) + std::to_string(row))
+        std::cout << std::setw(8) << moveStr
                   << std::setw(10) << child->visits
                   << std::setw(12) << std::fixed << std::setprecision(3) << winRate
                   << std::setw(14) << std::fixed << std::setprecision(3) << avgScore
@@ -544,8 +545,7 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
         double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
         double ucb1 = child->getUCB1Value(config_.explorationConstant, node->visits);
 
-        char col = 'A' + child->move.x;
-        int row = child->move.y + 1;
+        std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
 
         std::string status;
         if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
@@ -556,7 +556,7 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
             status = "-";
         }
 
-        std::cout << std::setw(8) << (std::string(1, col) + std::to_string(row))
+        std::cout << std::setw(8) << moveStr
                   << std::setw(10) << child->visits
                   << std::setw(12) << std::fixed << std::setprecision(3) << winRate
                   << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
@@ -568,12 +568,10 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
 }
 
 void MCTS::printBranch(const char* moveStr, int topN) const {
-    int x = moveStr[0] - 'A';
-    int y = std::atoi(moveStr + 1) - 1;
-    
-    // warning, deprecated. 
-    std::cout << "printBranch(const char* moveStr) is deprecated. Use printBranch(int x, int y) instead.\n";
-    std::cout << "or fix the function to call from a single source within pentegame.\n";
+    // use utility to convert moveStr to x,y
+    // parseMove is a static method, so we can use it directly
+    auto [x, y] = PenteGame::parseMove(moveStr);
+
     printBranch(x, y, topN);
 
 }
@@ -588,19 +586,17 @@ void MCTS::printBranch(int x, int y, int topN) const {
     Node* targetNode = findChildNode(root_.get(), x, y);  // Node* is fine here
     
     if (!targetNode) {
-        char col = 'A' + x;
-        int row = y + 1;
-        std::cout << "Move " << col << row << " not found in search tree.\n";
+        std::string moveStr = PenteGame::displayMove(x, y);
+        std::cout << "Move " << moveStr << " not found in search tree.\n";
         std::cout << "This move may not have been explored yet.\n";
         return;
     }
     
     // Print info about the move itself
-    char col = 'A' + x;
-    int row = y + 1;
+    std::string moveStr = PenteGame::displayMove(x, y);
     double winRate = targetNode->visits > 0 ? targetNode->wins / targetNode->visits : 0.0;
     
-    std::cout << "\n=== Analysis for move " << col << row << " ===\n";
+    std::cout << "\n=== Analysis for move " << moveStr << " ===\n";
     std::cout << "Visits: " << targetNode->visits << "\n";
     std::cout << "Win Rate: " << std::fixed << std::setprecision(3) << winRate << "\n";
     std::cout << "Player: " << (targetNode->player == PenteGame::BLACK ? "Black" : "White") << "\n";

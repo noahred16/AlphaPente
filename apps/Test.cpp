@@ -15,14 +15,14 @@ int main(int argc, char* argv[]) {
     game.reset();
 
 
-    moveTwoAnalysis(game);
-    char expectedMove[] = "K10";
+    // moveTwoAnalysis(game);
+    // char expectedMove[] = "K10";
     
     // setupSimpleOpenThreeThreat(game);
-    // char expectedMove[] = "M10";
+    // char expectedMove[] = "N10";
 
-    // setupOneSidedFourThreat(game);
-    // char expectedMove[] = "K7";
+    setupOneSidedFourThreat(game);
+    char expectedMove[] = "L7";
 
     // print
     game.print();
@@ -46,17 +46,17 @@ int main(int argc, char* argv[]) {
 }
 
 void moveTwoAnalysis(PenteGame& game) {
-    game.makeMove("J10"); // Black
-    game.makeMove("K11"); // White
+    game.makeMove("K10"); // Black
+    game.makeMove("L11"); // White
 }
 
 void setupSimpleOpenThreeThreat(PenteGame& game) {
     // white one-sided four threat test
-    game.makeMove("J10"); // Black
-    game.makeMove("C17"); // White
     game.makeMove("K10"); // Black
-    game.makeMove("E5"); // White
+    game.makeMove("C17"); // White
     game.makeMove("L10"); // Black
+    game.makeMove("E5"); // White
+    game.makeMove("M10"); // Black
     game.makeMove("E15"); // White
 
     // needs to cover either I10 or M10 to block black win
@@ -64,15 +64,15 @@ void setupSimpleOpenThreeThreat(PenteGame& game) {
 
 void setupOneSidedFourThreat(PenteGame& game) {
     // white one-sided four threat test
-    game.makeMove("J10"); // Black
-    game.makeMove("J11"); // White
-    game.makeMove("J9"); // Black
+    game.makeMove("K10"); // Black
+    game.makeMove("K11"); // White
+    game.makeMove("K9"); // Black
     game.makeMove("E5"); // White
-    game.makeMove("J8"); // Black
+    game.makeMove("K8"); // Black
     game.makeMove("E15"); // White
 
-    game.makeMove("J7"); // Black
+    game.makeMove("K7"); // Black
     game.makeMove("P15"); // White if white doesnt cover black wins
-    // K7 is winning move for black
+    // L7 is winning move for black
 }
 
