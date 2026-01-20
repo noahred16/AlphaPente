@@ -8,21 +8,19 @@
 int main(int argc, char* argv[]) {
     std::cout << "Playing Pente..." << std::endl;
 
-    // arguments:
-    // game data string (required)
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <game_data_string>" << std::endl;
-        return 1;
-    }
+    // override argv for testing
+    // const char* hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. K11 M9 10. F9 E8 11. K14 K13 12. H13 G14 13. N9 M7";
+    const char* hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. K11 M9 10. F9 E8 11. K14 K13 12. H13 G14 13. N9 M7 14. N6 K7 15. N10";
 
-    const char* gameDataStr = argv[1];
+    // use argv[1] if provided, else use hardcoded
+    const char* gameDataStr = (argc >= 2) ? argv[1] : hardCodedGame;
 
     // Print the received game data string
     std::cout << "Game Data String: " << gameDataStr << std::endl;
 
     // Parse the game data string
     std::vector<std::string> moves;
-    char* gameDataCopy = strdup(argv[1]); // Duplicate to avoid modifying argv
+    char* gameDataCopy = strdup(gameDataStr); // Duplicate to avoid modifying argv
     char* token = std::strtok(gameDataCopy, " \t");
     
     while (token != nullptr) {
@@ -52,24 +50,24 @@ int main(int argc, char* argv[]) {
         const char* moveCStr = moveStr.c_str();
         game.makeMove(moveCStr);
     }
-        
+
     game.print();
 
     // MCTS configuration
     MCTS::Config config;
-    config.maxIterations = 100000;
+    config.maxIterations = 150000; //150,000
+    // config.maxIterations = 100000; //100,000
     config.explorationConstant = 1.414;
 
     MCTS mcts(config);
-    PenteGame::Move bestMove = mcts.search(game);
+    // PenteGame::Move _ = mcts.search(game);
+    mcts.search(game);
     mcts.printStats();
-    mcts.printBestMoves(10);
-    // mcts.printBranch("idk", 10);
-
-    return 0;
-    
-
-    // TODO: Implement compete logic
+    mcts.printBestMoves(15);
+    // print see branch
+    // std::cout << "Printing branch for move G11:\n";
+    // mcts.printBranch("N6", 10);
+    // mcts.printBranch("G11", 10);
 
     return 0;
 }

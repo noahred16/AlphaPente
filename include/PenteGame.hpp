@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <cstdlib>
+#include <iostream>
 
 class PenteGame {
 public:
@@ -41,7 +42,7 @@ private:
     int blackCaptures;
     int whiteCaptures;
     int moveCount;
-    
+
     // Move history stack for undo support
     std::stack<MoveInfo> moveHistory;
     

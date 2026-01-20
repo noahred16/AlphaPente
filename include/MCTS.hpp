@@ -34,13 +34,14 @@ public:
         PenteGame::Player player;                      // Player who made the move
 
     int visits = 0;                                // Number of times visited
-    double wins = 0.0;                             // Total wins (can be fractional)
+    int wins = 0.0;                             // Total wins
     double totalValue = 0.0;                       // Sum of simulation results (for avg score)
         SolvedStatus solvedStatus = SolvedStatus::UNSOLVED; // Minimax proof status
 
         Node* parent = nullptr;                        // Parent node
         std::vector<std::unique_ptr<Node>> children;   // Child nodes
         std::vector<PenteGame::Move> untriedMoves;     // Legal moves not yet expanded
+        std::vector<PenteGame::Move> unprovenMoves;    // Moves not yet proven in minimax
 
         bool isFullyExpanded() const;
         bool isTerminal() const;
@@ -85,7 +86,7 @@ private:
     void updateSolvedStatus(Node* node);
 
     // Helper methods
-    Node* selectBestChild(Node* node, bool useExploration) const;
+    Node* selectBestChild(Node* node) const;
     double evaluateTerminalState(const PenteGame& game, int depth = 0) const;
     PenteGame::Move selectSimulationMove(const PenteGame& game) const;
     

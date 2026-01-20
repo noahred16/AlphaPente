@@ -19,19 +19,19 @@ bool MCTS::Node::isTerminal() const {
 
 double MCTS::Node::getUCB1Value(double explorationConstant, int parentVisits) const {
     // Prioritize solved nodes
-    if (solvedStatus == SolvedStatus::SOLVED_WIN) {
+    if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
     }
-    if (solvedStatus == SolvedStatus::SOLVED_LOSS) {
+    if (this->solvedStatus == SolvedStatus::SOLVED_LOSS) {
         return -std::numeric_limits<double>::infinity();
     }
 
-    if (visits == 0) {
+    if (this->visits == 0) {
         return std::numeric_limits<double>::infinity();
     }
 
-    double exploitation = totalValue / visits;
-    double exploration = explorationConstant * std::sqrt(std::log(parentVisits) / visits);
+    double exploitation = this->totalValue / this->visits;
+    double exploration = explorationConstant * std::sqrt(std::log(parentVisits) / this->visits);
 
     return exploitation + exploration;
 }
@@ -64,9 +64,11 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     root_ = std::make_unique<Node>();
     root_->player = game.getCurrentPlayer();
     root_->untriedMoves = game.getLegalMoves();
+    root_->unprovenMoves = root_->untriedMoves; // Initially all moves are unproven
     
     // Run MCTS iterations
     for (int i = 0; i < config_.maxIterations; i++) {
+        
         // Clone game state for this iteration
         PenteGame gameClone = game.clone();
         
@@ -83,7 +85,7 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
         
         // Backpropagation: update statistics
         backpropagate(node, result);
-        
+
         totalSimulations_++;
     }
     
@@ -151,7 +153,9 @@ PenteGame::Move MCTS::getBestMove() const {
     int maxVisits = -1;
 
     for (const auto& child : root_->children) {
-        if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
+        // TODO review
+        // if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
+        if (child->visits > maxVisits) {
             maxVisits = child->visits;
             bestChild = child.get();
         }
@@ -167,7 +171,7 @@ PenteGame::Move MCTS::getBestMove() const {
 MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     // Traverse tree using UCB1 until we find a node that's not fully expanded
     while (node->isFullyExpanded() && !node->children.empty()) {
-        node = selectBestChild(node, true);
+        node = selectBestChild(node);
         
         // Apply move to game state
         if (node && node->move.isValid()) {
@@ -203,19 +207,21 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     // Get legal moves for this new state
     if (!game.isGameOver()) {
         child->untriedMoves = game.getLegalMoves();
+        child->unprovenMoves = child->untriedMoves; // Initially all moves are unproven
     } else {
-        // Terminal node - determine solved status
+        // Terminal node - determine solved status - if game is over its either a win or draw
         // Note: node->player is the player who made the move (before this child)
         // child->player is the opponent (whose turn it would be, but game is over)
         PenteGame::Player winner = game.getWinner();
         if (winner == node->player) {
             // This move led to a win for the player who made it
-            child->solvedStatus = SolvedStatus::SOLVED_WIN;
-        } else if (winner != PenteGame::NONE) {
-            // This move led to a loss for the player who made it
-            child->solvedStatus = SolvedStatus::SOLVED_LOSS;
+            child->solvedStatus = SolvedStatus::SOLVED_WIN;           
+            child->unprovenMoves.clear();
+        } else {
+            // Draw or loss is treated as UNSOLVED for simplicity. Throw an error, I don't expect to ever hit this case for normal pente
+            child->solvedStatus = SolvedStatus::UNSOLVED;
+            std::cerr << "Error: Unexpected game over state. Winner: " << static_cast<int>(winner) << std::endl;
         }
-        // If winner == NONE (draw), leave as UNSOLVED
     }
 
     Node* childPtr = child.get();
@@ -241,47 +247,55 @@ double MCTS::simulate(const PenteGame& game) {
     }
     
     // Evaluate with depth consideration
-    return evaluateTerminalState(simGame, depth);
+    double result = evaluateTerminalState(simGame, depth);
+
+    // if winner = current game player, return positive else return negative
+    result *= (game.getCurrentPlayer() == simGame.getWinner()) ? 1.0 : -1.0;
+
+    result *= -1.0; // the parents value is the min of the children
+
+    return result;
 }
 
 void MCTS::updateSolvedStatus(Node* node) {
-    if (!node || !node->isFullyExpanded()) {
-        return; // Can't determine solved status until fully expanded
+    // if (!node || !node->isFullyExpanded() || node->children.empty() || node->solvedStatus == SolvedStatus::UNSOLVED) {
+    //     return; 
+    // }
+    if (node->solvedStatus == SolvedStatus::UNSOLVED) {
+        return;
     }
 
-    if (node->children.empty()) {
-        return; // Terminal node, status set during expansion
-    }
+    // print
+    std::cout << "Updating solved status for node with move "
+              << PenteGame::displayMove(node->move.x, node->move.y) << "\n";
 
-    // Check for proven wins/losses based on children
+    bool allChildrenAreLosses = true;
     bool hasWinningChild = false;
-    bool hasLosingChild = false;
-    bool allChildrenLosses = true;
-    bool allChildrenWins = true;
 
     for (const auto& child : node->children) {
-        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+        // If a child is a LOSS for the opponent, it is a WIN for us
+        if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
             hasWinningChild = true;
-            allChildrenLosses = false;
-        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-            hasLosingChild = true;
-            allChildrenWins = false;
-        } else {
-            // Child is unsolved
-            allChildrenLosses = false;
-            allChildrenWins = false;
+            break; // Shortcut: One winning move is enough
+        }
+        
+        // If ANY child is not a WIN for the opponent, we can't prove this is a total LOSS yet
+        if (child->solvedStatus != SolvedStatus::SOLVED_WIN) {
+            allChildrenAreLosses = false;
         }
     }
 
-    // Apply minimax logic:
-    // If ANY child is a SOLVED_WIN, this node is SOLVED_WIN (we can choose to go there)
     if (hasWinningChild) {
         node->solvedStatus = SolvedStatus::SOLVED_WIN;
-    }
-    // If ALL children are SOLVED_LOSS, this node is SOLVED_LOSS (all moves lose)
-    else if (allChildrenLosses && !node->children.empty()) {
+        // print
+        std::cout << "Node with move " << PenteGame::displayMove(node->move.x, node->move.y)
+                  << " marked as SOLVED_WIN based on child analysis.\n";
+    } else if (allChildrenAreLosses) {
         node->solvedStatus = SolvedStatus::SOLVED_LOSS;
+        std::cout << "Node with move " << PenteGame::displayMove(node->move.x, node->move.y)
+                  << " marked as SOLVED_LOSS based on all children being SOLVED_WIN.\n";
     }
+
 }
 
 void MCTS::backpropagate(Node* node, double result) {
@@ -289,17 +303,53 @@ void MCTS::backpropagate(Node* node, double result) {
     Node* current = node;
     double currentResult = result;
 
+    // SolvedStatus - if terminal node, set solved status 
+    // if (current->isTerminal()) {
+    //     current->solvedStatus = (currentResult > 0.0) ? SolvedStatus::SOLVED_WIN : SolvedStatus::SOLVED_LOSS;
+    // }
+
+    
     while (current != nullptr) {
         current->visits++;
-        current->wins += currentResult;
         current->totalValue += currentResult;
-
+        current->wins += (currentResult > 0) ? 1 : 0;
+        
         // Update solved status based on children
-        updateSolvedStatus(current);
+        bool hasWinningChild = false;
+        if (current->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            hasWinningChild = true;
+        }
+        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            // loop through parent unproven moves and remove the move that led to this child
+            // TODO Reconsider. Can probs loop through parent in next iteration
+            if (current->parent) {
+
+                auto& unprovenMoves = current->parent->unprovenMoves;
+                unprovenMoves.erase(
+                    std::remove_if(unprovenMoves.begin(), unprovenMoves.end(),
+                                   [current](const PenteGame::Move& m) {
+                                       return m.x == current->move.x && m.y == current->move.y;
+                                   }),
+                    unprovenMoves.end());
+            }
+        }
 
         // Flip result for parent (opponent's perspective)
-        currentResult = 1.0 - currentResult;
+        currentResult = currentResult * -1.0;
         current = current->parent;
+        if (current == nullptr) {
+            break;
+        }
+
+        // If we have a winning child, mark parent as LOSS. if the opp has a win, its an L
+        if (hasWinningChild && current) {
+            current->solvedStatus = SolvedStatus::SOLVED_LOSS;
+        }
+        // if all children are losses, mark as win. any children that "win" don't get removed from the unproven moves list
+        if (current && current->unprovenMoves.empty()) {
+            current->solvedStatus = SolvedStatus::SOLVED_WIN;
+        }
+        
     }
 }
 
@@ -307,7 +357,7 @@ void MCTS::backpropagate(Node* node, double result) {
 // Helper Methods
 // ============================================================================
 
-MCTS::Node* MCTS::selectBestChild(Node* node, bool useExploration) const {
+MCTS::Node* MCTS::selectBestChild(Node* node) const {
     if (!node || node->children.empty()) {
         return nullptr;
     }
@@ -316,19 +366,16 @@ MCTS::Node* MCTS::selectBestChild(Node* node, bool useExploration) const {
     double bestValue = -std::numeric_limits<double>::infinity();
     
     for (const auto& child : node->children) {
-        double value;
-        
-        if (useExploration) {
-            value = child->getUCB1Value(config_.explorationConstant, node->visits);
-        } else {
-            // Pure exploitation (for final move selection)
-            value = child->visits > 0 ? (child->wins / child->visits) : 0.0;
-        }
-        
+        double value = child->getUCB1Value(config_.explorationConstant, node->visits);
         if (value > bestValue) {
             bestValue = value;
             bestChild = child.get();
         }
+    }
+
+    if (!bestChild) {
+        // std::cerr << "Warning: selectBestChild found no best child.\n";
+        bestChild = node->children.front().get();
     }
     
     return bestChild;
@@ -336,21 +383,22 @@ MCTS::Node* MCTS::selectBestChild(Node* node, bool useExploration) const {
 
 // TODO make better depth weight. scale between 0.1 and 1
 double MCTS::evaluateTerminalState(const PenteGame& game, int depth) const {
-    PenteGame::Player winner = game.getWinner();
-    PenteGame::Player rootPlayer = root_ ? root_->player : PenteGame::NONE;
+    // PenteGame::Player winner = game.getWinner();
+    // PenteGame::Player rootPlayer = root_ ? root_->player : PenteGame::NONE;
     
-    if (winner == rootPlayer) {
-        // Scale exponential to range [0.5, 1.0]
-        // Win is always better than draw, but faster is much better
-        double rawScore = std::exp(-depth / 20.0);
-        return 0.5 + (rawScore * 0.5);  // Maps [0,1] -> [0.5,1.0]
-    } else if (winner == PenteGame::NONE) {
-        return 0.5;
-    } else {
-        // Loss: scale to [0.0, 0.5]
-        double rawScore = std::exp(-depth / 20.0);
-        return 0.5 - (rawScore * 0.5);  // Maps [0,1] -> [0.5,0.0]
-    }
+    // if (winner == rootPlayer) {
+    //     // Scale exponential to range [0.5, 1.0]
+    //     // Win is always better than draw, but faster is much better
+    //     double rawScore = std::exp(-depth / 20.0);
+    //     return 0.5 + (rawScore * 0.5);  // Maps [0,1] -> [0.5,1.0]
+    // } else if (winner == PenteGame::NONE) {
+    //     return 0.5;
+    // } else {
+    //     // Loss: scale to [0.0, 0.5]
+    //     double rawScore = std::exp(-depth / 20.0);
+    //     return 0.5 - (rawScore * 0.5);  // Maps [0,1] -> [0.5,0.0]
+    // }
+    return 1.0; // Placeholder: always return win for testing
 }
 
 
@@ -440,8 +488,8 @@ void MCTS::printStats() const {
     std::cout << "Root visits: " << getTotalVisits() << "\n";
     
     if (root_) {
-        std::cout << "Root win rate: " << std::fixed << std::setprecision(3)
-                  << (root_->visits > 0 ? root_->wins / root_->visits : 0.0) << "\n";
+        std::cout << "Root avg value: " << std::fixed << std::setprecision(3)
+                  << (root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << "\n";
     }
     
     std::cout << "=======================\n\n";
@@ -466,16 +514,15 @@ void MCTS::printBestMoves(int topN) const {
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of "
               << movesConsidered << " Considered ===\n";
     std::cout << std::setw(8) << "Move"
-              << std::setw(10) << "Visits"
-              << std::setw(12) << "Win Rate"
-              << std::setw(14) << "Avg Score"
+              << std::setw(12) << "Visits"
+              << std::setw(12) << "Wins"
+              << std::setw(12) << "Avg Value"
               << std::setw(12) << "UCB1"
               << std::setw(12) << "Status\n";
-    std::cout << std::string(66, '-') << "\n";
+    std::cout << std::string(68, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
-        double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
         double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         double ucb1 = child->getUCB1Value(config_.explorationConstant, root_->visits);
 
@@ -491,9 +538,9 @@ void MCTS::printBestMoves(int topN) const {
         }
 
         std::cout << std::setw(8) << moveStr
-                  << std::setw(10) << child->visits
-                  << std::setw(12) << std::fixed << std::setprecision(3) << winRate
-                  << std::setw(14) << std::fixed << std::setprecision(3) << avgScore
+                  << std::setw(12) << child->visits
+                  << std::setw(12) << child->wins  // Reset to default formatting
+                  << std::setw(12) << std::fixed << std::setprecision(3) << avgScore
                   << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
                   << std::setw(12) << status
                   << "\n";
@@ -535,14 +582,14 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
     std::cout << std::setw(8) << "Move"
               << std::setw(10) << "Visits"
-              << std::setw(12) << "Win Rate"
+              << std::setw(12) << "Avg Value"
               << std::setw(12) << "UCB1"
               << std::setw(12) << "Status\n";
     std::cout << std::string(54, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
-        double winRate = child->visits > 0 ? child->wins / child->visits : 0.0;
+        double avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         double ucb1 = child->getUCB1Value(config_.explorationConstant, node->visits);
 
         std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
@@ -558,7 +605,7 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
 
         std::cout << std::setw(8) << moveStr
                   << std::setw(10) << child->visits
-                  << std::setw(12) << std::fixed << std::setprecision(3) << winRate
+                  << std::setw(12) << std::fixed << std::setprecision(3) << avgValue
                   << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
                   << std::setw(12) << status
                   << "\n";
@@ -594,11 +641,11 @@ void MCTS::printBranch(int x, int y, int topN) const {
     
     // Print info about the move itself
     std::string moveStr = PenteGame::displayMove(x, y);
-    double winRate = targetNode->visits > 0 ? targetNode->wins / targetNode->visits : 0.0;
+    double avgValue = targetNode->visits > 0 ? targetNode->totalValue / targetNode->visits : 0.0;
     
     std::cout << "\n=== Analysis for move " << moveStr << " ===\n";
     std::cout << "Visits: " << targetNode->visits << "\n";
-    std::cout << "Win Rate: " << std::fixed << std::setprecision(3) << winRate << "\n";
+    std::cout << "Avg Value: " << std::fixed << std::setprecision(3) << avgValue << "\n";
     std::cout << "Player: " << (targetNode->player == PenteGame::BLACK ? "Black" : "White") << "\n";
     
     // Print the best responses/continuations from this position

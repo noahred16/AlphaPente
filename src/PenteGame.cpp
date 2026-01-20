@@ -1,6 +1,8 @@
 #include "PenteGame.hpp"
 #include <random>
 #include <iostream>
+#include <sstream>
+#include <algorithm>
 
 PenteGame::PenteGame() {
     reset();
@@ -197,6 +199,31 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
             }
         }
     }
+
+    // TODO, make configurable.
+    // tournament rule. if moveCount == 2, moves must be at least 3 away from center
+    if (moveCount == 2) {
+        int center = BOARD_SIZE / 2;
+        moves.erase(std::remove_if(moves.begin(), moves.end(),
+                                   [center](const Move& m) {
+                                       int distX = std::abs(m.x - center);
+                                       int distY = std::abs(m.y - center);
+                                       return distX < 3 && distY < 3;
+                                   }),
+                    moves.end());
+        if (moves.empty()) {
+            // TODO: maybe add others? 
+            std::vector<std::string> presetMoves = { 
+                "K7", "L7", "M7", "N7", 
+                "N8", "N9", "N10", "N11", "N12", "N13",
+                "O10", "M6", "K6"
+             };
+            for (const auto& moveStr : presetMoves) {
+                auto [x, y] = parseMove(moveStr.c_str());
+                moves.emplace_back(x, y);
+            }
+        }
+    }
     
     return moves;
 }
@@ -315,6 +342,9 @@ PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
 }
 
 void PenteGame::print() const {
+    // get from root
+    const std::vector<Move> legalMoves = getLegalMoves();
+
     // Helper to handle skipping 'I'
     auto getColChar = [](int x) {
         char c = (char)('A' + x);
@@ -335,7 +365,14 @@ void PenteGame::print() const {
             } else if (whiteStones.getBit(x, y)) {
                 std::cout << "● ";
             } else {
-                std::cout << "· ";
+                bool isLegal = false;
+                for (const auto& move : legalMoves) {
+                    if (move.x == x && move.y == y) {
+                        isLegal = true;
+                        break;
+                    }
+                }
+                std::cout << (isLegal ? "  " : "· ");
             }
         }
         std::cout << (y + 1) << "\n";
