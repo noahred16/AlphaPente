@@ -64,11 +64,15 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     root_ = std::make_unique<Node>();
     root_->player = game.getCurrentPlayer();
     root_->untriedMoves = game.getLegalMoves();
-    root_->unprovenMoves = root_->untriedMoves; // Initially all moves are unproven
+    root_->unprovenCount = root_->untriedMoves.size();
     
     // Run MCTS iterations
     for (int i = 0; i < config_.maxIterations; i++) {
         
+        if (root_->solvedStatus != SolvedStatus::UNSOLVED) {
+            break; // exit early if root is solved
+        }
+
         // Clone game state for this iteration
         PenteGame gameClone = game.clone();
         
@@ -95,47 +99,6 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     return getBestMove();
 }
 
-PenteGame::Move MCTS::searchWithTimeLimit(const PenteGame& game, double seconds) {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    auto endTime = startTime + std::chrono::duration<double>(seconds);
-    
-    // Initialize root node
-    reset();
-    root_ = std::make_unique<Node>();
-    root_->player = game.getCurrentPlayer();
-    root_->untriedMoves = game.getLegalMoves();
-    
-    int iterations = 0;
-    
-    // Run MCTS iterations until time limit
-    while (std::chrono::high_resolution_clock::now() < endTime) {
-        // Clone game state for this iteration
-        PenteGame gameClone = game.clone();
-        
-        // Selection
-        Node* node = select(root_.get(), gameClone);
-        
-        // Expansion
-        if (!gameClone.isGameOver() && !node->untriedMoves.empty()) {
-            node = expand(node, gameClone);
-        }
-        
-        // Simulation
-        double result = simulate(gameClone);
-        
-        // Backpropagation
-        backpropagate(node, result);
-        
-        totalSimulations_++;
-        iterations++;
-    }
-    
-    totalSearchTime_ = std::chrono::duration<double>(
-        std::chrono::high_resolution_clock::now() - startTime).count();
-    
-    return getBestMove();
-}
-
 PenteGame::Move MCTS::getBestMove() const {
     if (!root_ || root_->children.empty()) {
         return PenteGame::Move(); // Invalid move
@@ -153,12 +116,19 @@ PenteGame::Move MCTS::getBestMove() const {
     int maxVisits = -1;
 
     for (const auto& child : root_->children) {
-        // TODO review
-        // if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
-        if (child->visits > maxVisits) {
+        if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
             maxVisits = child->visits;
             bestChild = child.get();
         }
+    }
+
+    // Fallback: If all are losses, just pick the one
+    if (!bestChild && !root_->children.empty()) {
+        // throw an error, this should never be considered because it'd be a proven win already for the parent.
+        std::cout << "Exiting to avoid undefined behavior. Number of children: " << root_->children.size() << std::endl;
+        std::cerr << "Warning: All moves lead to losses. Selecting first child as fallback.\n";
+        exit(1);
+        return root_->children[0]->move; 
     }
 
     return bestChild ? bestChild->move : PenteGame::Move();
@@ -169,8 +139,9 @@ PenteGame::Move MCTS::getBestMove() const {
 // ============================================================================
 
 MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
-    // Traverse tree using UCB1 until we find a node that's not fully expanded
-    while (node->isFullyExpanded() && !node->children.empty()) {
+    // Traverse tree using UCB1 until we find a node that's not fully expanded. And not solved
+    // TODO review this while (node->isFullyExpanded() && !node->children.empty()) {
+    while (node->isFullyExpanded() && !node->children.empty() && node->solvedStatus == SolvedStatus::UNSOLVED) {
         node = selectBestChild(node);
         
         // Apply move to game state
@@ -207,7 +178,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     // Get legal moves for this new state
     if (!game.isGameOver()) {
         child->untriedMoves = game.getLegalMoves();
-        child->unprovenMoves = child->untriedMoves; // Initially all moves are unproven
+        child->unprovenCount = child->untriedMoves.size(); // Initially all moves are unproven
     } else {
         // Terminal node - determine solved status - if game is over its either a win or draw
         // Note: node->player is the player who made the move (before this child)
@@ -216,7 +187,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
         if (winner == node->player) {
             // This move led to a win for the player who made it
             child->solvedStatus = SolvedStatus::SOLVED_WIN;           
-            child->unprovenMoves.clear();
+            // child->unprovenCount = 0; TODO review... I don't think we decrement unproven count for solved wins.
         } else {
             // Draw or loss is treated as UNSOLVED for simplicity. Throw an error, I don't expect to ever hit this case for normal pente
             child->solvedStatus = SolvedStatus::UNSOLVED;
@@ -232,8 +203,10 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 
 double MCTS::simulate(const PenteGame& game) {
     PenteGame simGame = game.clone();
-    int depth = 0;
+
+    // TODO, don't simulate if already solved? hmm.. idk 
     
+    int depth = 0;
     // Play out game randomly until terminal or max depth
     while (!simGame.isGameOver() && depth < config_.maxSimulationDepth) {
         PenteGame::Move move = selectSimulationMove(simGame);
@@ -257,99 +230,33 @@ double MCTS::simulate(const PenteGame& game) {
     return result;
 }
 
-void MCTS::updateSolvedStatus(Node* node) {
-    // if (!node || !node->isFullyExpanded() || node->children.empty() || node->solvedStatus == SolvedStatus::UNSOLVED) {
-    //     return; 
-    // }
-    if (node->solvedStatus == SolvedStatus::UNSOLVED) {
-        return;
-    }
-
-    // print
-    std::cout << "Updating solved status for node with move "
-              << PenteGame::displayMove(node->move.x, node->move.y) << "\n";
-
-    bool allChildrenAreLosses = true;
-    bool hasWinningChild = false;
-
-    for (const auto& child : node->children) {
-        // If a child is a LOSS for the opponent, it is a WIN for us
-        if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-            hasWinningChild = true;
-            break; // Shortcut: One winning move is enough
-        }
-        
-        // If ANY child is not a WIN for the opponent, we can't prove this is a total LOSS yet
-        if (child->solvedStatus != SolvedStatus::SOLVED_WIN) {
-            allChildrenAreLosses = false;
-        }
-    }
-
-    if (hasWinningChild) {
-        node->solvedStatus = SolvedStatus::SOLVED_WIN;
-        // print
-        std::cout << "Node with move " << PenteGame::displayMove(node->move.x, node->move.y)
-                  << " marked as SOLVED_WIN based on child analysis.\n";
-    } else if (allChildrenAreLosses) {
-        node->solvedStatus = SolvedStatus::SOLVED_LOSS;
-        std::cout << "Node with move " << PenteGame::displayMove(node->move.x, node->move.y)
-                  << " marked as SOLVED_LOSS based on all children being SOLVED_WIN.\n";
-    }
-
-}
-
 void MCTS::backpropagate(Node* node, double result) {
     // Standard update: propagate result up the tree
     Node* current = node;
     double currentResult = result;
 
-    // SolvedStatus - if terminal node, set solved status 
-    // if (current->isTerminal()) {
-    //     current->solvedStatus = (currentResult > 0.0) ? SolvedStatus::SOLVED_WIN : SolvedStatus::SOLVED_LOSS;
-    // }
-
-    
     while (current != nullptr) {
+        // Backpropagate stats
         current->visits++;
         current->totalValue += currentResult;
         current->wins += (currentResult > 0) ? 1 : 0;
         
-        // Update solved status based on children
-        bool hasWinningChild = false;
+        // If we have a winning child, mark parent as LOSS. if the opp has a win, its an L
         if (current->solvedStatus == SolvedStatus::SOLVED_WIN) {
-            hasWinningChild = true;
+            current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
         }
-        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-            // loop through parent unproven moves and remove the move that led to this child
-            // TODO Reconsider. Can probs loop through parent in next iteration
-            if (current->parent) {
 
-                auto& unprovenMoves = current->parent->unprovenMoves;
-                unprovenMoves.erase(
-                    std::remove_if(unprovenMoves.begin(), unprovenMoves.end(),
-                                   [current](const PenteGame::Move& m) {
-                                       return m.x == current->move.x && m.y == current->move.y;
-                                   }),
-                    unprovenMoves.end());
+        // Proven win if all children moves (our opp) are proven losses (no unproven moves left)
+        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS && current->parent) {
+            current->parent->unprovenCount--;
+            if (current->parent->unprovenCount == 0) {
+                current->parent->solvedStatus = SolvedStatus::SOLVED_WIN;
             }
         }
 
         // Flip result for parent (opponent's perspective)
         currentResult = currentResult * -1.0;
         current = current->parent;
-        if (current == nullptr) {
-            break;
-        }
-
-        // If we have a winning child, mark parent as LOSS. if the opp has a win, its an L
-        if (hasWinningChild && current) {
-            current->solvedStatus = SolvedStatus::SOLVED_LOSS;
-        }
-        // if all children are losses, mark as win. any children that "win" don't get removed from the unproven moves list
-        if (current && current->unprovenMoves.empty()) {
-            current->solvedStatus = SolvedStatus::SOLVED_WIN;
-        }
-        
     }
 }
 

@@ -174,12 +174,15 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
     // Find all empty squares near existing stones (within distance 2)
     BitBoard occupied = blackStones | whiteStones;
     
+    int distance = 1; // Could be more dynamic. Hardcoded for now.
+    if (moveCount <= 3) distance = 2;
+
+
     for (int x = 0; x < BOARD_SIZE; x++) {
         for (int y = 0; y < BOARD_SIZE; y++) {
             if (!occupied.getBit(x, y)) {
                 // Check if there's a stone within distance 2
                 bool nearStone = false;
-                int distance = 1; // Could be more dynamic. Hardcoded for now.
                 for (int dx = -distance; dx <= distance && !nearStone; dx++) {
                     for (int dy = -distance; dy <= distance && !nearStone; dy++) {
                         if (dx == 0 && dy == 0) continue;

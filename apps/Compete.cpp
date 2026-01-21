@@ -2,6 +2,7 @@
 #include "PenteGame.hpp"
 #include <iostream>
 #include <cstring>
+#include <chrono>
 
 
 // How to run: ./compete "1	K10	K9 2	K6	L11 3	M8	J11 4	L7	N9 5	J5	H4"
@@ -15,17 +16,17 @@ int main(int argc, char* argv[]) {
     // use argv[1] if provided, else use hardcoded
     const char* gameDataStr = (argc >= 2) ? argv[1] : hardCodedGame;
 
-    // Print the received game data string
-    std::cout << "Game Data String: " << gameDataStr << std::endl;
+    // use argv[2] if provided, else default to 100,000
+    int mctsIterations = (argc >= 3) ? std::atoi(argv[2]) : 100000;
 
     // Parse the game data string
     std::vector<std::string> moves;
     char* gameDataCopy = strdup(gameDataStr); // Duplicate to avoid modifying argv
-    char* token = std::strtok(gameDataCopy, " \t");
+    char* token = std::strtok(gameDataCopy, " \t\n\r");
     
     while (token != nullptr) {
         moves.push_back(std::string(token));
-        token = std::strtok(nullptr, " \t");
+        token = std::strtok(nullptr, " \t\n\r");
     }
     free(gameDataCopy);
 
@@ -55,19 +56,29 @@ int main(int argc, char* argv[]) {
 
     // MCTS configuration
     MCTS::Config config;
-    config.maxIterations = 150000; //150,000
+    // config.maxIterations = 300000; //300,000
+    // config.maxIterations = 150000; //150,000
     // config.maxIterations = 100000; //100,000
+    config.maxIterations = mctsIterations; // from arg or default
     config.explorationConstant = 1.414;
 
     MCTS mcts(config);
-    // PenteGame::Move _ = mcts.search(game);
+    // Start timer
+    auto start = std::chrono::high_resolution_clock::now();
     mcts.search(game);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+    int minutes = elapsed.count() / 60;
+    int seconds = elapsed.count() % 60;
+    std::cout << "Search took: " << minutes << " min " << seconds << " sec." << std::endl;
     mcts.printStats();
     mcts.printBestMoves(15);
-    // print see branch
-    // std::cout << "Printing branch for move G11:\n";
     // mcts.printBranch("N6", 10);
-    // mcts.printBranch("G11", 10);
+
+    // make move
+    PenteGame::Move bestMove = mcts.getBestMove();
+    std::string bestMoveStr = PenteGame::displayMove(bestMove.x, bestMove.y);
+    std::cout << "MCTS selected move: " << bestMoveStr << std::endl;
 
     return 0;
 }

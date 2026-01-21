@@ -33,15 +33,15 @@ public:
         PenteGame::Move move;                          // Move that led to this node
         PenteGame::Player player;                      // Player who made the move
 
-    int visits = 0;                                // Number of times visited
-    int wins = 0.0;                             // Total wins
-    double totalValue = 0.0;                       // Sum of simulation results (for avg score)
+        int visits = 0;                                // Number of times visited
+        int wins = 0;                                  // Total wins
+        double totalValue = 0.0;                       // Sum of simulation results (for avg score)
         SolvedStatus solvedStatus = SolvedStatus::UNSOLVED; // Minimax proof status
 
         Node* parent = nullptr;                        // Parent node
         std::vector<std::unique_ptr<Node>> children;   // Child nodes
         std::vector<PenteGame::Move> untriedMoves;     // Legal moves not yet expanded
-        std::vector<PenteGame::Move> unprovenMoves;    // Moves not yet proven in minimax
+        int unprovenCount = 0;                         // Count of moves not yet proven in minimax
 
         bool isFullyExpanded() const;
         bool isTerminal() const;
@@ -54,7 +54,6 @@ public:
 
     // Main search interface
     PenteGame::Move search(const PenteGame& game);
-    PenteGame::Move searchWithTimeLimit(const PenteGame& game, double seconds);
     
     // Get best move from current tree (no additional search)
     PenteGame::Move getBestMove() const;

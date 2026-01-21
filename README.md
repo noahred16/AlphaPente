@@ -2,9 +2,11 @@
 C++ implementation of AlphaZero for the game of Pente.
 
 ## TODOS
-- Virtual loss/mean for parallezation of search
-- Add logic for solved wins/losses, Minimax Backprop
-
+- Review Virtual loss/mean for parallezation of search
+[x] Add logic for solved wins/losses, Minimax Backprop
+- Enable other game modes, gomoku...
+- Refactor that time constraint concept
+- Review early solved stopping
 
 ## Project Structure
 ```
