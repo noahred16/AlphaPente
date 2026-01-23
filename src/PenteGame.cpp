@@ -175,6 +175,7 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
     BitBoard occupied = blackStones | whiteStones;
     
     int distance = 1; // Could be more dynamic. Hardcoded for now.
+    // int distance = 2; // Could be more dynamic. Hardcoded for now.
     if (moveCount <= 3) distance = 2;
 
 
@@ -385,9 +386,7 @@ void PenteGame::print() const {
     for (int x = 0; x < BOARD_SIZE; x++) {
         std::cout << getColChar(x) << " ";
     }
-    std::cout << "\n\n";
-    
-    std::cout << "Black captures: " << blackCaptures << " pairs\n";
-    std::cout << "White captures: " << whiteCaptures << " pairs\n";
+    std::cout << "\n";
+    std::cout << blackCaptures << " Black ○, " << whiteCaptures << " White ●\n";
     std::cout << "Current player: " << (currentPlayer == BLACK ? "Black" : "White") << "\n";
 }

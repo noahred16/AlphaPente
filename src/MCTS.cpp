@@ -70,6 +70,9 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     for (int i = 0; i < config_.maxIterations; i++) {
         
         if (root_->solvedStatus != SolvedStatus::UNSOLVED) {
+            std::cout << "Root node solved status: " 
+                      << (root_->solvedStatus == SolvedStatus::SOLVED_WIN ? "WIN" : "LOSS") 
+                      << " after " << i << " iterations.\n";
             break; // exit early if root is solved
         }
 
@@ -101,7 +104,9 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
 
 PenteGame::Move MCTS::getBestMove() const {
     if (!root_ || root_->children.empty()) {
-        return PenteGame::Move(); // Invalid move
+        std::cout << "Exiting: Unexpected state in getBestMove(). No children found.\n";
+        std::cerr << "Error: No moves available to select as best move.\n";
+        exit(1);
     }
 
     // First, check if any child is a proven win - always choose that
@@ -122,16 +127,17 @@ PenteGame::Move MCTS::getBestMove() const {
         }
     }
 
-    // Fallback: If all are losses, just pick the one
+    // Fallback: If all are losses, just pick the one with the most visits
     if (!bestChild && !root_->children.empty()) {
-        // throw an error, this should never be considered because it'd be a proven win already for the parent.
-        std::cout << "Exiting to avoid undefined behavior. Number of children: " << root_->children.size() << std::endl;
-        std::cerr << "Warning: All moves lead to losses. Selecting first child as fallback.\n";
-        exit(1);
-        return root_->children[0]->move; 
+        for (const auto& child : root_->children) {
+            if (child->visits > maxVisits) {
+                maxVisits = child->visits;
+                bestChild = child.get();
+            }
+        }
     }
 
-    return bestChild ? bestChild->move : PenteGame::Move();
+    return bestChild->move;
 }
 
 // ============================================================================
@@ -191,7 +197,9 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
         } else {
             // Draw or loss is treated as UNSOLVED for simplicity. Throw an error, I don't expect to ever hit this case for normal pente
             child->solvedStatus = SolvedStatus::UNSOLVED;
+            std::cout << "Exiting: Unexpected game over state in expand(). Winner: " << static_cast<int>(winner) << std::endl;
             std::cerr << "Error: Unexpected game over state. Winner: " << static_cast<int>(winner) << std::endl;
+            exit(1);
         }
     }
 
@@ -204,7 +212,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 double MCTS::simulate(const PenteGame& game) {
     PenteGame simGame = game.clone();
 
-    // TODO, don't simulate if already solved? hmm.. idk 
+    // TODO, review early stopping. don't simulate if already solved? hmm.. idk 
     
     int depth = 0;
     // Play out game randomly until terminal or max depth
@@ -242,7 +250,7 @@ void MCTS::backpropagate(Node* node, double result) {
         current->wins += (currentResult > 0) ? 1 : 0;
         
         // If we have a winning child, mark parent as LOSS. if the opp has a win, its an L
-        if (current->solvedStatus == SolvedStatus::SOLVED_WIN) {
+        if (current->solvedStatus == SolvedStatus::SOLVED_WIN && current->parent) {
             current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
         }
 
@@ -386,19 +394,25 @@ int MCTS::getTreeSize() const {
 
 void MCTS::printStats() const {
     std::cout << "\n=== MCTS Statistics ===\n";
-    std::cout << "Total simulations: " << totalSimulations_ << "\n";
+    // sims
+    std::cout << "Total simulations: " << totalSimulations_ << ". Tree size: " << getTreeSize() << ". Root visits: " << getTotalVisits() << "\n";
+
+    // timing
     std::cout << "Total search time: " << std::fixed << std::setprecision(3) 
-              << totalSearchTime_ << " seconds\n";
+              << totalSearchTime_ << " seconds. ";
     std::cout << "Simulations/second: " << std::fixed << std::setprecision(0)
               << (totalSearchTime_ > 0 ? totalSimulations_ / totalSearchTime_ : 0) << "\n";
-    std::cout << "Tree size: " << getTreeSize() << " nodes\n";
-    std::cout << "Root visits: " << getTotalVisits() << "\n";
-    
-    if (root_) {
-        std::cout << "Root avg value: " << std::fixed << std::setprecision(3)
-                  << (root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << "\n";
-    }
-    
+
+    // win? loss? unsolved? - the status is from the prospective of the parent. so if the root is a "win" that means, the person who last played would get the win.
+    std::cout << "Solved status: " << 
+        (root_ ? 
+            (root_->solvedStatus == SolvedStatus::SOLVED_WIN ? "SOLVED_WIN - All moves lead to a loss" :
+             root_->solvedStatus == SolvedStatus::SOLVED_LOSS ? "SOLVED_LOSS - At least one move leads to a win" :
+             "Unsolved")
+            : "N/A") << " And Root avg value: " << std::fixed << std::setprecision(3)
+                  << (root_ && root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << "\n";
+    // best move and its avg value
+    std::cout << "Best move: " << PenteGame::displayMove(getBestMove().x, getBestMove().y) << "\n";
     std::cout << "=======================\n\n";
 }
 

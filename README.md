@@ -7,6 +7,65 @@ C++ implementation of AlphaZero for the game of Pente.
 - Enable other game modes, gomoku...
 - Refactor that time constraint concept
 - Review early solved stopping
+```
+./compete "1  K10     J8
+2       K7      L11
+3       K11     K9
+4       H7      K12
+5       J7      G7
+6       L10     J13
+7       M10     H14
+8       G15     K10
+9       N10     M12
+10      J9      K11
+11      K9      J8
+12      L7      M7
+13      K8      K13
+14      K14     N13
+15      O14     M13"
+
+10:38:33 noah-local build (cpp-simple *)$ ./compete "1  K10     L9
+2       K14     N11
+3       K12     M10
+4       K11     K13
+5       K8      K9
+6       M9      J9
+7       H13     J12
+8       H11     L14
+9       H12     H14
+10      H9" 300000
+Playing Pente...
+Parsed moves:
+1 K10 L9 2 K14 N11 3 K12 M10 4 K11 K13 5 K8 K9 6 M9 J9 7 H13 J12 8 H11 L14 9 H12 H14 10 H9
+   A B C D E F G H J K L M N O P Q R S T
+19 · · · · · · · · · · · · · · · · · · · 19
+18 · · · · · · · · · · · · · · · · · · · 18
+17 · · · · · · · · · · · · · · · · · · · 17
+16 · · · · · · · · · · · · · · · · · · · 16
+15 · · · · · ·             · · · · · · · 15
+14 · · · · · ·   ●   ○ ●   · · · · · · · 14
+13 · · · · · ·   ○   ●     · · · · · · · 13
+12 · · · · · ·   ○ ● ○         · · · · · 12
+11 · · · · · ·   ○   ○     ●   · · · · · 11
+10 · · · · · ·       ○   ●     · · · · · 10
+ 9 · · · · · ·   ○ ● ● ● ○   · · · · · · 9
+ 8 · · · · · ·       ○       · · · · · · 8
+ 7 · · · · · · · ·       · · · · · · · · 7
+ 6 · · · · · · · · · · · · · · · · · · · 6
+ 5 · · · · · · · · · · · · · · · · · · · 5
+ 4 · · · · · · · · · · · · · · · · · · · 4
+ 3 · · · · · · · · · · · · · · · · · · · 3
+ 2 · · · · · · · · · · · · · · · · · · · 2
+ 1 · · · · · · · · · · · · · · · · · · · 1
+   A B C D E F G H J K L M N O P Q R S T
+0 Black ○, 0 White ●
+Current player: White
+Segmentation fault (core dumped)
+
+
+./compete "1. K10 L9 2. K14 N11 3. K12 M10 4. K11 K13 5. K8 K9 6. M9 J9 7. H13 J12 8. H11 L14 9. H12 H14 10. H9"
+
+```
 
 ## Project Structure
 ```
