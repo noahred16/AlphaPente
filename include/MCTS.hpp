@@ -45,7 +45,7 @@ public:
 
         bool isFullyExpanded() const;
         bool isTerminal() const;
-        double getUCB1Value(double explorationConstant, int parentVisits) const;
+        double getUCB1Value(double explorationFactor) const;
     };
 
     // Constructor

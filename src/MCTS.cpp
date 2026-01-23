@@ -17,7 +17,7 @@ bool MCTS::Node::isTerminal() const {
     return children.empty() && untriedMoves.empty();
 }
 
-double MCTS::Node::getUCB1Value(double explorationConstant, int parentVisits) const {
+double MCTS::Node::getUCB1Value(double explorationFactor) const {
     // Prioritize solved nodes
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
@@ -31,7 +31,7 @@ double MCTS::Node::getUCB1Value(double explorationConstant, int parentVisits) co
     }
 
     double exploitation = this->totalValue / this->visits;
-    double exploration = explorationConstant * std::sqrt(std::log(parentVisits) / this->visits);
+    double exploration = explorationFactor / std::sqrt(static_cast<double>(this->visits));
 
     return exploitation + exploration;
 }
@@ -87,8 +87,14 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
             node = expand(node, gameClone);
         }
         
-        // Simulation: play out the game randomly
-        double result = simulate(gameClone);
+        // Simulation: play out the game randomly, only if not already solved
+        double result = 0.0;
+        if (node->solvedStatus == SolvedStatus::UNSOLVED) {
+            result = simulate(gameClone);
+        } else {
+            // If already solved, assign result
+            result = (node->solvedStatus == SolvedStatus::SOLVED_WIN) ? 1.0 : -1.0;
+        }
         
         // Backpropagation: update statistics
         backpropagate(node, result);
@@ -146,7 +152,9 @@ PenteGame::Move MCTS::getBestMove() const {
 
 MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     // Traverse tree using UCB1 until we find a node that's not fully expanded. And not solved
-    // TODO review this while (node->isFullyExpanded() && !node->children.empty()) {
+    // We stop if:
+    // 1. We find a node that isn't fully expanded (need to add children).
+    // 2. We find a node that is already solved (no need to simulate further).
     while (node->isFullyExpanded() && !node->children.empty() && node->solvedStatus == SolvedStatus::UNSOLVED) {
         node = selectBestChild(node);
         
@@ -167,10 +175,11 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     // Pick a random untried move
     std::uniform_int_distribution<size_t> dist(0, node->untriedMoves.size() - 1);
     size_t moveIndex = dist(rng_);
-    PenteGame::Move move = node->untriedMoves[moveIndex];
 
-    // Remove from untried moves
-    node->untriedMoves.erase(node->untriedMoves.begin() + moveIndex);
+    // swap is faster than erase from middle
+    std::swap(node->untriedMoves[moveIndex], node->untriedMoves.back());
+    PenteGame::Move move = node->untriedMoves.back();
+    node->untriedMoves.pop_back();
 
     // Apply move to game
     game.makeMove(move.x, move.y);
@@ -184,6 +193,8 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     // Get legal moves for this new state
     if (!game.isGameOver()) {
         child->untriedMoves = game.getLegalMoves();
+        // Initially, all legal moves are 'unproven' paths. 
+        // As they are proven to be LOSSES, this count will decrement.
         child->unprovenCount = child->untriedMoves.size(); // Initially all moves are unproven
     } else {
         // Terminal node - determine solved status - if game is over its either a win or draw
@@ -192,8 +203,8 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
         PenteGame::Player winner = game.getWinner();
         if (winner == node->player) {
             // This move led to a win for the player who made it
-            child->solvedStatus = SolvedStatus::SOLVED_WIN;           
-            // child->unprovenCount = 0; TODO review... I don't think we decrement unproven count for solved wins.
+            child->solvedStatus = SolvedStatus::SOLVED_WIN;
+            child->unprovenCount = 0; // May as well set to 0
         } else {
             // Draw or loss is treated as UNSOLVED for simplicity. Throw an error, I don't expect to ever hit this case for normal pente
             child->solvedStatus = SolvedStatus::UNSOLVED;
@@ -210,10 +221,8 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 }
 
 double MCTS::simulate(const PenteGame& game) {
-    PenteGame simGame = game.clone();
+    PenteGame simGame = game.clone(); // TODO use undos instead of cloning
 
-    // TODO, review early stopping. don't simulate if already solved? hmm.. idk 
-    
     int depth = 0;
     // Play out game randomly until terminal or max depth
     while (!simGame.isGameOver() && depth < config_.maxSimulationDepth) {
@@ -238,6 +247,19 @@ double MCTS::simulate(const PenteGame& game) {
     return result;
 }
 
+
+/**
+ * DESIGN NOTE: unprovenCount tracking
+ * This counter is initialized to untriedMoves.size() and decremented whenever 
+ * a child is proven to be a SOLVED_LOSS. 
+ * * Safety Requirement: To maintain a correct count, each unique move/child 
+ * should only trigger a decrement ONCE. Currently, this relies on the 
+ * Selection/Expansion policy: once a branch is solved, it should not be 
+ * re-selected in a way that triggers a duplicate decrement. 
+ * * If future optimizations (like parallel search or RAVE) cause re-visits 
+ * to solved nodes, a "wasAccountedFor" flag must be added to each node 
+ * to ensure the parent's unprovenCount remains accurate.
+ */
 void MCTS::backpropagate(Node* node, double result) {
     // Standard update: propagate result up the tree
     Node* current = node;
@@ -249,6 +271,9 @@ void MCTS::backpropagate(Node* node, double result) {
         current->totalValue += currentResult;
         current->wins += (currentResult > 0) ? 1 : 0;
         
+        // --- SOLVER LOGIC (Minimax Propagation) ---
+        // We use a "Push" model: current node updates its parent's status.
+
         // If we have a winning child, mark parent as LOSS. if the opp has a win, its an L
         if (current->solvedStatus == SolvedStatus::SOLVED_WIN && current->parent) {
             current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
@@ -257,6 +282,15 @@ void MCTS::backpropagate(Node* node, double result) {
         // Proven win if all children moves (our opp) are proven losses (no unproven moves left)
         if (current->solvedStatus == SolvedStatus::SOLVED_LOSS && current->parent) {
             current->parent->unprovenCount--;
+
+            // For sanity, heres a check to ensure we never drop below 0
+            if (current->parent->unprovenCount < 0) {
+                std::cerr << "FATAL ERROR: unprovenCount dropped below 0!" << std::endl;
+                std::cerr << "Node: " << current << " Parent: " << current->parent << std::endl;
+                // throw std::runtime_error("MCTS Solver logic error: Multiple decrements for same node.");
+                exit(1);
+            }
+
             if (current->parent->unprovenCount == 0) {
                 current->parent->solvedStatus = SolvedStatus::SOLVED_WIN;
             }
@@ -279,9 +313,13 @@ MCTS::Node* MCTS::selectBestChild(Node* node) const {
     
     Node* bestChild = nullptr;
     double bestValue = -std::numeric_limits<double>::infinity();
+
+    // Pre-calculate the numerator of the exploration term
+    // Formula: C * sqrt(ln(N))
+    double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
     
     for (const auto& child : node->children) {
-        double value = child->getUCB1Value(config_.explorationConstant, node->visits);
+        double value = child->getUCB1Value(explorationFactor);
         if (value > bestValue) {
             bestValue = value;
             bestChild = child.get();
@@ -397,9 +435,8 @@ void MCTS::printStats() const {
     // sims
     std::cout << "Total simulations: " << totalSimulations_ << ". Tree size: " << getTreeSize() << ". Root visits: " << getTotalVisits() << "\n";
 
-    // timing
-    std::cout << "Total search time: " << std::fixed << std::setprecision(3) 
-              << totalSearchTime_ << " seconds. ";
+    // timing x mins y secs
+    std::cout << "Total search time: " << (totalSearchTime_ / 60.0) << " mins " << std::fmod(totalSearchTime_, 60.0) << " secs.\n";
     std::cout << "Simulations/second: " << std::fixed << std::setprecision(0)
               << (totalSearchTime_ > 0 ? totalSimulations_ / totalSearchTime_ : 0) << "\n";
 
@@ -445,7 +482,9 @@ void MCTS::printBestMoves(int topN) const {
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
         double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        double ucb1 = child->getUCB1Value(config_.explorationConstant, root_->visits);
+
+        double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
+        double ucb1 = child->getUCB1Value(explorationFactor);
 
         std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
 
@@ -511,7 +550,8 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
         double avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        double ucb1 = child->getUCB1Value(config_.explorationConstant, node->visits);
+        double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
+        double ucb1 = child->getUCB1Value(explorationFactor);
 
         std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
 
