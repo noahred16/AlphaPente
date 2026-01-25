@@ -15,11 +15,8 @@ void PenteGame::reset() {
     blackCaptures = 0;
     whiteCaptures = 0;
     moveCount = 0;
-    
-    // Clear the history stack
-    while (!moveHistory.empty()) {
-        moveHistory.pop();
-    }
+    moveHistory.clear();
+    moveHistory.reserve(361); // Pre-allocate for performance
 }
 
 bool PenteGame::makeMove(const char* move) {
@@ -32,11 +29,6 @@ bool PenteGame::makeMove(int x, int y) {
         return false;
     }
     
-    // Create move info for history
-    MoveInfo info;
-    info.move = Move(x, y);
-    info.player = currentPlayer;
-    
     // Place stone
     if (currentPlayer == BLACK) {
         blackStones.setBit(x, y);
@@ -45,19 +37,25 @@ bool PenteGame::makeMove(int x, int y) {
     }
     
     // Check and perform captures
-    MoveInfo captureInfo = checkAndCapture(x, y);
-    info.capturedPairs = captureInfo.capturedPairs;
-    info.captureDirections = captureInfo.captureDirections;
+    MoveInfo info;
+    if (CAPTURES_ENABLED) {
+        info = checkAndCapture(x, y);
+    } else {
+        info.move = Move(x, y);
+        info.player = currentPlayer;
+        info.totalCapturedStones = 0;
+        info.captureMask = 0;
+    }
     
     // Update capture count
     if (currentPlayer == BLACK) {
-        blackCaptures += info.capturedPairs;
+        blackCaptures += info.totalCapturedStones;
     } else {
-        whiteCaptures += info.capturedPairs;
+        whiteCaptures += info.totalCapturedStones;
     }
     
     // Push to history BEFORE changing current player
-    moveHistory.push(info);
+    moveHistory.push_back(info);
     
     // Update state
     moveCount++;
@@ -68,74 +66,113 @@ bool PenteGame::makeMove(int x, int y) {
 
 void PenteGame::undoMove() {
     if (moveHistory.empty()) {
-        return;  // Nothing to undo
+        return; 
     }
     
-    // Get the last move info
-    MoveInfo lastMove = moveHistory.top();
-    moveHistory.pop();
+    // 1. Pop the last move
+    MoveInfo lastMove = moveHistory.back();
     
-    // Switch back to the player who made the move
+    // 2. Revert the current player to the one who made the move
     currentPlayer = lastMove.player;
     
-    // Remove the stone
+    // 3. Remove the stone placed during this move
     if (currentPlayer == BLACK) {
         blackStones.clearBit(lastMove.move.x, lastMove.move.y);
-        blackCaptures -= lastMove.capturedPairs;
+        blackCaptures -= lastMove.totalCapturedStones;
     } else {
         whiteStones.clearBit(lastMove.move.x, lastMove.move.y);
-        whiteCaptures -= lastMove.capturedPairs;
+        whiteCaptures -= lastMove.totalCapturedStones;
     }
     
-    // Restore captured stones
-    if (lastMove.capturedPairs > 0) {
+    // 4. Restore captured stones using the 2-bit mask
+    if (lastMove.totalCapturedStones > 0) {
         BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
-        const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
-                                {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
+        
+        static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
+                                       {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
         
         for (int i = 0; i < 8; i++) {
-            if (lastMove.captureDirections & (1 << i)) {
-                // This direction had a capture - restore the two stones
+            // Extract the 2 bits for direction i:
+            // 01 (1) = Pair capture, 10 (2) = Triplet capture
+            int captureType = (lastMove.captureMask >> (i * 2)) & 0x03; // lol bitmasking magic
+            
+            if (captureType > 0) {
                 int dx = dirs[i][0];
                 int dy = dirs[i][1];
+                
+                // Restore 2 stones (Standard)
                 oppStones.setBit(lastMove.move.x + dx, lastMove.move.y + dy);
                 oppStones.setBit(lastMove.move.x + dx * 2, lastMove.move.y + dy * 2);
+                
+                // If it was a Keryo capture, restore the 3rd stone
+                if (captureType == 2) {
+                    oppStones.setBit(lastMove.move.x + dx * 3, lastMove.move.y + dy * 3);
+                }
             }
         }
     }
     
+    // remove from history
+    moveHistory.pop_back();
     moveCount--;
 }
 
 PenteGame::MoveInfo PenteGame::checkAndCapture(int x, int y) {
     MoveInfo info;
-    info.capturedPairs = 0;
-    info.captureDirections = 0;
+    info.move = Move(x, y);
+    info.player = currentPlayer;
+    info.totalCapturedStones = 0;
+    info.captureMask = 0;
     
     BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
     BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
     
-    const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
-                            {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
+    static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
+                                   {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
     
     for (int i = 0; i < 8; i++) {
         int dx = dirs[i][0];
         int dy = dirs[i][1];
-        int x1 = x + dx;
-        int y1 = y + dy;
-        int x2 = x + dx * 2;
-        int y2 = y + dy * 2;
+
+        // 1. Check for Keryo-style capture of 3 (X O O O X)
+        if (KERYO_RULES) {
+            int x4 = x + dx * 4;
+            int y4 = y + dy * 4;
+            
+            if (x4 >= 0 && x4 < BOARD_SIZE && y4 >= 0 && y4 < BOARD_SIZE) {
+                if (oppStones.getBit(x + dx, y + dy) && 
+                    oppStones.getBit(x + dx * 2, y + dy * 2) && 
+                    oppStones.getBit(x + dx * 3, y + dy * 3) && 
+                    myStones.getBit(x4, y4)) 
+                {
+                    // Capture 3!
+                    oppStones.clearBit(x + dx, y + dy);
+                    oppStones.clearBit(x + dx * 2, y + dy * 2);
+                    oppStones.clearBit(x + dx * 3, y + dy * 3);
+                    
+                    info.totalCapturedStones += 3;
+                    // Set bits to 10 (binary) for this direction
+                    info.captureMask |= (2 << (i * 2));
+                    continue; // Move to next direction
+                }
+            }
+        }
+
+        // 2. Check for Standard capture of 2 (X O O X)
         int x3 = x + dx * 3;
         int y3 = y + dy * 3;
-        
         if (x3 >= 0 && x3 < BOARD_SIZE && y3 >= 0 && y3 < BOARD_SIZE) {
-            if (oppStones.getBit(x1, y1) && oppStones.getBit(x2, y2) && 
-                myStones.getBit(x3, y3)) {
-                // Capture!
-                oppStones.clearBit(x1, y1);
-                oppStones.clearBit(x2, y2);
-                info.capturedPairs++;
-                info.captureDirections |= (1 << i);  // Mark this direction
+            if (oppStones.getBit(x + dx, y + dy) && 
+                oppStones.getBit(x + dx * 2, y + dy * 2) && 
+                myStones.getBit(x3, y3)) 
+            {
+                // Capture 2!
+                oppStones.clearBit(x + dx, y + dy);
+                oppStones.clearBit(x + dx * 2, y + dy * 2);
+                
+                info.totalCapturedStones += 2;
+                // Set bits to 01 (binary) for this direction
+                info.captureMask |= (1 << (i * 2));
             }
         }
     }
@@ -236,7 +273,7 @@ PenteGame::Player PenteGame::getWinner() const {
     // get last move from history
     Move lastMove;
     if (!moveHistory.empty()) {
-        lastMove = moveHistory.top().move;
+        lastMove = moveHistory.back().move;
     }
 
     // Check for five in a row

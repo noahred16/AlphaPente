@@ -13,7 +13,9 @@
 class PenteGame {
 public:
     static constexpr int BOARD_SIZE = 19;
-    static constexpr int CAPTURES_TO_WIN = 5;
+    static constexpr int CAPTURES_TO_WIN = 10;
+    static constexpr bool KERYO_RULES = false;
+    static constexpr bool CAPTURES_ENABLED = true;
     
     enum Player {
         NONE = 0,
@@ -27,12 +29,12 @@ public:
         Move(int x, int y) : x(x), y(y) {}
         bool isValid() const { return x >= 0 && y >= 0; }
     };
-    
+
     struct MoveInfo {
         Move move;
-        int capturedPairs;
-        uint8_t captureDirections;  // Bit flags for which of 8 directions had captures
-        Player player;              // Who made this move
+        uint16_t captureMask; // 16 bits: 8 directions * 2 bits each
+        Player player;
+        uint8_t totalCapturedStones; // Helpful for quick score updates
     };
 
 private:
@@ -44,7 +46,7 @@ private:
     int moveCount;
 
     // Move history stack for undo support
-    std::stack<MoveInfo> moveHistory;
+    std::vector<MoveInfo> moveHistory;
     
     // Helper functions
     bool checkFiveInRow(int x, int y) const;
@@ -71,7 +73,7 @@ public:
     int getBlackCaptures() const { return blackCaptures; }
     int getWhiteCaptures() const { return whiteCaptures; }
     Move getLastMove() const { 
-        return moveHistory.empty() ? Move() : moveHistory.top().move; 
+        return moveHistory.empty() ? Move() : moveHistory.back().move; 
     }
     int getMoveCount() const { return moveCount; }
     bool canUndo() const { return !moveHistory.empty(); }
