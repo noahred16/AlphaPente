@@ -17,16 +17,16 @@ public:
     static constexpr bool KERYO_RULES = false;
     static constexpr bool CAPTURES_ENABLED = true;
     
-    enum Player {
+    enum Player : uint8_t {
         NONE = 0,
         BLACK = 1,
         WHITE = 2
     };
     
     struct Move {
-        int x, y;
+        int16_t x, y;  // 4 bytes total, sufficient for 19x19
         Move() : x(-1), y(-1) {}
-        Move(int x, int y) : x(x), y(y) {}
+        Move(int x_, int y_) : x(static_cast<int16_t>(x_)), y(static_cast<int16_t>(y_)) {}
     };
 
     struct MoveInfo {
