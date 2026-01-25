@@ -16,13 +16,13 @@ public:
     static constexpr int CAPTURES_TO_WIN = 10;
     static constexpr bool KERYO_RULES = false;
     static constexpr bool CAPTURES_ENABLED = true;
-    
+
     enum Player : uint8_t {
         NONE = 0,
         BLACK = 1,
         WHITE = 2
     };
-    
+
     struct Move {
         int16_t x, y;  // 4 bytes total, sufficient for 19x19
         Move() : x(-1), y(-1) {}
@@ -36,6 +36,18 @@ public:
         uint8_t totalCapturedStones; // Helpful for quick score updates
     };
 
+    // ========================================================================
+    // Zobrist Hashing Tables (static, shared across all instances)
+    // ========================================================================
+    // zobristTable[x][y][player] - random key for stone at (x,y) for BLACK(0) or WHITE(1)
+    static uint64_t zobristTable[BOARD_SIZE][BOARD_SIZE][2];
+    static uint64_t zobristSideToMove;                      // XOR when it's WHITE's turn
+    static uint64_t zobristBlackCaptures[CAPTURES_TO_WIN];  // Keys for capture counts 1-9
+    static uint64_t zobristWhiteCaptures[CAPTURES_TO_WIN];  // Keys for capture counts 1-9
+    static bool zobristInitialized;
+
+    static void initZobrist();  // Initialize random keys (called once)
+
 private:
     BitBoard blackStones;
     BitBoard whiteStones;
@@ -43,6 +55,9 @@ private:
     int blackCaptures;
     int whiteCaptures;
     int moveCount;
+
+    // Incremental Zobrist hash of the current board state
+    uint64_t currentHash;
 
     // Move history stack for undo support
     std::vector<MoveInfo> moveHistory;
@@ -81,7 +96,7 @@ public:
     Move getRandomMove() const;
     PenteGame clone() const;
     void syncFrom(const PenteGame& other);
-    uint64_t getHash() const;
+    uint64_t getHash() const { return currentHash; }  // O(1) incremental hash
     
     // Debug
     void print() const;

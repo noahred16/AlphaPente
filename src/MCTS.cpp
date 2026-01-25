@@ -35,6 +35,7 @@ double MCTS::Node::getUCB1Value(double explorationFactor) const {
 MCTS::MCTS(const Config& config)
     : config_(config)
     , arena_(config.arenaSize)
+    , tt_(config.ttSize)
     , root_(nullptr)
     , rng_(std::random_device{}())
     , totalSimulations_(0)
@@ -111,6 +112,7 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     // Initialize root node
     root_ = allocateNode();
     root_->player = game.getCurrentPlayer();
+    root_->positionHash = game.getHash();  // Store Zobrist hash for TT
 
     std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
     initNodeUntriedMoves(root_, legalMoves);
@@ -247,12 +249,32 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
                     : PenteGame::BLACK;
     child->parent = node;
 
+    // Store position hash for TT lookups during backprop
+    child->positionHash = game.getHash();
+
     // Get legal moves for this new state
     if (!game.isGameOver()) {
         std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
         initNodeUntriedMoves(child, legalMoves);
         initNodeChildren(child, static_cast<int>(legalMoves.size()));
         child->unprovenCount = static_cast<int16_t>(legalMoves.size());
+
+        // --- TT: Seed node with transposition table statistics ---
+        if (config_.useTT) {
+            TranspositionTable::Entry* ttEntry = tt_.probe(child->positionHash);
+            if (ttEntry) {
+                // Found this position in TT - seed with existing statistics
+                int32_t ttVisits = ttEntry->visits.load(std::memory_order_relaxed);
+                int32_t ttWins = ttEntry->wins.load(std::memory_order_relaxed);
+                double ttValue = ttEntry->getTotalValue();
+
+                if (ttVisits > 0) {
+                    child->visits = ttVisits;
+                    child->wins = ttWins;
+                    child->totalValue = ttValue;
+                }
+            }
+        }
     } else {
         // Terminal node - determine solved status
         PenteGame::Player winner = game.getWinner();
@@ -314,6 +336,12 @@ void MCTS::backpropagate(Node* node, double result) {
         current->visits++;
         current->totalValue += currentResult;
         current->wins += (currentResult > 0) ? 1 : 0;
+
+        // --- TT: Update transposition table with this position's statistics ---
+        if (config_.useTT && current->positionHash != 0) {
+            bool isWin = (currentResult > 0);
+            tt_.update(current->positionHash, currentResult, isWin);
+        }
 
         // --- SOLVER LOGIC (Minimax Propagation) ---
         if (current->solvedStatus == SolvedStatus::SOLVED_WIN && current->parent) {
@@ -404,6 +432,7 @@ MCTS::Node* MCTS::copySubtree(Node* source, MCTSArena& destArena) {
     }
 
     // Copy scalar fields
+    dest->positionHash = source->positionHash;
     dest->move = source->move;
     dest->player = source->player;
     dest->solvedStatus = source->solvedStatus;
@@ -525,6 +554,14 @@ void MCTS::printStats() const {
               << (arena_.bytesUsed() / (1024.0 * 1024.0)) << " MB / "
               << (arena_.totalSize() / (1024.0 * 1024.0)) << " MB ("
               << std::setprecision(1) << arena_.utilizationPercent() << "%)\n";
+
+    // Transposition table stats
+    if (config_.useTT) {
+        std::cout << "TT: " << tt_.getHits() << " hits, " << tt_.getMisses() << " misses ("
+                  << std::setprecision(1) << (tt_.getHitRate() * 100.0) << "% hit rate), "
+                  << tt_.getStores() << " stores, "
+                  << std::setprecision(1) << (tt_.getMemoryUsage() / (1024.0 * 1024.0)) << " MB\n";
+    }
 
     std::cout << "Solved status: " <<
         (root_ ?
