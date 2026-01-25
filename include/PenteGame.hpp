@@ -27,7 +27,6 @@ public:
         int x, y;
         Move() : x(-1), y(-1) {}
         Move(int x, int y) : x(x), y(y) {}
-        bool isValid() const { return x >= 0 && y >= 0; }
     };
 
     struct MoveInfo {
@@ -81,6 +80,7 @@ public:
     // For MCTS
     Move getRandomMove() const;
     PenteGame clone() const;
+    void syncFrom(const PenteGame& other);
     uint64_t getHash() const;
     
     // Debug

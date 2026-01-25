@@ -65,6 +65,9 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     root_->player = game.getCurrentPlayer();
     root_->untriedMoves = game.getLegalMoves();
     root_->unprovenCount = root_->untriedMoves.size();
+
+    // Only local copy of game for simulations
+    PenteGame localGame;
     
     // Run MCTS iterations
     for (int i = 0; i < config_.maxIterations; i++) {
@@ -76,21 +79,21 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
             break; // exit early if root is solved
         }
 
-        // Clone game state for this iteration
-        PenteGame gameClone = game.clone();
+        // Reset localGame to the start state of THIS search
+        localGame.syncFrom(game);
         
         // Selection: traverse tree to find node to expand
-        Node* node = select(root_.get(), gameClone);
+        Node* node = select(root_.get(), localGame);
         
         // Expansion: add a new child node if not terminal
-        if (!gameClone.isGameOver() && !node->untriedMoves.empty()) {
-            node = expand(node, gameClone);
+        if (!localGame.isGameOver() && !node->untriedMoves.empty()) {
+            node = expand(node, localGame);
         }
         
         // Simulation: play out the game randomly, only if not already solved
         double result = 0.0;
         if (node->solvedStatus == SolvedStatus::UNSOLVED) {
-            result = simulate(gameClone);
+            result = simulate(localGame);
         } else {
             // If already solved, assign result
             result = (node->solvedStatus == SolvedStatus::SOLVED_WIN) ? 1.0 : -1.0;
@@ -159,7 +162,7 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
         node = selectBestChild(node);
         
         // Apply move to game state
-        if (node && node->move.isValid()) {
+        if (node) {
             game.makeMove(node->move.x, node->move.y);
         }
     }
@@ -181,6 +184,9 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     PenteGame::Move move = node->untriedMoves.back();
     node->untriedMoves.pop_back();
 
+    // aka the opponent of the player who made the move to reach this node
+    PenteGame::Player startPlayer = game.getCurrentPlayer();
+
     // Apply move to game
     game.makeMove(move.x, move.y);
 
@@ -201,8 +207,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
         // Note: node->player is the player who made the move (before this child)
         // child->player is the opponent (whose turn it would be, but game is over)
         PenteGame::Player winner = game.getWinner();
-        if (winner == node->player) {
-            // This move led to a win for the player who made it
+        if (winner == startPlayer) {
             child->solvedStatus = SolvedStatus::SOLVED_WIN;
             child->unprovenCount = 0; // May as well set to 0
         } else {
@@ -220,29 +225,36 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     return childPtr;
 }
 
-double MCTS::simulate(const PenteGame& game) {
-    PenteGame simGame = game.clone(); // TODO use undos instead of cloning
-
+double MCTS::simulate(PenteGame& simGame) {
+    // Track who is to move at start - result must be from their perspective
+    PenteGame::Player startPlayer = simGame.getCurrentPlayer();
     int depth = 0;
+
     // Play out game randomly until terminal or max depth
     while (!simGame.isGameOver() && depth < config_.maxSimulationDepth) {
         PenteGame::Move move = selectSimulationMove(simGame);
-        
-        if (!move.isValid()) {
-            break;
-        }
-        
         simGame.makeMove(move.x, move.y);
         depth++;
     }
-    
-    // Evaluate with depth consideration
+
+    // Evaluate result from the perspective of the player who MADE THE MOVE to reach this node
+    // (i.e., the opponent of startPlayer)
     double result = evaluateTerminalState(simGame, depth);
+    PenteGame::Player winner = simGame.getWinner();
 
-    // if winner = current game player, return positive else return negative
-    result *= (game.getCurrentPlayer() == simGame.getWinner()) ? 1.0 : -1.0;
+    if (winner != PenteGame::NONE) {
+        // winner == startPlayer means the mover (opponent) won, which means the person who played lost
+        // winner != startPlayer means the mover (opponent) had no good moves and lost
+        result *= (winner == startPlayer) ? -1.0 : 1.0;
+    } else {
+        // Draw or max depth reached - neutral
+        result = 0.0;
+    }
 
-    result *= -1.0; // the parents value is the min of the children
+    // Roll the board back to original state
+    for (int i = 0; i < depth; i++) {
+        simGame.undoMove();
+    }
 
     return result;
 }
@@ -435,8 +447,8 @@ void MCTS::printStats() const {
     // sims
     std::cout << "Total simulations: " << totalSimulations_ << ". Tree size: " << getTreeSize() << ". Root visits: " << getTotalVisits() << "\n";
 
-    // timing x mins y secs
-    std::cout << "Total search time: " << (totalSearchTime_ / 60.0) << " mins " << std::fmod(totalSearchTime_, 60.0) << " secs.\n";
+    // timing x mins y secs (ints)
+    std::cout << "Total search time: " << static_cast<int>(totalSearchTime_ / 60) << " min " << static_cast<int>(totalSearchTime_) % 60 << " sec\n";
     std::cout << "Simulations/second: " << std::fixed << std::setprecision(0)
               << (totalSearchTime_ > 0 ? totalSimulations_ / totalSearchTime_ : 0) << "\n";
 
@@ -466,7 +478,16 @@ void MCTS::printBestMoves(int topN) const {
     }
     
     std::sort(children.begin(), children.end(), 
-        [](Node* a, Node* b) { return a->visits > b->visits; });
+        [](Node* a, Node* b) { 
+            // prioritize solved wins first, then by visits
+            if (a->solvedStatus == SolvedStatus::SOLVED_WIN && b->solvedStatus != SolvedStatus::SOLVED_WIN) {
+                return true;
+            }
+            if (a->solvedStatus != SolvedStatus::SOLVED_WIN && b->solvedStatus == SolvedStatus::SOLVED_WIN) {
+                return false;
+            }
+            return a->visits > b->visits;
+        });
     
     int movesConsidered = root_->children.size();
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of "
@@ -537,7 +558,16 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
     }
     
     std::sort(children.begin(), children.end(), 
-        [](Node* a, Node* b) { return a->visits > b->visits; });
+        [](Node* a, Node* b) { 
+            // prioritize solved wins first, then by visits
+            if (a->solvedStatus == SolvedStatus::SOLVED_WIN && b->solvedStatus != SolvedStatus::SOLVED_WIN) {
+                return true;
+            }
+            if (a->solvedStatus != SolvedStatus::SOLVED_WIN && b->solvedStatus == SolvedStatus::SOLVED_WIN) {
+                return false;
+            }
+            return a->visits > b->visits;
+        });
     
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
     std::cout << std::setw(8) << "Move"

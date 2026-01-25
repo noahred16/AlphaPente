@@ -78,7 +78,7 @@ private:
     // MCTS phases
     Node* select(Node* node, PenteGame& game);
     Node* expand(Node* node, PenteGame& game);
-    double simulate(const PenteGame& game);
+    double simulate(PenteGame& game);
     void backpropagate(Node* node, double result);
 
     // Minimax backpropagation helpers

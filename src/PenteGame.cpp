@@ -277,12 +277,10 @@ PenteGame::Player PenteGame::getWinner() const {
     }
 
     // Check for five in a row
-    if (lastMove.isValid()) {
-        if (currentPlayer == WHITE && checkFiveInRow(lastMove.x, lastMove.y)) {
-            return BLACK;  // Black just moved and won
-        } else if (currentPlayer == BLACK && checkFiveInRow(lastMove.x, lastMove.y)) {
-            return WHITE;  // White just moved and won
-        }
+    if (currentPlayer == WHITE && checkFiveInRow(lastMove.x, lastMove.y)) {
+        return BLACK;  // Black just moved and won
+    } else if (currentPlayer == BLACK && checkFiveInRow(lastMove.x, lastMove.y)) {
+        return WHITE;  // White just moved and won
     }
     
     // Check for capture wins
@@ -349,6 +347,16 @@ PenteGame::Move PenteGame::getRandomMove() const {
 
 PenteGame PenteGame::clone() const {
     return *this;  // Default copy constructor handles everything
+}
+
+void PenteGame::syncFrom(const PenteGame& other) {
+    blackStones = other.blackStones;
+    whiteStones = other.whiteStones;
+    currentPlayer = other.currentPlayer;
+    blackCaptures = other.blackCaptures;
+    whiteCaptures = other.whiteCaptures;
+    moveCount = other.moveCount;
+    moveHistory = other.moveHistory;
 }
 
 uint64_t PenteGame::getHash() const {
