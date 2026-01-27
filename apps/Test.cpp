@@ -1,6 +1,7 @@
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
 #include "BitBoard.hpp"
+#include "GameUtils.hpp"
 #include <iostream>
 
 void moveTwoAnalysis(PenteGame& game);
@@ -25,7 +26,7 @@ int main(int argc, char* argv[]) {
     char expectedMove[] = "L7";
 
     // print
-    game.print();
+    GameUtils::printGameState(game);
 
     // Test getting the current player
     // PenteGame::Player currentPlayer = game.getCurrentPlayer();

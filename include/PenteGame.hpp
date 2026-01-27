@@ -13,10 +13,20 @@
 class PenteGame {
 public:
     static constexpr int BOARD_SIZE = 19;
-    static constexpr int CAPTURES_TO_WIN = 10;
-    static constexpr bool KERYO_RULES = false;
-    static constexpr bool CAPTURES_ENABLED = true;
-    
+
+    // Runtime-configurable game settings
+    struct Config {
+        int capturesToWin = 10;       // Pente: 10, Keryo: 15
+        bool keryoRules = false;       // Keryo: true (3-stone captures)
+        bool capturesEnabled = true;   // Gomoku: false
+        bool tournamentRule = true;    // 3rd move restriction
+
+        // Factory methods for presets
+        static Config pente() { return Config{}; }
+        static Config gomoku() { return Config{10, false, false, true}; }
+        static Config keryoPente() { return Config{15, true, true, true}; }
+    };
+
     enum Player : uint8_t {
         NONE = 0,
         BLACK = 1,
@@ -37,6 +47,7 @@ public:
     };
 
 private:
+    Config config_;
     BitBoard blackStones;
     BitBoard whiteStones;
     Player currentPlayer;
@@ -46,14 +57,14 @@ private:
 
     // Move history stack for undo support
     std::vector<MoveInfo> moveHistory;
-    
+
     // Helper functions
     bool checkFiveInRow(int x, int y) const;
     MoveInfo checkAndCapture(int x, int y);
     int countConsecutive(const BitBoard& stones, int x, int y, int dx, int dy) const;
 
 public:
-    PenteGame();
+    PenteGame(const Config& config = Config::pente());
     
     // Core game functions
     void reset();
@@ -87,32 +98,8 @@ public:
     void print() const;
     Player getStoneAt(int x, int y) const;
 
-    // Utils
-    // convert move string like "J11" to x,y
-    static std::pair<int, int> parseMove(const char* move) {
-        if (strlen(move) < 2) {
-            return {-1, -1};
-        }
-        
-        char colChar = move[0];
-        if (colChar >= 'I') {
-            colChar--; // Skip 'I'
-        }
-        int x = colChar - 'A';
-        
-        int y = std::atoi(move + 1) - 1;
-        
-        return {x, y};
-    }
-
-    // convert x,y to move string like "J11" (skips over 'I')
-    static std::string displayMove(int x, int y) {
-        char colChar = 'A' + x;
-        if (colChar >= 'I') {
-            colChar++; // Skip 'I'
-        }
-        return std::string(1, colChar) + std::to_string(y + 1);
-    }
+    // Config access
+    const Config& getConfig() const { return config_; }
 };
 
 #endif // PENTE_HPP

@@ -1,10 +1,11 @@
 #include "PenteGame.hpp"
+#include "GameUtils.hpp"
 #include <random>
 #include <iostream>
 #include <sstream>
 #include <algorithm>
 
-PenteGame::PenteGame() {
+PenteGame::PenteGame(const Config& config) : config_(config) {
     reset();
 }
 
@@ -20,7 +21,7 @@ void PenteGame::reset() {
 }
 
 bool PenteGame::makeMove(const char* move) {
-    auto [x, y] = parseMove(move);
+    auto [x, y] = GameUtils::parseMove(move);
     return makeMove(x, y);
 }
 
@@ -38,7 +39,7 @@ bool PenteGame::makeMove(int x, int y) {
     
     // Check and perform captures
     MoveInfo info;
-    if (CAPTURES_ENABLED) {
+    if (config_.capturesEnabled) {
         info = checkAndCapture(x, y);
     } else {
         info.move = Move(x, y);
@@ -135,7 +136,7 @@ PenteGame::MoveInfo PenteGame::checkAndCapture(int x, int y) {
         int dy = dirs[i][1];
 
         // 1. Check for Keryo-style capture of 3 (X O O O X)
-        if (KERYO_RULES) {
+        if (config_.keryoRules) {
             int x4 = x + dx * 4;
             int y4 = y + dy * 4;
             
@@ -211,8 +212,8 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
     // Find all empty squares near existing stones (within distance 2)
     BitBoard occupied = blackStones | whiteStones;
     
-    int distance = 1; // Could be more dynamic. Hardcoded for now.
-    // int distance = 2; // Could be more dynamic. Hardcoded for now.
+    // int distance = 1; // Could be more dynamic. Hardcoded for now.
+    int distance = 2; // Could be more dynamic. Hardcoded for now.
     if (moveCount <= 3) distance = 2;
 
 
@@ -241,9 +242,8 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
         }
     }
 
-    // TODO, make configurable.
-    // tournament rule. if moveCount == 2, moves must be at least 3 away from center
-    if (moveCount == 2) {
+    // Tournament rule: if moveCount == 2, moves must be at least 3 away from center
+    if (config_.tournamentRule && moveCount == 2) {
         int center = BOARD_SIZE / 2;
         moves.erase(std::remove_if(moves.begin(), moves.end(),
                                    [center](const Move& m) {
@@ -260,7 +260,7 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
                 "O10", "M6", "K6"
              };
             for (const auto& moveStr : presetMoves) {
-                auto [x, y] = parseMove(moveStr.c_str());
+                auto [x, y] = GameUtils::parseMove(moveStr.c_str());
                 moves.emplace_back(x, y);
             }
         }
@@ -284,8 +284,8 @@ PenteGame::Player PenteGame::getWinner() const {
     }
     
     // Check for capture wins
-    if (blackCaptures >= CAPTURES_TO_WIN) return BLACK;
-    if (whiteCaptures >= CAPTURES_TO_WIN) return WHITE;
+    if (blackCaptures >= config_.capturesToWin) return BLACK;
+    if (whiteCaptures >= config_.capturesToWin) return WHITE;
     
     return NONE;
 }
@@ -350,6 +350,7 @@ PenteGame PenteGame::clone() const {
 }
 
 void PenteGame::syncFrom(const PenteGame& other) {
+    config_ = other.config_;
     blackStones = other.blackStones;
     whiteStones = other.whiteStones;
     currentPlayer = other.currentPlayer;
@@ -388,50 +389,4 @@ PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
     if (blackStones.getBit(x, y)) return BLACK;
     if (whiteStones.getBit(x, y)) return WHITE;
     return NONE;
-}
-
-void PenteGame::print() const {
-    // get from root
-    const std::vector<Move> legalMoves = getLegalMoves();
-
-    // Helper to handle skipping 'I'
-    auto getColChar = [](int x) {
-        char c = (char)('A' + x);
-        return (c >= 'I') ? (char)(c + 1) : c;
-    };
-
-    std::cout << "   ";
-    for (int x = 0; x < BOARD_SIZE; x++) {
-        std::cout << getColChar(x) << " ";
-    }
-    std::cout << "\n";
-    
-    for (int y = BOARD_SIZE - 1; y >= 0; y--) {
-        std::cout << (y < 9 ? " " : "") << (y + 1) << " ";
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            if (blackStones.getBit(x, y)) {
-                std::cout << "○ ";
-            } else if (whiteStones.getBit(x, y)) {
-                std::cout << "● ";
-            } else {
-                bool isLegal = false;
-                for (const auto& move : legalMoves) {
-                    if (move.x == x && move.y == y) {
-                        isLegal = true;
-                        break;
-                    }
-                }
-                std::cout << (isLegal ? "  " : "· ");
-            }
-        }
-        std::cout << (y + 1) << "\n";
-    }
-    
-    std::cout << "   ";
-    for (int x = 0; x < BOARD_SIZE; x++) {
-        std::cout << getColChar(x) << " ";
-    }
-    std::cout << "\n";
-    std::cout << blackCaptures << " Black ○, " << whiteCaptures << " White ●\n";
-    std::cout << "Current player: " << (currentPlayer == BLACK ? "Black" : "White") << "\n";
 }

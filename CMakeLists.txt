@@ -17,6 +17,7 @@ add_library(pente_core
     src/BitBoard.cpp
     src/PenteGame.cpp
     src/MCTS.cpp
+    src/GameUtils.cpp
 )
 
 # Executable: Train
@@ -31,6 +32,14 @@ target_link_libraries(play pente_core)
 add_executable(test apps/Test.cpp)
 target_link_libraries(test pente_core)
 
-# Executable: Compete
-add_executable(compete apps/Compete.cpp)
-target_link_libraries(compete pente_core)
+# Executable: Pente
+add_executable(pente apps/Pente.cpp)
+target_link_libraries(pente pente_core)
+
+# Executable: Gomoku
+add_executable(gomoku apps/Gomoku.cpp)
+target_link_libraries(gomoku pente_core)
+
+# Executable: Keryo-Pente
+add_executable(keryopente apps/KeryoPente.cpp)
+target_link_libraries(keryopente pente_core)

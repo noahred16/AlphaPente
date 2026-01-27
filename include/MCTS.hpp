@@ -13,7 +13,9 @@
 
 class MCTSArena {
 public:
-    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024; // 256 MB
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024; // 256 MB
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 1.5; // 384 MB
+    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 2; // 512 MB
 
     explicit MCTSArena(size_t size = DEFAULT_SIZE)
         : size_(size)

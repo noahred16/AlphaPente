@@ -1,4 +1,5 @@
 #include "MCTS.hpp"
+#include "GameUtils.hpp"
 #include <algorithm>
 #include <chrono>
 #include <limits>
@@ -535,7 +536,7 @@ void MCTS::printStats() const {
                   << (root_ && root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << "\n";
 
     if (root_ && root_->childCount > 0) {
-        std::cout << "Best move: " << PenteGame::displayMove(getBestMove().x, getBestMove().y) << "\n";
+        std::cout << "Best move: " << GameUtils::displayMove(getBestMove().x, getBestMove().y) << "\n";
     }
     std::cout << "=======================\n\n";
 }
@@ -583,7 +584,7 @@ void MCTS::printBestMoves(int topN) const {
                                    std::sqrt(std::log(static_cast<double>(root_->visits)));
         double ucb1 = child->getUCB1Value(explorationFactor);
 
-        std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
+        std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
 
         std::string status;
         if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
@@ -659,7 +660,7 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
                                    std::sqrt(std::log(static_cast<double>(node->visits)));
         double ucb1 = child->getUCB1Value(explorationFactor);
 
-        std::string moveStr = PenteGame::displayMove(child->move.x, child->move.y);
+        std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
 
         std::string status;
         if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
@@ -682,7 +683,7 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
 }
 
 void MCTS::printBranch(const char* moveStr, int topN) const {
-    auto [x, y] = PenteGame::parseMove(moveStr);
+    auto [x, y] = GameUtils::parseMove(moveStr);
     printBranch(x, y, topN);
 }
 
@@ -695,13 +696,13 @@ void MCTS::printBranch(int x, int y, int topN) const {
     Node* targetNode = findChildNode(root_, x, y);
 
     if (!targetNode) {
-        std::string moveStr = PenteGame::displayMove(x, y);
+        std::string moveStr = GameUtils::displayMove(x, y);
         std::cout << "Move " << moveStr << " not found in search tree.\n";
         std::cout << "This move may not have been explored yet.\n";
         return;
     }
 
-    std::string moveStr = PenteGame::displayMove(x, y);
+    std::string moveStr = GameUtils::displayMove(x, y);
     double avgValue = targetNode->visits > 0 ? targetNode->totalValue / targetNode->visits : 0.0;
 
     std::cout << "\n=== Analysis for move " << moveStr << " ===\n";
