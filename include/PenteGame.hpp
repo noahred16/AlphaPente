@@ -9,6 +9,7 @@
 #include <string>
 #include <cstdlib>
 #include <iostream>
+#include <array>
 
 class PenteGame {
 public:

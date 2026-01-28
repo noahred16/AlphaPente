@@ -1,6 +1,7 @@
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
 #include "GameUtils.hpp"
+#include "Profiler.hpp"
 #include <iostream>
 #include <chrono>
 
@@ -59,6 +60,9 @@ int main(int argc, char* argv[]) {
     std::cout << "MCTS selected move: " << bestMoveStr << std::endl;
 
     std::cout << '\a' << std::flush; // Terminal bell
+
+    // Print profiler report
+    Profiler::instance().printReport();
 
     return 0;
 }

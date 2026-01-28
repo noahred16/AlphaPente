@@ -1,5 +1,6 @@
 #include "MCTS.hpp"
 #include "GameUtils.hpp"
+#include "Profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <limits>
@@ -208,6 +209,7 @@ PenteGame::Move MCTS::getBestMove() const {
 // ============================================================================
 
 MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
+    PROFILE_SCOPE("MCTS::select");
     // Traverse tree using UCB1 until we find a node that's not fully expanded and not solved
     while (node->isFullyExpanded() && node->childCount > 0 && node->solvedStatus == SolvedStatus::UNSOLVED) {
         node = selectBestChild(node);
@@ -221,6 +223,7 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
 }
 
 MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
+    PROFILE_SCOPE("MCTS::expand");
     if (node->untriedMoveCount == 0) {
         return node;
     }
@@ -278,6 +281,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 }
 
 double MCTS::simulate(PenteGame& simGame) {
+    PROFILE_SCOPE("MCTS::simulate");
     PenteGame::Player startPlayer = simGame.getCurrentPlayer();
     int depth = 0;
 
@@ -307,6 +311,7 @@ double MCTS::simulate(PenteGame& simGame) {
 }
 
 void MCTS::backpropagate(Node* node, double result) {
+    PROFILE_SCOPE("MCTS::backpropagate");
     Node* current = node;
     double currentResult = result;
 

@@ -1,5 +1,6 @@
 #include "PenteGame.hpp"
 #include "GameUtils.hpp"
+#include "Profiler.hpp"
 #include <random>
 #include <iostream>
 #include <sstream>
@@ -26,9 +27,10 @@ bool PenteGame::makeMove(const char* move) {
 }
 
 bool PenteGame::makeMove(int x, int y) {
-    if (!isLegalMove(x, y)) {
-        return false;
-    }
+    PROFILE_SCOPE("PenteGame::makeMove");
+    // if (!isLegalMove(x, y)) {
+    //     return false;
+    // }
     
     // Place stone
     if (currentPlayer == BLACK) {
@@ -66,8 +68,9 @@ bool PenteGame::makeMove(int x, int y) {
 }
 
 void PenteGame::undoMove() {
+    PROFILE_SCOPE("PenteGame::undoMove");
     if (moveHistory.empty()) {
-        return; 
+        return;
     }
     
     // 1. Pop the last move
@@ -270,6 +273,7 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
 }
 
 PenteGame::Player PenteGame::getWinner() const {
+    PROFILE_SCOPE("PenteGame::getWinner");
     // get last move from history
     Move lastMove;
     if (!moveHistory.empty()) {
@@ -291,6 +295,7 @@ PenteGame::Player PenteGame::getWinner() const {
 }
 
 bool PenteGame::isGameOver() const {
+    PROFILE_SCOPE("PenteGame::isGameOver");
     return getWinner() != NONE;
 }
 
