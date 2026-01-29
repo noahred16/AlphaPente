@@ -156,3 +156,103 @@ TEST_CASE("BitBoard dilate merges adjacent stones") {
     auto positions = dilated.getSetPositions();
     CHECK(positions.size() == 12);
 }
+
+TEST_CASE("BitBoard dilate2 single stone") {
+    BitBoard board(19);
+    board.setBit(5, 5);
+    BitBoard dilated = board.dilate2();
+
+    // Expected 5x5 pattern centered at (5,5) -> top-left at (3,3)
+    int pattern[5][5] = {
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+    };
+
+    int originX = 3, originY = 3;
+    for (int dy = 0; dy < 5; dy++) {
+        for (int dx = 0; dx < 5; dx++) {
+            bool expected = pattern[dy][dx] == 1;
+            CHECK(dilated.getBit(originX + dx, originY + dy) == expected);
+        }
+    }
+
+    // Verify nothing set outside the 5x5
+    CHECK(dilated.getBit(2, 2) == false);
+    CHECK(dilated.getBit(8, 8) == false);
+
+    CHECK(dilated.getSetPositions().size() == 25);
+}
+
+TEST_CASE("BitBoard dilate2 corner respects boundaries") {
+    BitBoard board(19);
+    board.setBit(0, 0);
+    BitBoard dilated = board.dilate2();
+
+    // Only the valid 3x3 portion should be set
+    int pattern[3][3] = {
+        {1, 1, 1},
+        {1, 1, 1},
+        {1, 1, 1},
+    };
+
+    for (int dy = 0; dy < 3; dy++) {
+        for (int dx = 0; dx < 3; dx++) {
+            CHECK(dilated.getBit(dx, dy) == (pattern[dy][dx] == 1));
+        }
+    }
+
+    CHECK(dilated.getSetPositions().size() == 9);
+}
+
+TEST_CASE("BitBoard dilate1_5 single stone") {
+    BitBoard board(19);
+    board.setBit(5, 5);
+    BitBoard dilated = board.dilate1_5();
+
+    // Cross/diamond pattern: 3x3 core + cardinal/diagonal distance-2
+    // Knight's move positions are NOT included
+    int pattern[5][5] = {
+        {1, 0, 1, 0, 1},  // corners + center column
+        {0, 1, 1, 1, 0},  // inner row
+        {1, 1, 1, 1, 1},  // center row (full)
+        {0, 1, 1, 1, 0},  // inner row
+        {1, 0, 1, 0, 1},  // corners + center column
+    };
+
+    int originX = 3, originY = 3;
+    for (int dy = 0; dy < 5; dy++) {
+        for (int dx = 0; dx < 5; dx++) {
+            bool expected = pattern[dy][dx] == 1;
+            CHECK(dilated.getBit(originX + dx, originY + dy) == expected);
+        }
+    }
+
+    // 9 (3x3 core) + 4 (cardinals) + 4 (diagonal corners) = 17
+    CHECK(dilated.getSetPositions().size() == 17);
+}
+
+TEST_CASE("BitBoard dilate1_5 corner respects boundaries") {
+    BitBoard board(19);
+    board.setBit(0, 0);
+    BitBoard dilated = board.dilate1_5();
+
+    // From dilate(): (0,0), (1,0), (0,1), (1,1)
+    // From distance-2: (2,0), (0,2), (2,2)
+    int pattern[3][3] = {
+        {1, 1, 1},  // (0,0), (1,0), (2,0)
+        {1, 1, 0},  // (0,1), (1,1), not (2,1)
+        {1, 0, 1},  // (0,2), not (1,2), (2,2)
+    };
+
+    for (int dy = 0; dy < 3; dy++) {
+        for (int dx = 0; dx < 3; dx++) {
+            CHECK(dilated.getBit(dx, dy) == (pattern[dy][dx] == 1));
+        }
+    }
+
+    // 4 from dilate + 3 distance-2 extensions = 7
+    CHECK(dilated.getSetPositions().size() == 7);
+}

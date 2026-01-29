@@ -66,6 +66,7 @@ private:
     int countConsecutive(const BitBoard& stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> legalMovesVector;
+    std::vector<Move> legalMovesVectorPrevious; // For undo
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> moveIndex;  // -1 = not present
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1);  // Max size_t value
 

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <stdexcept>
 
 PenteGame::PenteGame(const Config& config) : config_(config) {
     reset();
@@ -228,11 +229,46 @@ bool PenteGame::isLegalMove(int x, int y) const {
 
 std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
     PROFILE_SCOPE("PenteGame::getLegalMoves");
+
+
+    if (config_.tournamentRule && moveCount == 2) {
+        // std::vector<Move> moves = legalMovesVector;
+
+        // start empty
+        std::vector<Move> moves = legalMovesVector;
+
+        int center = BOARD_SIZE / 2;
+        moves.erase(std::remove_if(moves.begin(), moves.end(),
+                                   [center](const Move& m) {
+                                       int distX = std::abs(m.x - center);
+                                       int distY = std::abs(m.y - center);
+                                       return distX < 3 && distY < 3;
+                                   }),
+                    moves.end());
+        // if (moves.empty()) {
+            // TODO: maybe add others? 
+        std::vector<std::string> presetMoves = { 
+            "K7", "L7", "M7", "N7", 
+            "N8", "N9", "N10", "N11", "N12", "N13",
+            "O10", "M6", "K6"
+            };
+        std::vector<Move> presetMovesVec;
+        for (const auto& moveStr : presetMoves) {
+            auto [x, y] = GameUtils::parseMove(moveStr.c_str());
+            presetMovesVec.emplace_back(x, y);
+        }
+        // }
+        return presetMovesVec;
+    }
+
+
     // getPromisingMoves
     // return getPromisingMoves(2);
     // legalMovesVector = getPromisingMoves(2);
     // return legalMovesVector;
-    return getPromisingMoves(2);
+    return getPromisingMoves(1);
+    // return getPromisingMoves(15);
+    // return getPromisingMoves(2);
 
 
 
@@ -315,16 +351,16 @@ PenteGame::Player PenteGame::getWinner() const {
         lastMove = moveHistory.back().move;
     }
 
+    // Check for capture wins
+    if (blackCaptures >= config_.capturesToWin) return BLACK;
+    if (whiteCaptures >= config_.capturesToWin) return WHITE;
+
     // Check for five in a row
     if (currentPlayer == WHITE && checkFiveInRow(lastMove.x, lastMove.y)) {
         return BLACK;  // Black just moved and won
     } else if (currentPlayer == BLACK && checkFiveInRow(lastMove.x, lastMove.y)) {
         return WHITE;  // White just moved and won
     }
-    
-    // Check for capture wins
-    if (blackCaptures >= config_.capturesToWin) return BLACK;
-    if (whiteCaptures >= config_.capturesToWin) return WHITE;
     
     return NONE;
 }
@@ -374,20 +410,25 @@ int PenteGame::countConsecutive(const BitBoard& stones, int x, int y, int dx, in
 
 std::vector<PenteGame::Move> PenteGame::getPromisingMoves(int distance) const {
     PROFILE_SCOPE("PenteGame::getPromisingMoves");
-    std::vector<Move> moves;
+
+    if (distance != 1 && distance != 2 && distance != 15) {
+        throw std::invalid_argument("getPromisingMoves: distance must be 1, 2, or 15");
+    }
 
     BitBoard occupied = blackStones | whiteStones;
-    BitBoard nearby = occupied;
-
-    // Dilate by distance
-    for (int d = 0; d < distance; ++d) {
-        nearby = nearby.dilate();
+    BitBoard nearby;
+    if (distance == 1) {
+        nearby = occupied.dilate();
+    } else if (distance == 15) {
+        nearby = occupied.dilate1_5();
+    } else {
+        nearby = occupied.dilate2();
     }
-    
+
     // Remove occupied squares
     nearby = nearby & ~occupied;
 
-    return nearby.getSetPositions<Move>(); 
+    return nearby.getSetPositions<Move>();
 } 
 
 
