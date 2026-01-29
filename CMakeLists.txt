@@ -43,3 +43,10 @@ target_link_libraries(gomoku pente_core)
 # Executable: Keryo-Pente
 add_executable(keryopente apps/KeryoPente.cpp)
 target_link_libraries(keryopente pente_core)
+
+# Unit Tests
+add_executable(unit_tests
+    tests/BitBoardTests.cpp
+    tests/PenteGameTests.cpp
+)
+target_link_libraries(unit_tests pente_core)

@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
     config.explorationConstant = 1.414;
 
     MCTS mcts(config);
-    PenteGame::Move bestMove = mcts.search(game);
+    mcts.search(game);
     mcts.printStats();
     mcts.printBestMoves(10);
     mcts.printBranch(expectedMove, 10);

@@ -121,6 +121,24 @@ From the `build/` directory:
 ./test    # Testing AlphaPente
 ```
 
+## Unit Tests
+
+Run all unit tests:
+```bash
+cd build
+make unit_tests && ./unit_tests
+```
+
+Useful flags:
+```bash
+./unit_tests -s              # Show successful assertions (verbose)
+./unit_tests -tc="BitBoard*" # Run only tests matching pattern
+./unit_tests -sf="*PenteGame*" # Run only tests from matching files
+./unit_tests -ltc            # List all test cases
+```
+
+See `tests/README.md` for more details.
+
 ## PenteGame
 Pente is an amusing two-player strategy board game where the objective is to get five of your pieces in a row or capture five pairs of your opponent's pieces. The game is played on a 19x19 grid.
 

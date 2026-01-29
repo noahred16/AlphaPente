@@ -15,7 +15,12 @@ class MCTSArena {
 public:
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024; // 256 MB
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 1.5; // 384 MB
-    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 2; // 512 MB
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 2; // 512 MB
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 4; // 1 GB
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 8ull; // 2 GB (unsigned long long to avoid overflow)
+    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 12ull; // 3 GB (unsigned long long to avoid overflow)
+
+
 
     explicit MCTSArena(size_t size = DEFAULT_SIZE)
         : size_(size)
@@ -178,7 +183,6 @@ private:
     // Helper methods
     Node* selectBestChild(Node* node) const;
     double evaluateTerminalState(const PenteGame& game, int depth = 0) const;
-    PenteGame::Move selectSimulationMove(const PenteGame& game) const;
 
     // Arena allocation helpers
     Node* allocateNode();

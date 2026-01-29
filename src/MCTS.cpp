@@ -167,6 +167,9 @@ PenteGame::Move MCTS::getBestMove() const {
     if (!root_ || root_->childCount == 0) {
         std::cout << "Exiting: Unexpected state in getBestMove(). No children found.\n";
         std::cerr << "Error: No moves available to select as best move.\n";
+        // print the game board
+        // get a copy of the game
+        GameUtils::printBoard(PenteGame());
         exit(1);
     }
 
@@ -213,10 +216,7 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     // Traverse tree using UCB1 until we find a node that's not fully expanded and not solved
     while (node->isFullyExpanded() && node->childCount > 0 && node->solvedStatus == SolvedStatus::UNSOLVED) {
         node = selectBestChild(node);
-
-        if (node) {
-            game.makeMove(node->move.x, node->move.y);
-        }
+        game.makeMove(node->move.x, node->move.y);
     }
 
     return node;
@@ -287,7 +287,10 @@ double MCTS::simulate(PenteGame& simGame) {
 
     // Play out game randomly until terminal or max depth
     while (!simGame.isGameOver() && depth < config_.maxSimulationDepth) {
-        PenteGame::Move move = selectSimulationMove(simGame);
+        // select random move from get LegalMoves. 
+        // PenteGame::Move 
+        // get 
+        PenteGame::Move move = simGame.getRandomMove(simGame.getLegalMoves());
         simGame.makeMove(move.x, move.y);
         depth++;
     }
@@ -380,9 +383,6 @@ double MCTS::evaluateTerminalState(const PenteGame& game, int depth) const {
     return 1.0; // Placeholder: always return win for testing
 }
 
-PenteGame::Move MCTS::selectSimulationMove(const PenteGame& game) const {
-    return game.getRandomMove();
-}
 
 // ============================================================================
 // Tree Management

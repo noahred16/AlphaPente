@@ -35,9 +35,10 @@ public:
     };
     
     struct Move {
-        int16_t x, y;  // 4 bytes total, sufficient for 19x19
-        Move() : x(-1), y(-1) {}
-        Move(int x_, int y_) : x(static_cast<int16_t>(x_)), y(static_cast<int16_t>(y_)) {}
+        uint8_t x, y;  // 2 bytes total, sufficient for 19x19
+        static constexpr uint8_t INVALID = 255;
+        Move() : x(INVALID), y(INVALID) {}
+        Move(int x_, int y_) : x(static_cast<uint8_t>(x_)), y(static_cast<uint8_t>(y_)) {}
     };
 
     struct MoveInfo {
@@ -64,6 +65,40 @@ private:
     MoveInfo checkAndCapture(int x, int y);
     int countConsecutive(const BitBoard& stones, int x, int y, int dx, int dy) const;
 
+    std::vector<Move> legalMovesVector;
+    std::array<size_t, BOARD_SIZE * BOARD_SIZE> moveIndex;  // -1 = not present
+    static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1);  // Max size_t value
+
+    size_t encodePos(int x, int y) const { 
+        return static_cast<size_t>(y * BOARD_SIZE + x); 
+    }
+
+    // Add a legal move - O(1)
+    void setLegalMove(int x, int y) {
+        size_t pos = encodePos(x, y);
+        if (moveIndex[pos] != INVALID_INDEX) return;
+        
+        legalMovesVector.emplace_back(x, y);
+        moveIndex[pos] = legalMovesVector.size() - 1;
+    }
+    
+    // Remove a legal move - O(1)
+    void clearLegalMove(int x, int y) {
+        size_t pos = encodePos(x, y);
+        size_t idx = moveIndex[pos];
+        
+        if (idx == INVALID_INDEX) return;
+        
+        if (idx != legalMovesVector.size() - 1) {  // No warning!
+            Move lastMove = legalMovesVector.back();
+            legalMovesVector[idx] = lastMove;
+            moveIndex[encodePos(lastMove.x, lastMove.y)] = idx;
+        }
+        
+        legalMovesVector.pop_back();
+        moveIndex[pos] = INVALID_INDEX;
+    }
+
 public:
     PenteGame(const Config& config = Config::pente());
     
@@ -79,6 +114,7 @@ public:
     bool isGameOver() const;
     bool isLegalMove(int x, int y) const;
     std::vector<Move> getLegalMoves() const;
+    std::vector<Move> getPromisingMoves(int distance) const;
     
     // State access
     int getBlackCaptures() const { return blackCaptures; }
@@ -90,7 +126,7 @@ public:
     bool canUndo() const { return !moveHistory.empty(); }
     
     // For MCTS
-    Move getRandomMove() const;
+    Move getRandomMove(const std::vector<Move>& moves) const;
     PenteGame clone() const;
     void syncFrom(const PenteGame& other);
     uint64_t getHash() const;
