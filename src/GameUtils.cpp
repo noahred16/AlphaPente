@@ -98,9 +98,21 @@ void GameUtils::printGameState(const PenteGame& game) {
 
     if (config.capturesEnabled) {
         std::cout << game.getBlackCaptures() << "/" << config.capturesToWin << " Black \u25CB, "
-                  << game.getWhiteCaptures() << "/" << config.capturesToWin << " White \u25CF\n";
+                  << game.getWhiteCaptures() << "/" << config.capturesToWin << " White \u25CF, ";
     }
 
     std::cout << "Current player: "
               << (game.getCurrentPlayer() == PenteGame::BLACK ? "Black" : "White") << "\n";
+}
+
+std::string GameUtils::formatWithCommas(int value) {
+    std::string num = std::to_string(value);
+    std::string result;
+    int count = 0;
+    for (int i = num.length() - 1; i >= 0; --i) {
+        if (count > 0 && count % 3 == 0) result = ',' + result;
+        result = num[i] + result;
+        ++count;
+    }
+    return result;
 }

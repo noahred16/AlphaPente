@@ -53,6 +53,7 @@ bool PenteGame::makeMove(const char* move) {
 
 bool PenteGame::makeMove(int x, int y) {
     PROFILE_SCOPE("PenteGame::makeMove");
+
     // Place stone
     if (currentPlayer == BLACK) {
         blackStones.setBit(x, y);
@@ -69,74 +70,101 @@ bool PenteGame::makeMove(int x, int y) {
             whiteCaptures += checkAndCapture(x, y);
         }
     }
-    
-    // Update state
+
     lastMove = Move(x, y);
     moveCount++;
     currentPlayer = (currentPlayer == BLACK) ? WHITE : BLACK;
-    
+
     return true;
 }
 
 int PenteGame::checkAndCapture(int x, int y) {
     int totalCapturedStones = 0;
-    
+
     BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
     BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
-    
-    static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
+
+    static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1},
                                    {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
-    
-    for (int i = 0; i < 8; i++) {
-        int dx = dirs[i][0];
-        int dy = dirs[i][1];
 
-        // 1. Check for Keryo-style capture of 3 (X O O O X)
-        if (config_.keryoRules) {
-            int x4 = x + dx * 4;
-            int y4 = y + dy * 4;
-            
+    // Hoist config check outside loop for better branch prediction
+    if (config_.keryoRules) {
+        // Keryo path: check 3-stone captures first, then fall back to 2-stone
+        for (int i = 0; i < 8; i++) {
+            int dx = dirs[i][0];
+            int dy = dirs[i][1];
+
+            // Pre-compute all offsets once per direction
+            int x1 = x + dx,     y1 = y + dy;
+            int x2 = x + dx * 2, y2 = y + dy * 2;
+            int x3 = x + dx * 3, y3 = y + dy * 3;
+            int x4 = x + dx * 4, y4 = y + dy * 4;
+
+            // 1. Try Keryo-style capture of 3 (X O O O X)
             if (x4 >= 0 && x4 < BOARD_SIZE && y4 >= 0 && y4 < BOARD_SIZE) {
-                if (oppStones.getBit(x + dx, y + dy) && 
-                    oppStones.getBit(x + dx * 2, y + dy * 2) && 
-                    oppStones.getBit(x + dx * 3, y + dy * 3) && 
-                    myStones.getBit(x4, y4)) 
+                // Use unchecked access - bounds already validated for furthest point
+                if (oppStones.getBitUnchecked(x1, y1) &&
+                    oppStones.getBitUnchecked(x2, y2) &&
+                    oppStones.getBitUnchecked(x3, y3) &&
+                    myStones.getBitUnchecked(x4, y4))
                 {
-                    // Capture 3!
-                    oppStones.clearBit(x + dx, y + dy);
-                    oppStones.clearBit(x + dx * 2, y + dy * 2);
-                    oppStones.clearBit(x + dx * 3, y + dy * 3);
+                    oppStones.clearBitUnchecked(x1, y1);
+                    oppStones.clearBitUnchecked(x2, y2);
+                    oppStones.clearBitUnchecked(x3, y3);
 
-                    setLegalMove(x + dx, y + dy);
-                    setLegalMove(x + dx * 2, y + dy * 2);
-                    setLegalMove(x + dx * 3, y + dy * 3);
-                    
+                    setLegalMove(x1, y1);
+                    setLegalMove(x2, y2);
+                    setLegalMove(x3, y3);
+
                     totalCapturedStones += 3;
-                    continue; // Move to next direction
+                    continue;
+                }
+            }
+
+            // 2. Fall back to standard capture of 2 (X O O X)
+            if (x3 >= 0 && x3 < BOARD_SIZE && y3 >= 0 && y3 < BOARD_SIZE) {
+                if (oppStones.getBitUnchecked(x1, y1) &&
+                    oppStones.getBitUnchecked(x2, y2) &&
+                    myStones.getBitUnchecked(x3, y3))
+                {
+                    oppStones.clearBitUnchecked(x1, y1);
+                    oppStones.clearBitUnchecked(x2, y2);
+
+                    setLegalMove(x1, y1);
+                    setLegalMove(x2, y2);
+
+                    totalCapturedStones += 2;
                 }
             }
         }
+    } else {
+        // Standard path: only 2-stone captures
+        for (int i = 0; i < 8; i++) {
+            int dx = dirs[i][0];
+            int dy = dirs[i][1];
 
-        // 2. Check for Standard capture of 2 (X O O X)
-        int x3 = x + dx * 3;
-        int y3 = y + dy * 3;
-        if (x3 >= 0 && x3 < BOARD_SIZE && y3 >= 0 && y3 < BOARD_SIZE) {
-            if (oppStones.getBit(x + dx, y + dy) && 
-                oppStones.getBit(x + dx * 2, y + dy * 2) && 
-                myStones.getBit(x3, y3)) 
-            {
-                // Capture 2!
-                oppStones.clearBit(x + dx, y + dy);
-                oppStones.clearBit(x + dx * 2, y + dy * 2);
+            // Pre-compute offsets
+            int x1 = x + dx,     y1 = y + dy;
+            int x2 = x + dx * 2, y2 = y + dy * 2;
+            int x3 = x + dx * 3, y3 = y + dy * 3;
 
-                setLegalMove(x + dx, y + dy);
-                setLegalMove(x + dx * 2, y + dy * 2);
-                
-                totalCapturedStones += 2;
+            if (x3 >= 0 && x3 < BOARD_SIZE && y3 >= 0 && y3 < BOARD_SIZE) {
+                if (oppStones.getBitUnchecked(x1, y1) &&
+                    oppStones.getBitUnchecked(x2, y2) &&
+                    myStones.getBitUnchecked(x3, y3))
+                {
+                    oppStones.clearBitUnchecked(x1, y1);
+                    oppStones.clearBitUnchecked(x2, y2);
+
+                    setLegalMove(x1, y1);
+                    setLegalMove(x2, y2);
+
+                    totalCapturedStones += 2;
+                }
             }
         }
     }
-    
+
     return totalCapturedStones;
 }
 

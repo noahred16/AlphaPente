@@ -102,23 +102,27 @@ private:
         legalMovesVector.pop_back();
         moveIndex[pos] = INVALID_INDEX;
 
-        // dilate legal moves around the cleared position
-        // use a 3x3 square around (x, y)
-        // or maybe a 9x9 square? but only do the straight directions
-        // could use an array for that
-        // TODO replcae hard coded true with a hueuristic config option
+        // Dilate legal moves around the cleared position (3x3 neighborhood)
+        // TODO: replace hard coded true with a heuristic config option
         if (true) {
-            int dirs[8][2] = {
+            static const int dirs[8][2] = {
                 {-1, -1}, {0, -1}, {1, -1},
                 {-1,  0},          {1,  0},
                 {-1,  1}, {0,  1}, {1,  1}
             };
             for (int i = 0; i < 8; i++) {
+            // static const int dirs[11][2] = {
+            //     {-1, -1}, {0, -1}, {1, -1},
+            //     {-1,  0},          {1,  0},
+            //     {-1,  1}, {0,  1}, {1,  1},
+            //     {2, 2}, {0, 2}, {-2, 2} // x o x o x top row 2 up
+            // };
+            // for (int i = 0; i < 11; i++) {
                 int nx = x + dirs[i][0];
                 int ny = y + dirs[i][1];
                 if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
-                    // check if position is empty
-                    if (!blackStones.getBit(nx, ny) && !whiteStones.getBit(nx, ny)) {
+                    // Use unchecked access - bounds already validated
+                    if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
                         setLegalMove(nx, ny);
                     }
                 }

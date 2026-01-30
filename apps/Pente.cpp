@@ -20,8 +20,11 @@ int main(int argc, char* argv[]) {
     // Parse the game data string using GameUtils
     std::vector<std::string> moves = GameUtils::parseGameString(gameDataStr);
 
-    // debug move array
-    std::cout << "Parsed moves:\n";
+    // Show iterations with comma formatting
+    std::cout << "Iterations: " << GameUtils::formatWithCommas(mctsIterations) << std::endl;
+
+    // Show parsed moves on same line
+    std::cout << "Parsed moves: ";
     for (const auto& moveStr : moves) {
         std::cout << moveStr << " ";
     }

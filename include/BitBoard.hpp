@@ -31,11 +31,27 @@ public:
     static void initMasks();
     void applyMask(const uint64_t maskArray[NUM_SEGMENTS]);
     
-    // Core operations
+    // Core operations (with bounds checking)
     void setBit(int x, int y);
     void clearBit(int x, int y);
     bool getBit(int x, int y) const;
     void clear();
+
+    // Unchecked operations (caller must guarantee bounds)
+    inline bool getBitUnchecked(int x, int y) const {
+        int index = y * boardSize + x;
+        return (board[index >> 6] >> (index & 63)) & 1;
+    }
+
+    inline void setBitUnchecked(int x, int y) {
+        int index = y * boardSize + x;
+        board[index >> 6] |= (1ULL << (index & 63));
+    }
+
+    inline void clearBitUnchecked(int x, int y) {
+        int index = y * boardSize + x;
+        board[index >> 6] &= ~(1ULL << (index & 63));
+    }
     
     // Just keep OR for finding occupied squares
     BitBoard& operator|=(const BitBoard& other);

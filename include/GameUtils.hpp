@@ -20,6 +20,9 @@ public:
     // Board printing
     static void printBoard(const PenteGame& game);
     static void printGameState(const PenteGame& game);
+
+    // Number formatting
+    static std::string formatWithCommas(int value);
 };
 
 #endif // GAMEUTILS_HPP
