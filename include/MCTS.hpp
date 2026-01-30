@@ -177,7 +177,7 @@ private:
     // MCTS phases
     Node* select(Node* node, PenteGame& game);
     Node* expand(Node* node, PenteGame& game);
-    double simulate(PenteGame& game);
+    double simulate(const PenteGame& gameState);
     void backpropagate(Node* node, double result);
 
     // Helper methods

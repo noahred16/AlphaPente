@@ -37,11 +37,11 @@ int main(int argc, char* argv[]) {
     config.maxIterations = 10000;
     config.explorationConstant = 1.414;
 
-    MCTS mcts(config);
-    mcts.search(game);
-    mcts.printStats();
-    mcts.printBestMoves(10);
-    mcts.printBranch(expectedMove, 10);
+    // MCTS mcts(config);
+    // mcts.search(game);
+    // mcts.printStats();
+    // mcts.printBestMoves(10);
+    // mcts.printBranch(expectedMove, 10);
 
     return 0;
 }
@@ -71,9 +71,10 @@ void setupOneSidedFourThreat(PenteGame& game) {
     game.makeMove("E5"); // White
     game.makeMove("K8"); // Black
     game.makeMove("E15"); // White
+    // game.undoMove(); // undo E15
 
-    game.makeMove("K7"); // Black
-    game.makeMove("P15"); // White if white doesnt cover black wins
+    // game.makeMove("K7"); // Black
+    // game.makeMove("P15"); // White if white doesnt cover black wins
     // L7 is winning move for black
 }
 

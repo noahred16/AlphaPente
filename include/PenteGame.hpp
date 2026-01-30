@@ -41,12 +41,12 @@ public:
         Move(int x_, int y_) : x(static_cast<uint8_t>(x_)), y(static_cast<uint8_t>(y_)) {}
     };
 
-    struct MoveInfo {
-        Move move;
-        uint16_t captureMask; // 16 bits: 8 directions * 2 bits each
-        Player player;
-        uint8_t totalCapturedStones; // Helpful for quick score updates
-    };
+    // struct MoveInfo {
+    //     Move move;
+    //     uint16_t captureMask; // 16 bits: 8 directions * 2 bits each
+    //     Player player;
+    //     uint8_t totalCapturedStones; // Helpful for quick score updates
+    // };
 
 private:
     Config config_;
@@ -58,15 +58,16 @@ private:
     int moveCount;
 
     // Move history stack for undo support
-    std::vector<MoveInfo> moveHistory;
+    // std::vector<MoveInfo> moveHistory;
+
+    Move lastMove;
 
     // Helper functions
     bool checkFiveInRow(int x, int y) const;
-    MoveInfo checkAndCapture(int x, int y);
+    int checkAndCapture(int x, int y);
     int countConsecutive(const BitBoard& stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> legalMovesVector;
-    std::vector<Move> legalMovesVectorPrevious; // For undo
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> moveIndex;  // -1 = not present
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1);  // Max size_t value
 
@@ -75,6 +76,7 @@ private:
     }
 
     // Add a legal move - O(1)
+    // Happens during captures. Both involve pieces being taken off the board, therefore freeing up legal moves.
     void setLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
         if (moveIndex[pos] != INVALID_INDEX) return;
@@ -84,6 +86,7 @@ private:
     }
     
     // Remove a legal move - O(1)
+    // Happens during makeMove. involve pieces being placed on the board, therefore removing legal moves.
     void clearLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
         size_t idx = moveIndex[pos];
@@ -98,6 +101,29 @@ private:
         
         legalMovesVector.pop_back();
         moveIndex[pos] = INVALID_INDEX;
+
+        // dilate legal moves around the cleared position
+        // use a 3x3 square around (x, y)
+        // or maybe a 9x9 square? but only do the straight directions
+        // could use an array for that
+        // TODO replcae hard coded true with a hueuristic config option
+        if (true) {
+            int dirs[8][2] = {
+                {-1, -1}, {0, -1}, {1, -1},
+                {-1,  0},          {1,  0},
+                {-1,  1}, {0,  1}, {1,  1}
+            };
+            for (int i = 0; i < 8; i++) {
+                int nx = x + dirs[i][0];
+                int ny = y + dirs[i][1];
+                if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
+                    // check if position is empty
+                    if (!blackStones.getBit(nx, ny) && !whiteStones.getBit(nx, ny)) {
+                        setLegalMove(nx, ny);
+                    }
+                }
+            }
+        }
     }
 
 public:
@@ -107,7 +133,7 @@ public:
     void reset();
     bool makeMove(const char* move); // Overloaded to accept string moves like "J11"
     bool makeMove(int x, int y);  // Returns false if illegal
-    void undoMove();               // Undo last move using stack
+    // void undoMove();               // Undo last move using stack
     
     // Game state queries
     Player getCurrentPlayer() const { return currentPlayer; }
@@ -120,14 +146,15 @@ public:
     // State access
     int getBlackCaptures() const { return blackCaptures; }
     int getWhiteCaptures() const { return whiteCaptures; }
-    Move getLastMove() const { 
-        return moveHistory.empty() ? Move() : moveHistory.back().move; 
-    }
+    // Move getLastMove() const { 
+    //     return moveHistory.empty() ? Move() : moveHistory.back().move; 
+    // }
     int getMoveCount() const { return moveCount; }
-    bool canUndo() const { return !moveHistory.empty(); }
+    // bool canUndo() const { return !moveHistory.empty(); }
     
     // For MCTS
     Move getRandomMove(const std::vector<Move>& moves) const;
+    Move getRandomLegalMove() const;  // Zero-copy version for simulations
     PenteGame clone() const;
     void syncFrom(const PenteGame& other);
     uint64_t getHash() const;

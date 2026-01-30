@@ -280,24 +280,25 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     return child;
 }
 
-double MCTS::simulate(PenteGame& simGame) {
+double MCTS::simulate(const PenteGame& gameState) {
     PROFILE_SCOPE("MCTS::simulate");
+
+    // Work on a copy - discarded at end of function
+    PenteGame simGame = gameState;
+
     PenteGame::Player startPlayer = simGame.getCurrentPlayer();
+    PenteGame::Player winner = PenteGame::NONE;
     int depth = 0;
 
     // Play out game randomly until terminal or max depth
-    while (!simGame.isGameOver() && depth < config_.maxSimulationDepth) {
-        // select random move from get LegalMoves. 
-        // PenteGame::Move 
-        // get 
-        PenteGame::Move move = simGame.getRandomMove(simGame.getLegalMoves());
+    while ((winner = simGame.getWinner()) == PenteGame::NONE && depth < config_.maxSimulationDepth) {
+        PenteGame::Move move = simGame.getRandomLegalMove();
         simGame.makeMove(move.x, move.y);
         depth++;
     }
 
     // Evaluate result
     double result = evaluateTerminalState(simGame, depth);
-    PenteGame::Player winner = simGame.getWinner();
 
     if (winner != PenteGame::NONE) {
         result *= (winner == startPlayer) ? -1.0 : 1.0;
@@ -305,11 +306,7 @@ double MCTS::simulate(PenteGame& simGame) {
         result = 0.0;
     }
 
-    // Roll the board back to original state
-    for (int i = 0; i < depth; i++) {
-        simGame.undoMove();
-    }
-
+    // Copy is discarded when function returns - no undo needed
     return result;
 }
 
@@ -380,6 +377,7 @@ MCTS::Node* MCTS::selectBestChild(Node* node) const {
 }
 
 double MCTS::evaluateTerminalState(const PenteGame& game, int depth) const {
+    PROFILE_SCOPE("MCTS::evaluateTerminalState");
     return 1.0; // Placeholder: always return win for testing
 }
 

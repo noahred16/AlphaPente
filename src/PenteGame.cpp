@@ -18,32 +18,41 @@ void PenteGame::reset() {
     legalMovesVector.clear();
     legalMovesVector.reserve(361);
     
-    for (int y = 0; y < BOARD_SIZE; y++) {
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            legalMovesVector.emplace_back(x, y);
-            moveIndex[y * BOARD_SIZE + x] = legalMovesVector.size() - 1;
+    // TODO replace with config option for hueuristic
+    if (true) { // TODO replace with config option for faster but less accurate MCTS
+        moveIndex.fill(INVALID_INDEX);
+    } else {
+        // add all positions as legal moves
+        for (int y = 0; y < BOARD_SIZE; y++) {
+            for (int x = 0; x < BOARD_SIZE; x++) {
+                legalMovesVector.emplace_back(x, y);
+                moveIndex[encodePos(x, y)] = legalMovesVector.size() - 1;
+            }
         }
     }
+
+    // only the center move is legal at the start
+    int center = BOARD_SIZE / 2;
+    setLegalMove(center, center);
 
     currentPlayer = BLACK;
     blackCaptures = 0;
     whiteCaptures = 0;
     moveCount = 0;
-    moveHistory.clear();
-    moveHistory.reserve(361); // Pre-allocate for performance
+    lastMove = Move();
 }
 
 bool PenteGame::makeMove(const char* move) {
     auto [x, y] = GameUtils::parseMove(move);
+    if (blackStones.getBit(x, y) || whiteStones.getBit(x, y)) {
+        return false;
+    }
+    setLegalMove(x, y);
     return makeMove(x, y);
 }
 
 bool PenteGame::makeMove(int x, int y) {
     PROFILE_SCOPE("PenteGame::makeMove");
-    // if (!isLegalMove(x, y)) {
-    //     return false;
-    // }
-    
     // Place stone
     if (currentPlayer == BLACK) {
         blackStones.setBit(x, y);
@@ -53,97 +62,24 @@ bool PenteGame::makeMove(int x, int y) {
     clearLegalMove(x, y);
 
     // Check and perform captures
-    MoveInfo info;
     if (config_.capturesEnabled) {
-        info = checkAndCapture(x, y);
-    } else {
-        info.move = Move(x, y);
-        info.player = currentPlayer;
-        info.totalCapturedStones = 0;
-        info.captureMask = 0;
+        if (currentPlayer == BLACK) {
+            blackCaptures += checkAndCapture(x, y);
+        } else {
+            whiteCaptures += checkAndCapture(x, y);
+        }
     }
-    
-    // Update capture count
-    if (currentPlayer == BLACK) {
-        blackCaptures += info.totalCapturedStones;
-    } else {
-        whiteCaptures += info.totalCapturedStones;
-    }
-    
-    // Push to history BEFORE changing current player
-    moveHistory.push_back(info);
     
     // Update state
+    lastMove = Move(x, y);
     moveCount++;
     currentPlayer = (currentPlayer == BLACK) ? WHITE : BLACK;
     
     return true;
 }
 
-void PenteGame::undoMove() {
-    PROFILE_SCOPE("PenteGame::undoMove");
-    if (moveHistory.empty()) {
-        return;
-    }
-    
-    // 1. Pop the last move
-    MoveInfo lastMove = moveHistory.back();
-    
-    // 2. Revert the current player to the one who made the move
-    currentPlayer = lastMove.player;
-    
-    // 3. Remove the stone placed during this move
-    if (currentPlayer == BLACK) {
-        blackStones.clearBit(lastMove.move.x, lastMove.move.y);
-        blackCaptures -= lastMove.totalCapturedStones;
-    } else {
-        whiteStones.clearBit(lastMove.move.x, lastMove.move.y);
-        whiteCaptures -= lastMove.totalCapturedStones;
-    }
-    setLegalMove(lastMove.move.x, lastMove.move.y);
-    
-    // 4. Restore captured stones using the 2-bit mask
-    if (lastMove.totalCapturedStones > 0) {
-        BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
-        
-        static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1}, 
-                                       {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
-        
-        for (int i = 0; i < 8; i++) {
-            // Extract the 2 bits for direction i:
-            // 01 (1) = Pair capture, 10 (2) = Triplet capture
-            int captureType = (lastMove.captureMask >> (i * 2)) & 0x03; // lol bitmasking magic
-            
-            if (captureType > 0) {
-                int dx = dirs[i][0];
-                int dy = dirs[i][1];
-                
-                // Restore 2 stones (Standard)
-                oppStones.setBit(lastMove.move.x + dx, lastMove.move.y + dy);
-                oppStones.setBit(lastMove.move.x + dx * 2, lastMove.move.y + dy * 2);
-                clearLegalMove(lastMove.move.x + dx, lastMove.move.y + dy);
-                clearLegalMove(lastMove.move.x + dx * 2, lastMove.move.y + dy * 2);
-                
-                // If it was a Keryo capture, restore the 3rd stone
-                if (captureType == 2) {
-                    oppStones.setBit(lastMove.move.x + dx * 3, lastMove.move.y + dy * 3);
-                    clearLegalMove(lastMove.move.x + dx * 3, lastMove.move.y + dy * 3);
-                }
-            }
-        }
-    }
-    
-    // remove from history
-    moveHistory.pop_back();
-    moveCount--;
-}
-
-PenteGame::MoveInfo PenteGame::checkAndCapture(int x, int y) {
-    MoveInfo info;
-    info.move = Move(x, y);
-    info.player = currentPlayer;
-    info.totalCapturedStones = 0;
-    info.captureMask = 0;
+int PenteGame::checkAndCapture(int x, int y) {
+    int totalCapturedStones = 0;
     
     BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
     BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
@@ -175,9 +111,7 @@ PenteGame::MoveInfo PenteGame::checkAndCapture(int x, int y) {
                     setLegalMove(x + dx * 2, y + dy * 2);
                     setLegalMove(x + dx * 3, y + dy * 3);
                     
-                    info.totalCapturedStones += 3;
-                    // Set bits to 10 (binary) for this direction
-                    info.captureMask |= (2 << (i * 2));
+                    totalCapturedStones += 3;
                     continue; // Move to next direction
                 }
             }
@@ -198,14 +132,12 @@ PenteGame::MoveInfo PenteGame::checkAndCapture(int x, int y) {
                 setLegalMove(x + dx, y + dy);
                 setLegalMove(x + dx * 2, y + dy * 2);
                 
-                info.totalCapturedStones += 2;
-                // Set bits to 01 (binary) for this direction
-                info.captureMask |= (1 << (i * 2));
+                totalCapturedStones += 2;
             }
         }
     }
     
-    return info;
+    return totalCapturedStones;
 }
 
 
@@ -232,8 +164,6 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
 
 
     if (config_.tournamentRule && moveCount == 2) {
-        // std::vector<Move> moves = legalMovesVector;
-
         // start empty
         std::vector<Move> moves = legalMovesVector;
 
@@ -246,7 +176,7 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
                                    }),
                     moves.end());
         // if (moves.empty()) {
-            // TODO: maybe add others? 
+        // TODO: maybe add others? 
         std::vector<std::string> presetMoves = { 
             "K7", "L7", "M7", "N7", 
             "N8", "N9", "N10", "N11", "N12", "N13",
@@ -261,6 +191,7 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
         return presetMovesVec;
     }
 
+    return legalMovesVector;
 
     // getPromisingMoves
     // return getPromisingMoves(2);
@@ -346,10 +277,12 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
 PenteGame::Player PenteGame::getWinner() const {
     PROFILE_SCOPE("PenteGame::getWinner");
     // get last move from history
-    Move lastMove;
-    if (!moveHistory.empty()) {
-        lastMove = moveHistory.back().move;
-    }
+    // Move lastMove;
+    // if (!moveHistory.empty()) {
+    //     lastMove = moveHistory.back().move;
+    // }
+    // Move lastMove = lastMove.move;
+    // lastMove
 
     // Check for capture wins
     if (blackCaptures >= config_.capturesToWin) return BLACK;
@@ -445,6 +378,26 @@ PenteGame::Move PenteGame::getRandomMove(const std::vector<Move>& moves) const {
     return moves[dis(gen)];
 }
 
+PenteGame::Move PenteGame::getRandomLegalMove() const {
+    PROFILE_SCOPE("PenteGame::getRandomLegalMove");
+
+    // Handle tournament rule (3rd move restriction) - rare case, ok to copy
+    if (config_.tournamentRule && moveCount == 2) {
+        return getRandomMove(getLegalMoves());
+    }
+
+    // Fast path: pick directly from pre-computed vector (no copy)
+    if (legalMovesVector.empty()) {
+        return Move();
+    }
+
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<size_t> dis(0, legalMovesVector.size() - 1);
+
+    return legalMovesVector[dis(gen)];
+}
+
 PenteGame PenteGame::clone() const {
     return *this;  // Default copy constructor handles everything
 }
@@ -459,7 +412,8 @@ void PenteGame::syncFrom(const PenteGame& other) {
     blackCaptures = other.blackCaptures;
     whiteCaptures = other.whiteCaptures;
     moveCount = other.moveCount;
-    moveHistory = other.moveHistory;
+    // moveHistory = other.moveHistory;
+    lastMove = other.lastMove;
 }
 
 uint64_t PenteGame::getHash() const {

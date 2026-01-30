@@ -22,23 +22,6 @@ TEST_CASE("PenteGame make move") {
     CHECK(game.getStoneAt(9, 9) == PenteGame::BLACK);
 }
 
-TEST_CASE("PenteGame undo move") {
-    PenteGame game;
-    game.reset();
-
-    game.makeMove("K10");
-    game.makeMove("L10");
-
-    CHECK(game.getMoveCount() == 2);
-    CHECK(game.canUndo() == true);
-
-    game.undoMove();
-
-    CHECK(game.getMoveCount() == 1);
-    CHECK(game.getCurrentPlayer() == PenteGame::WHITE);
-    CHECK(game.getStoneAt(10, 9) == PenteGame::NONE);
-}
-
 TEST_CASE("PenteGame config presets") {
     PenteGame pente(PenteGame::Config::pente());
     CHECK(pente.getConfig().capturesToWin == 10);
