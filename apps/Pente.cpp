@@ -44,7 +44,8 @@ int main(int argc, char* argv[]) {
     // MCTS configuration
     MCTS::Config config;
     config.maxIterations = mctsIterations;
-    config.explorationConstant = 1.414;
+    // config.explorationConstant = 1.414;
+    config.explorationConstant = 1.7;
 
     MCTS mcts(config);
     auto start = std::chrono::high_resolution_clock::now();

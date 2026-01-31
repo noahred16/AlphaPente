@@ -115,9 +115,12 @@ private:
             //     {-1, -1}, {0, -1}, {1, -1},
             //     {-1,  0},          {1,  0},
             //     {-1,  1}, {0,  1}, {1,  1},
-            //     {2, 2}, {0, 2}, {-2, 2} // x o x o x top row 2 up
+            //     // {2, 2}, {0, 2}, {-2, 2} // x o x o x top row 2 up
+            //     // {-1, -2}, {0, -2}, {-2, -2} // x x x o o bottom row 2 down
+            //     {2, -2}, {0, -2}, {-2, -2} // x o x o x bottom row 2 down
             // };
             // for (int i = 0; i < 11; i++) {
+
                 int nx = x + dirs[i][0];
                 int ny = y + dirs[i][1];
                 if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
