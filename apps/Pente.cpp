@@ -1,4 +1,5 @@
 #include "MCTS.hpp"
+#include "Evaluator.hpp"
 #include "PenteGame.hpp"
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
@@ -46,6 +47,12 @@ int main(int argc, char* argv[]) {
     config.maxIterations = mctsIterations;
     // config.explorationConstant = 1.414;
     config.explorationConstant = 1.7;
+    config.searchMode = MCTS::SearchMode::PUCT;
+    // UniformEvaluator uniformEvaluator;
+    // config.evaluator = &uniformEvaluator;
+    HeuristicEvaluator heuristicEvaluator;
+    config.evaluator = &heuristicEvaluator;
+    
 
     MCTS mcts(config);
     auto start = std::chrono::high_resolution_clock::now();
@@ -57,6 +64,10 @@ int main(int argc, char* argv[]) {
     std::cout << "Search took: " << minutes << " min " << seconds << " sec." << std::endl;
     mcts.printStats();
     mcts.printBestMoves(15);
+    // O12 expected move
+    const char* expectedMove = "O12";
+    mcts.printBranch(expectedMove, 20);
+
 
     // make move
     PenteGame::Move bestMove = mcts.getBestMove();

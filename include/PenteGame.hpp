@@ -170,6 +170,9 @@ public:
     void print() const;
     Player getStoneAt(int x, int y) const;
 
+    // Heuristic evaluation
+    float evaluateMove(Move move) const;
+
     // Config access
     const Config& getConfig() const { return config_; }
 };

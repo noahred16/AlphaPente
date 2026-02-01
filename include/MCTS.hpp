@@ -2,6 +2,7 @@
 #define MCTS_HPP
 
 #include "PenteGame.hpp"
+#include "Evaluator.hpp"
 #include <cmath>
 #include <random>
 #include <cstdlib>
@@ -102,6 +103,7 @@ public:
         SOLVED_WIN,    // Proven win for the player who made the move
         SOLVED_LOSS    // Proven loss for the player who made the move
     };
+    enum class SearchMode { UCB1, PUCT };
 
     // Configuration parameters
     struct Config {
@@ -109,6 +111,9 @@ public:
         int maxIterations = 10000;     // Number of MCTS iterations
         int maxSimulationDepth = 200;  // Max playout depth
         size_t arenaSize = MCTSArena::DEFAULT_SIZE; // Arena size in bytes
+        
+        SearchMode searchMode = SearchMode::UCB1;
+        Evaluator* evaluator = nullptr; // For PUCT priors and value evaluation
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
@@ -137,6 +142,7 @@ public:
         int32_t visits = 0;
         int32_t wins = 0;
         double totalValue = 0.0;
+        float prior = 1.0;
 
         // Pointers (24 bytes)
         Node* parent = nullptr;
@@ -148,6 +154,7 @@ public:
         bool isFullyExpanded() const { return untriedMoveCount == 0; }
         bool isTerminal() const { return childCount == 0 && untriedMoveCount == 0; }
         double getUCB1Value(double explorationFactor) const;
+        double getPUCTValue(double explorationFactor, int parentVisits) const;
     };
 
     // Constructor
@@ -190,6 +197,7 @@ private:
 
     // Helper methods
     Node* selectBestChild(Node* node) const;
+    void updateChildrenPriors(Node* node, const PenteGame& game);
     double evaluateTerminalState(const PenteGame& game, int depth = 0) const;
 
     // Arena allocation helpers

@@ -18,6 +18,7 @@ add_library(pente_core
     src/PenteGame.cpp
     src/MCTS.cpp
     src/GameUtils.cpp
+    src/Evaluator.cpp
 )
 
 # Executable: Train

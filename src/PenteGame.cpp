@@ -474,3 +474,191 @@ PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
     if (whiteStones.getBit(x, y)) return WHITE;
     return NONE;
 }
+
+float PenteGame::evaluateMove(Move move) const {
+    // Scoring weights
+    constexpr float CAPTURE_SCORE = 6.0f;
+    constexpr float BLOCK_CAPTURE_SCORE = 4.0f;
+    constexpr float CREATE_OPEN_THREE_SCORE = 15.0f;
+    constexpr float BLOCK_OPEN_THREE_SCORE = 20.0f;
+    constexpr float DEFAULT_SCORE = 1.0f;
+
+    int x = move.x;
+    int y = move.y;
+    int captureCount = 0;
+    int blockCaptureCount = 0;
+    int createOpenThreeCount = 0;
+    int blockOpenThreeCount = 0;
+
+    const BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
+    const BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
+
+    // Helper lambdas
+    auto inBounds = [](int px, int py) {
+        return px >= 0 && px < BOARD_SIZE && py >= 0 && py < BOARD_SIZE;
+    };
+    auto isEmpty = [&](int px, int py) {
+        return inBounds(px, py) &&
+               !myStones.getBitUnchecked(px, py) &&
+               !oppStones.getBitUnchecked(px, py);
+    };
+    auto hasMy = [&](int px, int py) {
+        return inBounds(px, py) && myStones.getBitUnchecked(px, py);
+    };
+    auto hasOpp = [&](int px, int py) {
+        return inBounds(px, py) && oppStones.getBitUnchecked(px, py);
+    };
+
+    // 8 directions for capture checks
+    static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1},
+                                   {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
+
+    for (int i = 0; i < 8; i++) {
+        int dx = dirs[i][0];
+        int dy = dirs[i][1];
+
+        int x1 = x + dx,     y1 = y + dy;
+        int x2 = x + dx * 2, y2 = y + dy * 2;
+        int x3 = x + dx * 3, y3 = y + dy * 3;
+
+        if (x3 >= 0 && x3 < BOARD_SIZE && y3 >= 0 && y3 < BOARD_SIZE) {
+            // Capture: myStone - oppStone - oppStone - _ (we complete capture)
+            if (oppStones.getBitUnchecked(x1, y1) &&
+                oppStones.getBitUnchecked(x2, y2) &&
+                myStones.getBitUnchecked(x3, y3))
+            {
+                captureCount++;
+            }
+            // Block capture: oppStone - myStone - myStone - _ (we prevent their capture)
+            else if (myStones.getBitUnchecked(x1, y1) &&
+                     myStones.getBitUnchecked(x2, y2) &&
+                     oppStones.getBitUnchecked(x3, y3))
+            {
+                blockCaptureCount++;
+            }
+        }
+    }
+
+    // 4 line directions for open three checks
+    static const int lineDirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
+
+    for (int i = 0; i < 4; i++) {
+        int dx = lineDirs[i][0];
+        int dy = lineDirs[i][1];
+
+        // Count consecutive stones from position (not including position itself)
+        int posCount = countConsecutive(myStones, x, y, dx, dy);
+        int negCount = countConsecutive(myStones, x, y, -dx, -dy);
+        int total = 1 + posCount + negCount;
+
+        // Solid open three: _ X X X _ (total == 3 with both ends open)
+        if (total == 3) {
+            int posEndX = x + dx * (posCount + 1);
+            int posEndY = y + dy * (posCount + 1);
+            int negEndX = x - dx * (negCount + 1);
+            int negEndY = y - dy * (negCount + 1);
+
+            if (isEmpty(posEndX, posEndY) && isEmpty(negEndX, negEndY)) {
+                createOpenThreeCount++;
+            }
+        }
+
+        // Gap open three patterns (X_XX and XX_X with open ends)
+        // Pattern 1: P _ X X (place, gap, two stones)
+        if (isEmpty(x + dx, y + dy) && hasMy(x + dx*2, y + dy*2) && hasMy(x + dx*3, y + dy*3)) {
+            if (isEmpty(x - dx, y - dy) && isEmpty(x + dx*4, y + dy*4)) {
+                createOpenThreeCount++;
+            }
+        }
+        // Pattern 2: X _ P X (stone, gap, place, stone)
+        if (hasMy(x - dx*2, y - dy*2) && isEmpty(x - dx, y - dy) && hasMy(x + dx, y + dy)) {
+            if (isEmpty(x - dx*3, y - dy*3) && isEmpty(x + dx*2, y + dy*2)) {
+                createOpenThreeCount++;
+            }
+        }
+        // Pattern 3: X _ X P (stone, gap, stone, place)
+        if (hasMy(x - dx*3, y - dy*3) && isEmpty(x - dx*2, y - dy*2) && hasMy(x - dx, y - dy)) {
+            if (isEmpty(x - dx*4, y - dy*4) && isEmpty(x + dx, y + dy)) {
+                createOpenThreeCount++;
+            }
+        }
+        // Pattern 4: P X _ X (place, stone, gap, stone)
+        if (hasMy(x + dx, y + dy) && isEmpty(x + dx*2, y + dy*2) && hasMy(x + dx*3, y + dy*3)) {
+            if (isEmpty(x - dx, y - dy) && isEmpty(x + dx*4, y + dy*4)) {
+                createOpenThreeCount++;
+            }
+        }
+        // Pattern 5: X P _ X (stone, place, gap, stone)
+        if (hasMy(x - dx, y - dy) && isEmpty(x + dx, y + dy) && hasMy(x + dx*2, y + dy*2)) {
+            if (isEmpty(x - dx*2, y - dy*2) && isEmpty(x + dx*3, y + dy*3)) {
+                createOpenThreeCount++;
+            }
+        }
+        // Pattern 6: X X _ P (stone, stone, gap, place)
+        if (hasMy(x - dx*3, y - dy*3) && hasMy(x - dx*2, y - dy*2) && isEmpty(x - dx, y - dy)) {
+            if (isEmpty(x - dx*4, y - dy*4) && isEmpty(x + dx, y + dy)) {
+                createOpenThreeCount++;
+            }
+        }
+
+        // Block opponent's solid open three: P O O O _ or _ O O O P
+        int oppPosCount = countConsecutive(oppStones, x, y, dx, dy);
+        int oppNegCount = countConsecutive(oppStones, x, y, -dx, -dy);
+
+        if (oppPosCount == 3 && isEmpty(x + dx*4, y + dy*4)) {
+            blockOpenThreeCount++;
+        }
+        if (oppNegCount == 3 && isEmpty(x - dx*4, y - dy*4)) {
+            blockOpenThreeCount++;
+        }
+
+        // Block opponent's gap open three
+        // P _ O O (blocking O_OO pattern at left end)
+        if (isEmpty(x + dx, y + dy) && hasOpp(x + dx*2, y + dy*2) && hasOpp(x + dx*3, y + dy*3)) {
+            if (hasOpp(x + dx*4, y + dy*4) && isEmpty(x + dx*5, y + dy*5)) {
+                blockOpenThreeCount++;  // Pattern: P _ O O O _ (blocking O_OO)
+            }
+        }
+        // O O _ P (blocking OO_O pattern at right end)
+        if (isEmpty(x - dx, y - dy) && hasOpp(x - dx*2, y - dy*2) && hasOpp(x - dx*3, y - dy*3)) {
+            if (hasOpp(x - dx*4, y - dy*4) && isEmpty(x - dx*5, y - dy*5)) {
+                blockOpenThreeCount++;  // Pattern: _ O O O _ P (blocking OO_O)
+            }
+        }
+        // P O _ O O (blocking O_OO at far left)
+        if (hasOpp(x + dx, y + dy) && isEmpty(x + dx*2, y + dy*2) &&
+            hasOpp(x + dx*3, y + dy*3) && hasOpp(x + dx*4, y + dy*4)) {
+            if (isEmpty(x + dx*5, y + dy*5)) {
+                blockOpenThreeCount++;
+            }
+        }
+        // O O _ O P (blocking OO_O at far right)
+        if (hasOpp(x - dx, y - dy) && isEmpty(x - dx*2, y - dy*2) &&
+            hasOpp(x - dx*3, y - dy*3) && hasOpp(x - dx*4, y - dy*4)) {
+            if (isEmpty(x - dx*5, y - dy*5)) {
+                blockOpenThreeCount++;
+            }
+        }
+        // P O O _ O (blocking OO_O at left)
+        if (hasOpp(x + dx, y + dy) && hasOpp(x + dx*2, y + dy*2) &&
+            isEmpty(x + dx*3, y + dy*3) && hasOpp(x + dx*4, y + dy*4)) {
+            if (isEmpty(x + dx*5, y + dy*5)) {
+                blockOpenThreeCount++;
+            }
+        }
+        // O _ O O P (blocking O_OO at right)
+        if (hasOpp(x - dx, y - dy) && hasOpp(x - dx*2, y - dy*2) &&
+            isEmpty(x - dx*3, y - dy*3) && hasOpp(x - dx*4, y - dy*4)) {
+            if (isEmpty(x - dx*5, y - dy*5)) {
+                blockOpenThreeCount++;
+            }
+        }
+    }
+
+    float score = DEFAULT_SCORE;
+    score += captureCount * CAPTURE_SCORE;
+    score += blockCaptureCount * BLOCK_CAPTURE_SCORE;
+    score += createOpenThreeCount * CREATE_OPEN_THREE_SCORE;
+    score += blockOpenThreeCount * BLOCK_OPEN_THREE_SCORE;
+    return score;
+}
