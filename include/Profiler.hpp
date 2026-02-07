@@ -7,7 +7,7 @@
 // Define ENABLE_PROFILING to enable profiling. Defaults to disabled.
 // Enable via: cmake -DENABLE_PROFILING=ON or #define ENABLE_PROFILING before including
 
-#define ENABLE_PROFILING  // Uncomment to enable, or pass -DENABLE_PROFILING. Comment out to disable.
+// #define ENABLE_PROFILING  // Uncomment to enable, or pass -DENABLE_PROFILING. Comment out to disable.
 
 #ifdef ENABLE_PROFILING
 

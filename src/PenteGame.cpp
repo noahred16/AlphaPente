@@ -191,6 +191,20 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
     PROFILE_SCOPE("PenteGame::getLegalMoves");
 
 
+    // optimization for moveCount 1
+
+    if (moveCount == 1) {
+        std::vector<std::string> presetMoves = { 
+            "L9", "L10", "M9", "M10", "N9", "N8", "O9", "O8", "O7", "O6", "P6", "P7", "P9",             
+        };
+        std::vector<Move> presetMovesVec;
+        for (const auto& moveStr : presetMoves) {
+            auto [x, y] = GameUtils::parseMove(moveStr.c_str());
+            presetMovesVec.emplace_back(x, y);
+        }
+        return presetMovesVec;
+    }
+
     if (config_.tournamentRule && moveCount == 2) {
         // start empty
         std::vector<Move> moves = legalMovesVector;
@@ -407,7 +421,7 @@ PenteGame::Move PenteGame::getRandomMove(const std::vector<Move>& moves) const {
 }
 
 PenteGame::Move PenteGame::getRandomLegalMove() const {
-    PROFILE_SCOPE("PenteGame::getRandomLegalMove");
+    PROFILE_SCOPE("PenteGame::getRandLegalMove");
 
     // Handle tournament rule (3rd move restriction) - rare case, ok to copy
     if (config_.tournamentRule && moveCount == 2) {
@@ -477,11 +491,14 @@ PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
 
 float PenteGame::evaluateMove(Move move) const {
     // Scoring weights
+    constexpr float DEFAULT_SCORE = 1.0f;
     constexpr float CAPTURE_SCORE = 6.0f;
     constexpr float BLOCK_CAPTURE_SCORE = 4.0f;
     constexpr float CREATE_OPEN_THREE_SCORE = 15.0f;
     constexpr float BLOCK_OPEN_THREE_SCORE = 20.0f;
-    constexpr float DEFAULT_SCORE = 1.0f;
+    constexpr float VULNERABLE_MOVE_PENALTY = -20.0f;
+    constexpr float CREATE_FIVE_THREAT_SCORE = 20.0f;
+    constexpr float BLOCK_FIVE_THREAT_SCORE = 20.0f;
 
     int x = move.x;
     int y = move.y;
@@ -489,6 +506,9 @@ float PenteGame::evaluateMove(Move move) const {
     int blockCaptureCount = 0;
     int createOpenThreeCount = 0;
     int blockOpenThreeCount = 0;
+    int createFiveThreatCount = 0;
+    int blockFiveThreatCount = 0;
+    bool isVulnerableMove = false;
 
     const BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
     const BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
@@ -537,9 +557,49 @@ float PenteGame::evaluateMove(Move move) const {
                 blockCaptureCount++;
             }
         }
+
+        // NEW: Check if this move creates a capturable position
+        // Pattern: opponent can capture if: O [P] M _
+        // where [P] is our proposed move, M is our existing stone
+        // After we place at x,y, opponent could capture us
+        
+        // Check if placing here creates: O P M _ (opponent - us - myStone - empty)
+        int xBack = x - dx, yBack = y - dy;
+        if (inBounds(xBack, yBack) && hasOpp(xBack, yBack) &&
+            hasMy(x1, y1) && isEmpty(x2, y2))
+        {
+            isVulnerableMove = true;
+        }
+        
+        // Also check reverse: _ M P O (empty - myStone - us - opponent)
+        if (hasMy(xBack, yBack) && isEmpty(x - dx*2, y - dy*2) &&
+            hasOpp(x1, y1))
+        {
+            isVulnerableMove = true;
+        }
+
+        // For Keryo rules, also check 3-stone captures
+        if (config_.keryoRules) {
+            int x4 = x + dx * 4;
+            int y4 = y + dy * 4;
+            
+            // O P M M _ (opponent could capture 3)
+            if (inBounds(x4, y4) && hasOpp(xBack, yBack) &&
+                hasMy(x1, y1) && hasMy(x2, y2) && isEmpty(x3, y3))
+            {
+                isVulnerableMove = true;
+            }
+            
+            // _ M M P O (reverse 3-stone capture)
+            if (hasMy(xBack, yBack) && hasMy(x - dx*2, y - dy*2) &&
+                isEmpty(x - dx*3, y - dy*3) && hasOpp(x1, y1))
+            {
+                isVulnerableMove = true;
+            }
+        }
     }
 
-    // 4 line directions for open three checks
+    // 4 line directions for open three and five threat checks
     static const int lineDirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
 
     for (int i = 0; i < 4; i++) {
@@ -551,6 +611,108 @@ float PenteGame::evaluateMove(Move move) const {
         int negCount = countConsecutive(myStones, x, y, -dx, -dy);
         int total = 1 + posCount + negCount;
 
+        // === CREATE FIVE THREAT (OPEN FOUR) DETECTION ===
+        // An open four means the opponent must block or we win next turn
+        
+        // Pattern 1: Solid four with one open end: X X X X _ or _ X X X X
+        if (total == 4) {
+            int posEndX = x + dx * (posCount + 1);
+            int posEndY = y + dy * (posCount + 1);
+            int negEndX = x - dx * (negCount + 1);
+            int negEndY = y - dy * (negCount + 1);
+
+            // At least one end must be open
+            if (isEmpty(posEndX, posEndY) || isEmpty(negEndX, negEndY)) {
+                createFiveThreatCount++;
+            }
+        }
+
+        // Pattern 2: X X X _ X (gap in position 4)
+        if (posCount == 3 && isEmpty(x + dx*4, y + dy*4) && hasMy(x + dx*5, y + dy*5)) {
+            createFiveThreatCount++;
+        }
+        if (negCount == 3 && isEmpty(x - dx*4, y - dy*4) && hasMy(x - dx*5, y - dy*5)) {
+            createFiveThreatCount++;
+        }
+
+        // Pattern 3: X X _ X X (gap in position 3)
+        if (posCount == 2 && isEmpty(x + dx*3, y + dy*3) && 
+            hasMy(x + dx*4, y + dy*4) && hasMy(x + dx*5, y + dy*5)) {
+            createFiveThreatCount++;
+        }
+        if (negCount == 2 && isEmpty(x - dx*3, y - dy*3) && 
+            hasMy(x - dx*4, y - dy*4) && hasMy(x - dx*5, y - dy*5)) {
+            createFiveThreatCount++;
+        }
+
+        // Pattern 4: X _ X X X (gap in position 2)
+        if (posCount == 1 && isEmpty(x + dx*2, y + dy*2) && 
+            hasMy(x + dx*3, y + dy*3) && hasMy(x + dx*4, y + dy*4) && hasMy(x + dx*5, y + dy*5)) {
+            createFiveThreatCount++;
+        }
+        if (negCount == 1 && isEmpty(x - dx*2, y - dy*2) && 
+            hasMy(x - dx*3, y - dy*3) && hasMy(x - dx*4, y - dy*4) && hasMy(x - dx*5, y - dy*5)) {
+            createFiveThreatCount++;
+        }
+
+        // Pattern 5: _ X X X X (gap at position 1, looking backward)
+        if (negCount == 4 && isEmpty(x - dx*5, y - dy*5)) {
+            createFiveThreatCount++;
+        }
+        if (posCount == 4 && isEmpty(x + dx*5, y + dy*5)) {
+            createFiveThreatCount++;
+        }
+
+        // === BLOCK OPPONENT'S FIVE THREAT ===
+        int oppPosCount = countConsecutive(oppStones, x, y, dx, dy);
+        int oppNegCount = countConsecutive(oppStones, x, y, -dx, -dy);
+        // int oppTotal = 1 + oppPosCount + oppNegCount;
+
+        // Blocking solid four: O O O O P or P O O O O
+        if (oppPosCount == 4) {
+            blockFiveThreatCount++;
+        }
+        if (oppNegCount == 4) {
+            blockFiveThreatCount++;
+        }
+
+        // Block O O O _ O patterns (filling the gap blocks the threat)
+        // Pattern: P is placed in the gap of O O O _ O
+        if (oppPosCount == 0 && oppNegCount == 3 && hasOpp(x + dx, y + dy)) {
+            // Check pattern: O O O P O (we're filling gap)
+            if (inBounds(x + dx*2, y + dy*2) && hasOpp(x + dx*2, y + dy*2)) {
+                blockFiveThreatCount++;
+            }
+        }
+        if (oppNegCount == 0 && oppPosCount == 3 && hasOpp(x - dx, y - dy)) {
+            // Check pattern: O P O O O (we're filling gap)
+            if (inBounds(x - dx*2, y - dy*2) && hasOpp(x - dx*2, y - dy*2)) {
+                blockFiveThreatCount++;
+            }
+        }
+
+        // Block O O _ O O (P fills the middle gap)
+        if (oppPosCount == 2 && oppNegCount == 2) {
+            blockFiveThreatCount++;
+        }
+
+        // Block O _ O O O (P fills gap at position 2)
+        if (oppPosCount == 3 && oppNegCount == 0 && hasOpp(x - dx, y - dy)) {
+            blockFiveThreatCount++;
+        }
+        if (oppNegCount == 3 && oppPosCount == 0 && hasOpp(x + dx, y + dy)) {
+            blockFiveThreatCount++;
+        }
+
+        // Block O O O _ O (P fills gap at position 4)
+        if (oppNegCount == 3 && isEmpty(x + dx, y + dy) && hasOpp(x + dx*2, y + dy*2)) {
+            blockFiveThreatCount++;
+        }
+        if (oppPosCount == 3 && isEmpty(x - dx, y - dy) && hasOpp(x - dx*2, y - dy*2)) {
+            blockFiveThreatCount++;
+        }
+
+        // === OPEN THREE DETECTION (existing code) ===
         // Solid open three: _ X X X _ (total == 3 with both ends open)
         if (total == 3) {
             int posEndX = x + dx * (posCount + 1);
@@ -602,9 +764,6 @@ float PenteGame::evaluateMove(Move move) const {
         }
 
         // Block opponent's solid open three: P O O O _ or _ O O O P
-        int oppPosCount = countConsecutive(oppStones, x, y, dx, dy);
-        int oppNegCount = countConsecutive(oppStones, x, y, -dx, -dy);
-
         if (oppPosCount == 3 && isEmpty(x + dx*4, y + dy*4)) {
             blockOpenThreeCount++;
         }
@@ -660,5 +819,138 @@ float PenteGame::evaluateMove(Move move) const {
     score += blockCaptureCount * BLOCK_CAPTURE_SCORE;
     score += createOpenThreeCount * CREATE_OPEN_THREE_SCORE;
     score += blockOpenThreeCount * BLOCK_OPEN_THREE_SCORE;
-    return score;
+    score += createFiveThreatCount * CREATE_FIVE_THREAT_SCORE;
+    score += blockFiveThreatCount * BLOCK_FIVE_THREAT_SCORE;
+    
+    // Apply penalty if this move is vulnerable to capture
+    if (isVulnerableMove) {
+        score += VULNERABLE_MOVE_PENALTY;
+    }
+    
+    // return max of 1 and score;
+    return std::max(0.5f, score);
+}
+
+int PenteGame::countOpenFours(Player player) const {
+    const BitBoard& stones = (player == BLACK) ? blackStones : whiteStones;
+    const BitBoard& oppStones = (player == BLACK) ? whiteStones : blackStones;
+
+    int openFourCount = 0;
+
+    // 4 line directions
+    static const int lineDirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
+
+    // Scan the board for open four patterns: _XXXX_
+    for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            // Only check from stones of the player
+            if (!stones.getBit(x, y)) continue;
+
+            for (int d = 0; d < 4; d++) {
+                int dx = lineDirs[d][0];
+                int dy = lineDirs[d][1];
+
+                // Check for 4 consecutive stones starting at (x,y)
+                // Pattern: _XXXX_ where first X is at (x,y)
+                int x1 = x + dx, y1 = y + dy;
+                int x2 = x + dx*2, y2 = y + dy*2;
+                int x3 = x + dx*3, y3 = y + dy*3;
+
+                // Check all 4 stones exist
+                if (x3 < 0 || x3 >= BOARD_SIZE || y3 < 0 || y3 >= BOARD_SIZE) continue;
+                if (!stones.getBit(x1, y1) || !stones.getBit(x2, y2) || !stones.getBit(x3, y3)) continue;
+
+                // Check both ends are empty (open)
+                int beforeX = x - dx, beforeY = y - dy;
+                int afterX = x + dx*4, afterY = y + dy*4;
+
+                bool beforeOpen = (beforeX >= 0 && beforeX < BOARD_SIZE &&
+                                   beforeY >= 0 && beforeY < BOARD_SIZE &&
+                                   !stones.getBit(beforeX, beforeY) &&
+                                   !oppStones.getBit(beforeX, beforeY));
+
+                bool afterOpen = (afterX >= 0 && afterX < BOARD_SIZE &&
+                                  afterY >= 0 && afterY < BOARD_SIZE &&
+                                  !stones.getBit(afterX, afterY) &&
+                                  !oppStones.getBit(afterX, afterY));
+
+                if (beforeOpen && afterOpen) {
+                    openFourCount++;
+                }
+            }
+        }
+    }
+
+    // Each open four is counted once (from the first stone in the direction)
+    return openFourCount;
+}
+
+float PenteGame::evaluatePosition() const {
+    PROFILE_SCOPE("PenteGame::evaluatePosition");
+    // return 0.0f;
+    // Scoring weights
+    // constexpr float CAPTURE_WEIGHT = 0.08f;
+    // constexpr float OPEN_FOUR_WEIGHT = 0.45f;
+
+    // // Count open fours for each side
+    int myOpenFours = countOpenFours(currentPlayer);
+    if (myOpenFours >= 1) {
+        // DEBUG game utils print state and exit
+        // GameUtils::printGameState(*this);
+        // // print current player
+        // std::cout << "Immediate win detected in evaluatePosition!" << std::endl;
+        // exit(1);
+        return 1.0f; // immediate win
+    }
+    int oppOpenFours = countOpenFours((currentPlayer == BLACK) ? WHITE : BLACK);
+    if (oppOpenFours >= 1) {
+        // GameUtils::printGameState(*this);
+        // std::cout << "Immediate loss detected in evaluatePosition!" << std::endl;
+        // exit(1);
+        return -1.0f; // immediate loss
+    }
+
+
+
+    // // Get captures for current player and opponent
+    int myCaptures, oppCaptures;
+    if (currentPlayer == BLACK) {
+        myCaptures = blackCaptures;
+        oppCaptures = whiteCaptures;
+    } else {
+        myCaptures = whiteCaptures;
+        oppCaptures = blackCaptures;
+    }
+
+    // if opp one person is leading by more than 2, consider it a win. 
+    if (myCaptures - oppCaptures > 3) {
+        // DEBUG game utils print state and exit
+        // GameUtils::printGameState(*this);
+        // std::cout << "Strong advantage detected in evaluatePosition!" << std::endl;
+        // exit(1);
+        return 0.7f;
+    }
+    if (oppCaptures - myCaptures > 3) {
+        // DEBUG game utils print state and exit
+        // GameUtils::printGameState(*this);
+        // std::cout << "Strong disadvantage detected in evaluatePosition!" << std::endl;
+        // exit(1);
+        return -0.7f;
+    }
+
+    // TODO check if opp has two open 3s
+    // TODO, do we ever find positives? 
+
+    return 0.0f; // neutral position
+
+    // // Calculate score
+    // float score = 0.0f;
+    // score += (myCaptures - oppCaptures) * CAPTURE_WEIGHT;
+    // score += (myOpenFours - oppOpenFours) * OPEN_FOUR_WEIGHT;
+
+    // // Clamp to [-1, 1]
+    // if (score > 1.0f) score = 1.0f;
+    // if (score < -1.0f) score = -1.0f;
+
+    // return score;
 }

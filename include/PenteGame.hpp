@@ -105,12 +105,23 @@ private:
         // Dilate legal moves around the cleared position (3x3 neighborhood)
         // TODO: replace hard coded true with a heuristic config option
         if (true) {
-            static const int dirs[8][2] = {
-                {-1, -1}, {0, -1}, {1, -1},
-                {-1,  0},          {1,  0},
-                {-1,  1}, {0,  1}, {1,  1}
+            // Standard 8 directions + center
+            // static const int dirs[8][2] = {
+            //     {-1, -1}, {0, -1}, {1, -1},
+            //     {-1,  0},          {1,  0},
+            //     {-1,  1}, {0,  1}, {1,  1}
+            // };
+
+            // All moves within distance 2 (for more aggressive dilation, especially in early game)
+            static const int dirs[24][2] = {
+                {-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2},
+                {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1},
+                {-2,  0}, {-1,  0},          {1,  0}, {2,  0},
+                {-2,  1}, {-1,  1}, {0,  1}, {1,  1}, {2,  1},
+                {-2,  2}, {-1,  2}, {0,  2}, {1,  2}, {2,  2}
             };
-            for (int i = 0; i < 8; i++) {
+
+            // custom
             // static const int dirs[11][2] = {
             //     {-1, -1}, {0, -1}, {1, -1},
             //     {-1,  0},          {1,  0},
@@ -119,8 +130,9 @@ private:
             //     // {-1, -2}, {0, -2}, {-2, -2} // x x x o o bottom row 2 down
             //     {2, -2}, {0, -2}, {-2, -2} // x o x o x bottom row 2 down
             // };
-            // for (int i = 0; i < 11; i++) {
 
+            int size = std::size(dirs);
+            for (int i = 0; i < size; i++) {
                 int nx = x + dirs[i][0];
                 int ny = y + dirs[i][1];
                 if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
@@ -172,6 +184,8 @@ public:
 
     // Heuristic evaluation
     float evaluateMove(Move move) const;
+    float evaluatePosition() const;
+    int countOpenFours(Player player) const;
 
     // Config access
     const Config& getConfig() const { return config_; }

@@ -119,21 +119,24 @@ void MCTS::initNodeUntriedMoves(Node* node, const std::vector<PenteGame::Move>& 
 // ============================================================================
 
 PenteGame::Move MCTS::search(const PenteGame& game) {
+
+    this->game = game;
     auto startTime = std::chrono::high_resolution_clock::now();
 
     // Reset statistics and arena
-    reset();
-    clearTree();
+    // reset();
+    // clearTree();
 
-    // Initialize root node
-    root_ = allocateNode();
+    // Initialize root node if a fresh sim
+    if (!root_) {
+        root_ = allocateNode();
+        std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
+        initNodeUntriedMoves(root_, legalMoves);
+        initNodeChildren(root_, static_cast<int>(legalMoves.size()));
+        root_->unprovenCount = static_cast<int16_t>(legalMoves.size());
+    }
     root_->player = game.getCurrentPlayer();
-
-    std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
-    initNodeUntriedMoves(root_, legalMoves);
-    initNodeChildren(root_, static_cast<int>(legalMoves.size()));
-    root_->unprovenCount = static_cast<int16_t>(legalMoves.size());
-
+    
     // Local copy of game for simulations
     PenteGame localGame;
 
@@ -309,7 +312,26 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 double MCTS::simulate(const PenteGame& gameState) {
     PROFILE_SCOPE("MCTS::simulate");
 
-    // Work on a copy - discarded at end of function
+    // If we have an evaluator, try static evaluation first
+    if (config_.evaluator) {
+        // Check for terminal state first
+        PenteGame::Player winner = gameState.getWinner();
+        if (winner != PenteGame::NONE) {
+            // Current player just moved, so winner is the player who just moved
+            // Return from perspective of player who just moved (the child node's player)
+            return (winner == gameState.getCurrentPlayer()) ? -1.0 : 1.0;
+        }
+
+        // Use evaluator for position value
+        double evalValue = static_cast<double>(config_.evaluator->evaluateValue(gameState));
+
+        // If evaluation is non-zero, use it; otherwise fall through to rollout
+        if (evalValue != 0.0) {
+            return evalValue;
+        }
+    }
+
+    // Fallback: random rollout (when no evaluator, or evaluation returned 0)
     PenteGame simGame = gameState;
 
     PenteGame::Player startPlayer = simGame.getCurrentPlayer();
@@ -397,15 +419,20 @@ void MCTS::updateChildrenPriors(Node* node, const PenteGame& game) {
     auto policy = config_.evaluator->evaluatePolicy(game);
     
     // check that childCount matches policy size
-    if (node->childCount != policy.size()) {
-        std::cerr << "FATAL ERROR: Mismatch between child count and policy size!" << std::endl;
-        exit(1);
-    }
+    // if (node->childCount != policy.size()) {
+    //     std::cerr << "FATAL ERROR: Mismatch between child count and policy size!" << std::endl;
+    //     exit(1);
+    // }
 
     // Assign priors to children
     // Policy is returned in same order as childMoves, so direct assignment
-    for (uint16_t i = 0; i < node->childCount && i < policy.size(); i++) {
-        node->children[i]->prior = policy[i];
+    // for (uint16_t i = 0; i < node->childCount && i < policy.size(); i++) {
+    //     node->children[i]->prior = policy[i];
+    // }
+
+    for (uint16_t i = 0; i < node->childCount; i++) {
+        Node* child = node->children[i];
+        child->prior = policy[child->move.x][child->move.y];
     }
 }
 
@@ -587,9 +614,9 @@ int MCTS::getTreeSize() const {
 
 void MCTS::printStats() const {
     std::cout << "\n=== MCTS Statistics ===\n";
-    std::cout << "Total simulations: " << totalSimulations_
-              << ". Tree size: " << getTreeSize()
-              << ". Root visits: " << getTotalVisits() << "\n";
+    std::cout << "Total simulations: " << GameUtils::formatWithCommas(totalSimulations_)
+              << ". Tree size: " << GameUtils::formatWithCommas(getTreeSize())
+              << ". Root visits: " << GameUtils::formatWithCommas(getTotalVisits()) << "\n";
 
     std::cout << "Total search time: " << static_cast<int>(totalSearchTime_ / 60)
               << " min " << static_cast<int>(totalSearchTime_) % 60 << " sec\n";
@@ -637,20 +664,25 @@ void MCTS::printBestMoves(int topN) const {
             if (a->solvedStatus != SolvedStatus::SOLVED_WIN && b->solvedStatus == SolvedStatus::SOLVED_WIN) {
                 return false;
             }
+
+            // if 
+
             return a->visits > b->visits;
         });
 
     int movesConsidered = root_->childCount;
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of "
               << movesConsidered << " Considered ===\n";
-    std::cout << std::setw(8) << "Move"
-              << std::setw(12) << "Visits"
-              << std::setw(12) << "Wins"
-              << std::setw(12) << "Avg Value"
-              << std::setw(12) << "UCB1"
-              << std::setw(12) << "PUCT"
-              << std::setw(12) << "Status\n";
-    std::cout << std::string(80, '-') << "\n";
+    std::cout << std::setw(6) << "Move"
+              << std::setw(10) << "Visits"
+              << std::setw(10) << "Wins"
+              << std::setw(10) << "MoveEval"
+              << std::setw(10) << "Prior"
+              << std::setw(10) << "Avg Val"
+              << std::setw(10) << "UCB1"
+              << std::setw(10) << "PUCT"
+              << std::setw(8) << "Status\n";
+    std::cout << std::string(74, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
@@ -660,6 +692,13 @@ void MCTS::printBestMoves(int topN) const {
                                    std::sqrt(std::log(static_cast<double>(root_->visits)));
         double ucb1 = child->getUCB1Value(explorationFactor);
         double puct = child->getPUCTValue(config_.explorationConstant, root_->visits);
+        
+        double moveEval = this->game.evaluateMove(child->move);
+
+        // if moveEval = 1, skip and inc i so it doesnt count towards topN
+        // if (moveEval == 1.0) {
+        //     continue;
+        // }
 
         std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
 
@@ -672,17 +711,19 @@ void MCTS::printBestMoves(int topN) const {
             status = "-";
         }
 
-        std::cout << std::setw(8) << moveStr
-                  << std::setw(12) << child->visits
-                  << std::setw(12) << child->wins
-                  << std::setw(12) << std::fixed << std::setprecision(3) << avgScore
-                  << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
-                  << std::setw(12) << std::fixed << std::setprecision(3) << puct
-                  << std::setw(12) << status
+        std::cout << std::setw(6) << moveStr
+                  << std::setw(10) << child->visits
+                  << std::setw(10) << child->wins
+                  << std::setw(10) << static_cast<int>(moveEval)
+                  << std::setw(10) << std::fixed << std::setprecision(3) << child->prior
+                  << std::setw(10) << std::fixed << std::setprecision(3) << avgScore
+                  << std::setw(10) << std::fixed << std::setprecision(3) << ucb1
+                  << std::setw(10) << std::fixed << std::setprecision(3) << puct
+                  << std::setw(8) << status
                   << "\n";
     }
 
-    std::cout << "===================\n\n";
+    std::cout << std::string(74, '=') << "\n\n";
 }
 
 MCTS::Node* MCTS::findChildNode(MCTS::Node* parent, int x, int y) const {
@@ -724,13 +765,14 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
         });
 
     std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
-    std::cout << std::setw(8) << "Move"
+    std::cout << std::setw(6) << "Move"
               << std::setw(10) << "Visits"
-              << std::setw(12) << "Avg Value"
-              << std::setw(12) << "UCB1"
-              << std::setw(12) << "PUCT"
-              << std::setw(12) << "Status\n";
-    std::cout << std::string(66, '-') << "\n";
+              << std::setw(10) << "Avg Val"
+              << std::setw(10) << "Prior"
+              << std::setw(10) << "UCB1"
+              << std::setw(10) << "PUCT"
+              << std::setw(8) << "Status\n";
+    std::cout << std::string(64, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
@@ -751,10 +793,11 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
             status = "-";
         }
 
-        std::cout << std::setw(8) << moveStr
+        std::cout << std::setw(6) << moveStr
                   << std::setw(10) << child->visits
-                  << std::setw(12) << std::fixed << std::setprecision(3) << avgValue
-                  << std::setw(12) << std::fixed << std::setprecision(3) << ucb1
+                  << std::setw(10) << std::fixed << std::setprecision(3) << avgValue
+                  << std::setw(10) << std::fixed << std::setprecision(3) << child->prior
+                  << std::setw(10) << std::fixed << std::setprecision(3) << ucb1
                   << std::setw(12) << std::fixed << std::setprecision(3) << puct
                   << std::setw(12) << status
                   << "\n";

@@ -208,3 +208,208 @@ TEST_CASE("PenteGame evaluateMove verifies capture pattern") {
     PenteGame::Move nonCapture(9, 8);  // K9
     CHECK(game.evaluateMove(nonCapture) == 1.0f);
 }
+
+// ============================================================================
+// evaluatePosition Tests
+// ============================================================================
+
+TEST_CASE("PenteGame evaluatePosition neutral start") {
+    PenteGame game;
+    game.reset();
+
+    // After first move, position should be roughly neutral
+    game.makeMove("K10");  // Black center
+
+    // No captures, no open fours - should be ~0
+    CHECK(game.evaluatePosition() == doctest::Approx(0.0f).epsilon(0.01));
+}
+
+
+TEST_CASE("PenteGame countOpenFours none") {
+    PenteGame game;
+    game.reset();
+
+    game.makeMove("K10");  // Black center
+
+    CHECK(game.countOpenFours(PenteGame::BLACK) == 0);
+    CHECK(game.countOpenFours(PenteGame::WHITE) == 0);
+}
+
+TEST_CASE("PenteGame countOpenFours detects open four") {
+    PenteGame game;
+    game.reset();
+
+    // Build an open four for Black: _XXXX_
+    // Need 4 Black stones in a row with empty on both ends
+    game.makeMove("K10");  // Black (9,9)
+    game.makeMove("K5");   // White dummy far away
+    game.makeMove("L10");  // Black (10,9)
+    game.makeMove("K6");   // White dummy
+    game.makeMove("M10");  // Black (11,9)
+    game.makeMove("K7");   // White dummy
+    game.makeMove("N10");  // Black (12,9)
+
+    // Now Black has K10-L10-M10-N10 = 4 in a row
+    // J10 (8,9) should be empty, O10 (13,9) should be empty
+    // This is an open four!
+    CHECK(game.countOpenFours(PenteGame::BLACK) == 1);
+    CHECK(game.countOpenFours(PenteGame::WHITE) == 0);
+}
+
+TEST_CASE("PenteGame evaluatePosition open four advantage") {
+    // INCOMPLETE: evaluatePosition now returns binary values
+    PenteGame game;
+    game.reset();
+
+    // Build an open four for Black
+    game.makeMove("K10");  // Black
+    game.makeMove("K5");   // White far
+    game.makeMove("L10");  // Black
+    game.makeMove("K6");   // White far
+    game.makeMove("M10");  // Black
+    game.makeMove("K7");   // White far
+    game.makeMove("N10");  // Black - now has open four
+
+    // It's White's turn, Black has open four
+    // From White's perspective: 0 - 1 open fours = -1
+    // Score: -1 * 0.45 = -0.45
+    CHECK(game.evaluatePosition() == -1.0f);
+}
+
+TEST_CASE("PenteGame evaluatePosition combined factors") {
+    // INCOMPLETE: evaluatePosition now returns binary values
+    PenteGame game;
+    game.reset();
+
+    // Setup: Black has 2 captures AND an open four
+    // First make a capture
+    game.makeMove("K10");  // Black
+    game.makeMove("L10");  // White
+    game.makeMove("J10");  // Black
+    game.makeMove("M10");  // White
+    game.makeMove("N10");  // Black captures (+2)
+
+    // Now build toward open four (White moves scattered to avoid patterns)
+    game.makeMove("A1");   // White far corner
+    game.makeMove("L9");   // Black
+    game.makeMove("A2");   // White far
+    game.makeMove("M9");   // Black
+    game.makeMove("B1");   // White far
+    game.makeMove("N9");   // Black
+    game.makeMove("B2");   // White far
+    game.makeMove("O9");   // Black - now has 4 in row 9: L9-M9-N9-O9
+
+    // L9(10,8), M9(11,8), N9(12,8), O9(13,8)
+    // K9(9,8) empty, P9(14,8) empty - open four!
+    int blackOpenFours = game.countOpenFours(PenteGame::BLACK);
+    int whiteOpenFours = game.countOpenFours(PenteGame::WHITE);
+
+    CHECK(blackOpenFours == 1);
+    CHECK(whiteOpenFours == 0);
+
+    // It's White's turn
+    CHECK(game.evaluatePosition() == -1.0f);
+}
+
+// ============================================================================
+// evaluateMove Vulnerable Move Penalty Tests
+// ============================================================================
+
+TEST_CASE("PenteGame evaluateMove vulnerable move pattern O P M _") {
+    PenteGame game;
+    game.reset();
+
+    // Setup: L10(W) _ N10(B) O10(_)
+    // Pattern: Opponent - [NewMove] - MyStone - Empty
+    game.makeMove("K10");  // Black (9,9)
+    game.makeMove("L10");  // White (10,9) - opponent
+    game.makeMove("N10");  // Black (12,9) - existing black stone
+    game.makeMove("A1");   // White dummy
+
+    // Black at M10 creates: L10(W) [M10] N10(B) O10(_) = O P M _
+    // Opponent can later play O10 to capture M10 and N10
+    PenteGame::Move vulnerableMove(11, 9);  // M10
+    float score = game.evaluateMove(vulnerableMove);
+    // Score: 1 (default) - 10 (vulnerable penalty) = -9
+    // max(0.5, -9) = 0.5
+    CHECK(score == 0.5f);
+}
+
+TEST_CASE("PenteGame evaluateMove vulnerable move pattern _ M P O") {
+    PenteGame game;
+    game.reset();
+
+    // Setup vertical pattern in column L: L10(_) L11(B) _ L13(W)
+    // Pattern: Empty - MyStone - [NewMove] - Opponent
+    game.makeMove("K10");  // Black center (required first move)
+    game.makeMove("L13");  // White (10,12) - opponent
+    game.makeMove("L11");  // Black (10,10) - my existing stone
+    game.makeMove("A1");   // White dummy
+
+    // Black at L12 creates: L10(_) L11(B) [L12] L13(W) = _ M P O
+    // Opponent can later play L10 to capture L11 and L12
+    PenteGame::Move vulnerableMove(10, 11);  // L12
+    float score = game.evaluateMove(vulnerableMove);
+    // Score: 1 (default) - 10 (vulnerable penalty) = -9
+    CHECK(score == 0.5f);
+}
+
+TEST_CASE("PenteGame evaluateMove non-vulnerable move") {
+    PenteGame game;
+    game.reset();
+
+    // Setup a position where the move is NOT vulnerable
+    game.makeMove("K10");  // Black center
+    game.makeMove("A1");   // White far corner
+
+    // Black plays at L10 - no opponent nearby to capture
+    PenteGame::Move safeMove(10, 9);  // L10
+    float score = game.evaluateMove(safeMove);
+    // Score: 1 (default), no penalty
+    CHECK(score == 1.0f);
+}
+
+TEST_CASE("PenteGame evaluateMove vulnerable but also captures") {
+    PenteGame game;
+    game.reset();
+
+    // Setup where a move both captures AND appears vulnerable
+    // Note: evaluateMove checks vulnerability BEFORE considering captures,
+    // so even though the capture would remove the threat, the penalty applies.
+    game.makeMove("K10");  // Black (9,9)
+    game.makeMove("L10");  // White (10,9)
+    game.makeMove("J10");  // Black (8,9)
+    game.makeMove("M10");  // White (11,9)
+    game.makeMove("O10");  // Black (13,9)
+    game.makeMove("A1");   // White dummy
+
+    // Row 10: J10(B) K10(B) L10(W) M10(W) _ O10(B)
+    // Black at N10 captures L10,M10 but ALSO triggers vulnerability check:
+    // Pattern M10(W) [N10] O10(B) P10(_) matches O P M _ (vulnerable)
+    // Score: 1 (default) + 6 (capture) - 10 (vulnerable) = -3
+    PenteGame::Move captureMove(12, 9);  // N10
+    float score = game.evaluateMove(captureMove);
+    CHECK(score == 0.5f);
+}
+
+TEST_CASE("PenteGame evaluateMove capture without vulnerability") {
+    PenteGame game;
+    game.reset();
+
+    // Setup a clean capture without vulnerability
+    game.makeMove("K10");  // Black (9,9)
+    game.makeMove("L10");  // White (10,9)
+    game.makeMove("J10");  // Black (8,9)
+    game.makeMove("M10");  // White (11,9)
+    // Row 10: J10(B) K10(B) L10(W) M10(W) _
+
+    // Black at N10 (12,9) captures L10,M10
+    // Checking vulnerability at N10:
+    // Direction (+1,0): xBack=M10(W), x1=O10, x2=P10
+    //   hasOpp(M10)=true, hasMy(O10)=false -> no vulnerability this direction
+    // No vulnerability detected.
+    PenteGame::Move captureMove(12, 9);  // N10
+    float score = game.evaluateMove(captureMove);
+    // Score: 1 (default) + 6 (capture) = 7
+    CHECK(score == 7.0f);
+}

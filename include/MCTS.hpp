@@ -215,6 +215,7 @@ private:
     int countNodes(Node* node) const;
 
     // Member variables
+    PenteGame game;
     Config config_;
     MCTSArena arena_;
     Node* root_ = nullptr;  // Raw pointer into arena

@@ -64,9 +64,12 @@ int main(int argc, char* argv[]) {
     std::cout << "Search took: " << minutes << " min " << seconds << " sec." << std::endl;
     mcts.printStats();
     mcts.printBestMoves(15);
+    std::cout << '\a' << std::flush; // Terminal bell
+    // mcts.printBestMoves(55);
     // O12 expected move
-    const char* expectedMove = "O12";
-    mcts.printBranch(expectedMove, 20);
+    // const char* expectedMove = "O12";
+    // const char* expectedMove = "N5";
+    // mcts.printBranch(expectedMove, 20);
 
 
     // make move
@@ -74,10 +77,59 @@ int main(int argc, char* argv[]) {
     std::string bestMoveStr = GameUtils::displayMove(bestMove.x, bestMove.y);
     std::cout << "MCTS selected move: " << bestMoveStr << std::endl;
 
-    std::cout << '\a' << std::flush; // Terminal bell
-
+    
     // Print profiler report
     Profiler::instance().printReport();
+
+
+    // use cin to prompt user? maybe 
+    int iterationsToAdd = 100000;
+
+    while (iterationsToAdd > 0) {
+        // ~ spacer
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+        std::cout << "Enter additional iterations to run (0 to skip, enter for default " << GameUtils::formatWithCommas(iterationsToAdd) << "): ";
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+
+        std::string input;
+        std::getline(std::cin, input);
+        if (!input.empty()) {
+            try {
+                // skip for enter key (empty input)
+                if (input != "") {
+                    iterationsToAdd = std::stoi(input);
+                }
+            } catch (const std::invalid_argument&) {
+                std::cout << "Invalid input. Skipping additional search." << std::endl;
+                iterationsToAdd = 0;
+            }
+        }
+
+        // add an option to continue with more iterations. 
+        // int iterationsToAdd = 0;
+        // int iterationsToAdd = 100000;
+
+        std::cout << "RUNNING ADDITIONAL SEARCH with " << GameUtils::formatWithCommas(iterationsToAdd) << " iterations..." << std::endl;
+        
+        config.maxIterations = iterationsToAdd;
+        mcts.setConfig(config);
+        start = std::chrono::high_resolution_clock::now();
+        mcts.search(game);
+        end = std::chrono::high_resolution_clock::now();
+        elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+        minutes = elapsed.count() / 60;
+        seconds = elapsed.count() % 60;
+        std::cout << "Additional search took: " << minutes << " min " << seconds << " sec." << std::endl;
+        mcts.printStats();
+        mcts.printBestMoves(15);
+        bestMove = mcts.getBestMove();
+        bestMoveStr = GameUtils::displayMove(bestMove.x, bestMove.y);
+        std::cout << "MCTS selected move after additional search: " << bestMoveStr << std::endl;
+
+
+
+        std::cout << '\a' << std::flush; // Terminal bell
+    }
 
     return 0;
 }
