@@ -135,24 +135,24 @@ public:
         uint16_t childCapacity = 0;
 
         // Untried moves metadata (2 bytes each = 4 bytes)
-        uint16_t untriedMoveCount = 0;
-        int16_t unprovenCount = 0;
+        uint16_t unprovenCount = 0;
 
         // Statistics (16 bytes)
         int32_t visits = 0;
         int32_t wins = 0;
         double totalValue = 0.0;
-        float prior = 1.0;
+        float prior = -1.0f;
+        float value = 0.0f;
 
         // Pointers (24 bytes)
         Node* parent = nullptr;
         Node** children = nullptr;            // Arena-allocated array of child pointers
-        PenteGame::Move* untriedMoves = nullptr; // Arena-allocated array of untried moves
+        bool expanded = false;
 
         // Total: 4 + 1 + 1 + 4 + 4 + 16 + 24 = 54 bytes + padding = 56-64 bytes
 
-        bool isFullyExpanded() const { return untriedMoveCount == 0; }
-        bool isTerminal() const { return childCount == 0 && untriedMoveCount == 0; }
+        bool isFullyExpanded() const { return expanded; } // HMM
+        bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; } // HMM
         double getUCB1Value(double explorationFactor) const;
         double getPUCTValue(double explorationFactor, int parentVisits) const;
     };
@@ -192,7 +192,7 @@ private:
     // MCTS phases
     Node* select(Node* node, PenteGame& game);
     Node* expand(Node* node, PenteGame& game);
-    double simulate(const PenteGame& gameState);
+    double simulate(Node* node, PenteGame& game);
     void backpropagate(Node* node, double result);
 
     // Helper methods
@@ -203,7 +203,6 @@ private:
     // Arena allocation helpers
     Node* allocateNode();
     void initNodeChildren(Node* node, int capacity);
-    void initNodeUntriedMoves(Node* node, const std::vector<PenteGame::Move>& moves);
 
     // Tree reuse helpers (copies subtree to fresh arena)
     Node* copySubtree(Node* source, MCTSArena& destArena);

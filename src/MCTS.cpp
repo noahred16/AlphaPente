@@ -94,25 +94,6 @@ void MCTS::initNodeChildren(Node* node, int capacity) {
     node->childCount = 0;
 }
 
-void MCTS::initNodeUntriedMoves(Node* node, const std::vector<PenteGame::Move>& moves) {
-    size_t count = moves.size();
-    if (count == 0) {
-        node->untriedMoves = nullptr;
-        node->untriedMoveCount = 0;
-        return;
-    }
-
-    node->untriedMoves = arena_.allocate<PenteGame::Move>(count);
-    if (!node->untriedMoves) {
-        std::cerr << "FATAL: Arena out of memory for untried moves!\n";
-        throw std::bad_alloc();
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        node->untriedMoves[i] = moves[i];
-    }
-    node->untriedMoveCount = static_cast<uint16_t>(count);
-}
 
 // ============================================================================
 // Main Search Interface
@@ -130,10 +111,6 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
     // Initialize root node if a fresh sim
     if (!root_) {
         root_ = allocateNode();
-        std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
-        initNodeUntriedMoves(root_, legalMoves);
-        initNodeChildren(root_, static_cast<int>(legalMoves.size()));
-        root_->unprovenCount = static_cast<int16_t>(legalMoves.size());
     }
     root_->player = game.getCurrentPlayer();
     
@@ -157,17 +134,26 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
         Node* node = select(root_, localGame);
 
         // Expansion: add a new child node if not terminal
-        if (!localGame.isGameOver() && node->untriedMoveCount > 0) {
-            node = expand(node, localGame);
+        PenteGame::Player winner = localGame.getWinner();
+        if (winner != PenteGame::NONE) {
+            PenteGame::Player opponent = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
+            // if the game is over. that means the last move made was a winning move. 
+            // which means the current player lost. which means this move was a "solve win" for the opponent.
+            if (winner == opponent) {
+                node->solvedStatus = SolvedStatus::SOLVED_WIN;
+                node->unprovenCount = 0;
+                backpropagate(node, 1.0);
+            } else {
+                node->solvedStatus = SolvedStatus::SOLVED_LOSS;
+                node->unprovenCount = 0;
+                backpropagate(node, -1.0);
+            }
+            continue;
         }
+        node = expand(node, localGame);
 
         // Simulation: play out the game randomly, only if not already solved
-        double result = 0.0;
-        if (node->solvedStatus == SolvedStatus::UNSOLVED) {
-            result = simulate(localGame);
-        } else {
-            result = (node->solvedStatus == SolvedStatus::SOLVED_WIN) ? 1.0 : -1.0;
-        }
+        double result = simulate(node, localGame);
 
         // Backpropagation: update statistics
         backpropagate(node, result);
@@ -234,11 +220,6 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::select");
     // Traverse tree using UCB1 until we find a node that's not fully expanded and not solved
     while (node->isFullyExpanded() && node->childCount > 0 && node->solvedStatus == SolvedStatus::UNSOLVED) {
-
-        if (config_.searchMode == SearchMode::PUCT) {
-            updateChildrenPriors(node, game);
-        }
-
         node = selectBestChild(node);
         game.makeMove(node->move.x, node->move.y);
     }
@@ -248,91 +229,51 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
 
 MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::expand");
-    if (node->untriedMoveCount == 0) {
-        return node;
-    }
+    
+    // if this is the first node being expanded, we need to allocate all children nodes and set priors
+    if (node->childCount == 0) {
+        initNodeChildren(node, static_cast<int>(game.getLegalMoves().size()));
+        // movePriors - vector of pairs of moves and priors, ordered by prior, filtered to legal moves
+        // value - static evaluation of the position
+        auto [movePriors, value] = config_.evaluator->evaluate(game);
 
-    // Pick a random untried move
-    std::uniform_int_distribution<uint16_t> dist(0, node->untriedMoveCount - 1);
-    uint16_t moveIndex = dist(rng_);
+        // allocate children
+        for (const auto& [move, prior] : movePriors) {
+            Node* child = allocateNode();
+            child->move = move;
+            child->player = (node->player == PenteGame::BLACK)
+                ? PenteGame::WHITE
+                : PenteGame::BLACK;
+            child->parent = node;
+            child->prior = prior;
 
-    // Swap with last and "pop" (just decrement count)
-    std::swap(node->untriedMoves[moveIndex], node->untriedMoves[node->untriedMoveCount - 1]);
-    PenteGame::Move move = node->untriedMoves[node->untriedMoveCount - 1];
-    node->untriedMoveCount--;
-
-    // Track the player who is about to move
-    PenteGame::Player startPlayer = game.getCurrentPlayer();
-
-    // Apply move to game
-    game.makeMove(move.x, move.y);
-
-    // Create new child node from arena
-    Node* child = allocateNode();
-    child->move = move;
-    child->player = (node->player == PenteGame::BLACK)
-                    ? PenteGame::WHITE
-                    : PenteGame::BLACK;
-    child->parent = node;
-    child->prior = -1.0f; // will be updated in the selection phase
-
-    // Get legal moves for this new state
-    if (!game.isGameOver()) {
-        std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
-        initNodeUntriedMoves(child, legalMoves);
-        initNodeChildren(child, static_cast<int>(legalMoves.size()));
-        child->unprovenCount = static_cast<int16_t>(legalMoves.size());
-    } else {
-        // Terminal node - determine solved status
-        PenteGame::Player winner = game.getWinner();
-        if (winner == startPlayer) {
-            child->solvedStatus = SolvedStatus::SOLVED_WIN;
-            child->unprovenCount = 0;
-            // NEW: Immediately propagate win to parent
-            if (node->solvedStatus == SolvedStatus::UNSOLVED) {
-                node->solvedStatus = SolvedStatus::SOLVED_LOSS;
-            }
-        } else {
-            child->solvedStatus = SolvedStatus::UNSOLVED;
-            std::cout << "Exiting: Unexpected game over state in expand(). Winner: "
-                      << static_cast<int>(winner) << std::endl;
-            std::cerr << "Error: Unexpected game over state. Winner: "
-                      << static_cast<int>(winner) << std::endl;
-            exit(1);
+            node->children[node->childCount] = child;
+            node->childCount++;
         }
+        node->value = value;
+        node->expanded = true;
+        node->unprovenCount = node->childCount;
+
+    } else {
+        // this should never happen right? 
+        std::cout << "This should never happen: expanding a node that already has children allocated.\n";
+        std::cerr << "Error: Attempting to expand a node that already has children allocated. This indicates a logic error in the MCTS implementation.\n";
+        exit(1);
     }
 
-    // Add child to parent's children array
-    node->children[node->childCount] = child;
-    node->childCount++;
-
-    return child;
+    return node;
 }
 
-double MCTS::simulate(const PenteGame& gameState) {
+double MCTS::simulate(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::simulate");
 
-    // If we have an evaluator, try static evaluation first
-    if (config_.evaluator) {
-        // Check for terminal state first
-        PenteGame::Player winner = gameState.getWinner();
-        if (winner != PenteGame::NONE) {
-            // Current player just moved, so winner is the player who just moved
-            // Return from perspective of player who just moved (the child node's player)
-            return (winner == gameState.getCurrentPlayer()) ? -1.0 : 1.0;
-        }
-
-        // Use evaluator for position value
-        double evalValue = static_cast<double>(config_.evaluator->evaluateValue(gameState));
-
-        // If evaluation is non-zero, use it; otherwise fall through to rollout
-        if (evalValue != 0.0) {
-            return evalValue;
-        }
+    if (node->value != 0.0f) {
+        return node->value;
     }
 
+
     // Fallback: random rollout (when no evaluator, or evaluation returned 0)
-    PenteGame simGame = gameState;
+    PenteGame simGame = game;
 
     PenteGame::Player startPlayer = simGame.getCurrentPlayer();
     PenteGame::Player winner = PenteGame::NONE;
@@ -396,45 +337,6 @@ void MCTS::backpropagate(Node* node, double result) {
 // ============================================================================
 // Helper Methods
 // ============================================================================
-
-void MCTS::updateChildrenPriors(Node* node, const PenteGame& game) {
-    PROFILE_SCOPE("MCTS::updateChildrenPriors");
-    // No children? Nothing to do
-    if (node->childCount == 0) {
-        return;
-    }
-    
-    // Check if already evaluated (first child's prior will be >= 0)
-    if (node->children[0]->prior >= 0.0f) {
-        return; // Already evaluated
-    }
-    
-    // No evaluator? throw error
-    if (!config_.evaluator) {
-        std::cerr << "FATAL ERROR: PUCT search mode selected but no evaluator provided!" << std::endl;
-        exit(1);
-    }
-    
-    // Evaluate policy for this position
-    auto policy = config_.evaluator->evaluatePolicy(game);
-    
-    // check that childCount matches policy size
-    // if (node->childCount != policy.size()) {
-    //     std::cerr << "FATAL ERROR: Mismatch between child count and policy size!" << std::endl;
-    //     exit(1);
-    // }
-
-    // Assign priors to children
-    // Policy is returned in same order as childMoves, so direct assignment
-    // for (uint16_t i = 0; i < node->childCount && i < policy.size(); i++) {
-    //     node->children[i]->prior = policy[i];
-    // }
-
-    for (uint16_t i = 0; i < node->childCount; i++) {
-        Node* child = node->children[i];
-        child->prior = policy[child->move.x][child->move.y];
-    }
-}
 
 MCTS::Node* MCTS::selectBestChild(Node* node) const {
     if (!node || node->childCount == 0) {
@@ -512,26 +414,15 @@ MCTS::Node* MCTS::copySubtree(Node* source, MCTSArena& destArena) {
     dest->solvedStatus = source->solvedStatus;
     dest->childCount = source->childCount;
     dest->childCapacity = source->childCapacity;
-    dest->untriedMoveCount = source->untriedMoveCount;
     dest->unprovenCount = source->unprovenCount;
     dest->visits = source->visits;
     dest->wins = source->wins;
     dest->totalValue = source->totalValue;
     dest->parent = nullptr;  // Will be set by parent during recursion
-
-    // Copy untried moves array
-    if (source->untriedMoveCount > 0 && source->untriedMoves) {
-        dest->untriedMoves = destArena.allocate<PenteGame::Move>(source->untriedMoveCount);
-        if (!dest->untriedMoves) {
-            std::cerr << "FATAL: Destination arena out of memory for untried moves!\n";
-            throw std::bad_alloc();
-        }
-        for (uint16_t i = 0; i < source->untriedMoveCount; i++) {
-            dest->untriedMoves[i] = source->untriedMoves[i];
-        }
-    } else {
-        dest->untriedMoves = nullptr;
-    }
+    dest->children = nullptr; // Will be set below if there are children
+    dest->expanded = source->expanded;
+    dest->prior = source->prior;
+    dest->value = source->value;
 
     // Copy children array and recursively copy child nodes
     if (source->childCount > 0 && source->children) {

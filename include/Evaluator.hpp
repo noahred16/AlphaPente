@@ -11,9 +11,12 @@ class Evaluator {
 public:
     virtual ~Evaluator() = default;
     
-    // Returns prior probabilities for all legal moves
-    virtual std::array<std::array<float, PenteGame::BOARD_SIZE>, PenteGame::BOARD_SIZE> evaluatePolicy(const PenteGame& game) = 0;
+    // returns policy and value together
+    virtual std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame& game) = 0;
 
+
+    // returns orderd pairs of moves and their probabilities, sorted by probability. filtered to only legal moves.
+    virtual std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame& game) = 0;
     
     // Returns expected value from current player's perspective
     // Returns: value in range [-1.0, 1.0] where 1.0 = current player winning
@@ -25,7 +28,8 @@ class UniformEvaluator : public Evaluator {
 public:
     UniformEvaluator() = default;
     ~UniformEvaluator() override = default;
-    std::array<std::array<float, PenteGame::BOARD_SIZE>, PenteGame::BOARD_SIZE> evaluatePolicy(const PenteGame& game) override;
+    std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame& game) override;
+    std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame& game) override;
     float evaluateValue(const PenteGame& game) override;
 };
 
@@ -34,7 +38,8 @@ class HeuristicEvaluator : public Evaluator {
 public:
     HeuristicEvaluator() = default;
     ~HeuristicEvaluator() override = default;
-    std::array<std::array<float, PenteGame::BOARD_SIZE>, PenteGame::BOARD_SIZE> evaluatePolicy(const PenteGame& game) override;
+    std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame& game) override;
+    std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame& game) override;
     float evaluateValue(const PenteGame& game) override;
 };
 
