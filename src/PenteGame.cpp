@@ -923,14 +923,14 @@ float PenteGame::evaluatePosition() const {
     }
 
     // if opp one person is leading by more than 2, consider it a win. 
-    if (myCaptures - oppCaptures > 3) {
+    if (myCaptures - oppCaptures > 5) {
         // DEBUG game utils print state and exit
         // GameUtils::printGameState(*this);
         // std::cout << "Strong advantage detected in evaluatePosition!" << std::endl;
         // exit(1);
         return 0.7f;
     }
-    if (oppCaptures - myCaptures > 3) {
+    if (oppCaptures - myCaptures > 5) {
         // DEBUG game utils print state and exit
         // GameUtils::printGameState(*this);
         // std::cout << "Strong disadvantage detected in evaluatePosition!" << std::endl;

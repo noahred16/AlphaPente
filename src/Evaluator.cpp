@@ -44,7 +44,10 @@ float UniformEvaluator::evaluateValue(const PenteGame& game) {
 // ============================================================================
 
 std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> HeuristicEvaluator::evaluate(const PenteGame& game) {
-    auto policy = evaluatePolicy(game);
+    
+    // auto policy = evaluatePolicy(game);
+    // skip calculating policy for now, do lazy loading in selection to save on heuristic evals
+    std::vector<std::pair<PenteGame::Move, float>> policy = {};
     float value = evaluateValue(game);
     return {policy, value};
 }

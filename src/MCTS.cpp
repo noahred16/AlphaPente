@@ -219,7 +219,13 @@ PenteGame::Move MCTS::getBestMove() const {
 MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::select");
     // Traverse tree using UCB1 until we find a node that's not fully expanded and not solved
-    while (node->isFullyExpanded() && node->childCount > 0 && node->solvedStatus == SolvedStatus::UNSOLVED) {
+    while (node->isFullyExpanded() && node->solvedStatus == SolvedStatus::UNSOLVED) {
+        if (node->childCount == 0 && config_.heuristicMode == HeuristicMode::HEURISTIC) {
+            // lazy policy load
+            std::vector<std::pair<PenteGame::Move, float>> movePriors = config_.evaluator->evaluatePolicy(game);
+            initializeNodePriors(node, movePriors);
+            continue;
+        }
         node = selectBestChild(node);
         game.makeMove(node->move.x, node->move.y);
     }
@@ -232,27 +238,17 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     
     // if this is the first node being expanded, we need to allocate all children nodes and set priors
     if (node->childCount == 0) {
-        initNodeChildren(node, static_cast<int>(game.getLegalMoves().size()));
+        int legalMoveCount = static_cast<int>(game.getLegalMoves().size());
+        initNodeChildren(node, legalMoveCount);
         // movePriors - vector of pairs of moves and priors, ordered by prior, filtered to legal moves
         // value - static evaluation of the position
         auto [movePriors, value] = config_.evaluator->evaluate(game);
 
-        // allocate children
-        for (const auto& [move, prior] : movePriors) {
-            Node* child = allocateNode();
-            child->move = move;
-            child->player = (node->player == PenteGame::BLACK)
-                ? PenteGame::WHITE
-                : PenteGame::BLACK;
-            child->parent = node;
-            child->prior = prior;
+        initializeNodePriors(node, movePriors);
 
-            node->children[node->childCount] = child;
-            node->childCount++;
-        }
         node->value = value;
         node->expanded = true;
-        node->unprovenCount = node->childCount;
+        node->unprovenCount = legalMoveCount;
 
     } else {
         // this should never happen right? 
@@ -337,6 +333,24 @@ void MCTS::backpropagate(Node* node, double result) {
 // ============================================================================
 // Helper Methods
 // ============================================================================
+
+
+// allocate children priors. takes the movePriors from the evaluator and a node reference. void. used for lazy policy loading
+void MCTS::initializeNodePriors(Node* node, const std::vector<std::pair<PenteGame::Move, float>>& movePriors) {
+    // allocate children
+    for (const auto& [move, prior] : movePriors) {
+        Node* child = allocateNode();
+        child->move = move;
+        child->player = (node->player == PenteGame::BLACK)
+            ? PenteGame::WHITE
+            : PenteGame::BLACK;
+        child->parent = node;
+        child->prior = prior;
+
+        node->children[node->childCount] = child;
+        node->childCount++;
+    }
+}
 
 MCTS::Node* MCTS::selectBestChild(Node* node) const {
     if (!node || node->childCount == 0) {

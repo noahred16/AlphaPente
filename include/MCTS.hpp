@@ -104,6 +104,7 @@ public:
         SOLVED_LOSS    // Proven loss for the player who made the move
     };
     enum class SearchMode { UCB1, PUCT };
+    enum class HeuristicMode { UNIFORM, HEURISTIC, NEURAL_NET };
 
     // Configuration parameters
     struct Config {
@@ -114,6 +115,7 @@ public:
         
         SearchMode searchMode = SearchMode::UCB1;
         Evaluator* evaluator = nullptr; // For PUCT priors and value evaluation
+        HeuristicMode heuristicMode = HeuristicMode::HEURISTIC;
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
@@ -203,6 +205,7 @@ private:
     // Arena allocation helpers
     Node* allocateNode();
     void initNodeChildren(Node* node, int capacity);
+    void initializeNodePriors(Node* node, const std::vector<std::pair<PenteGame::Move, float>>& movePriors);
 
     // Tree reuse helpers (copies subtree to fresh arena)
     Node* copySubtree(Node* source, MCTSArena& destArena);
