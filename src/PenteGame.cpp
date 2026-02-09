@@ -26,7 +26,7 @@ void PenteGame::reset() {
         for (int y = 0; y < BOARD_SIZE; y++) {
             for (int x = 0; x < BOARD_SIZE; x++) {
                 legalMovesVector.emplace_back(x, y);
-                moveIndex[encodePos(x, y)] = legalMovesVector.size() - 1;
+                moveIndex[encodePos(x, y)] = static_cast<uint16_t>(legalMovesVector.size() - 1);
             }
         }
     }

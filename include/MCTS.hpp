@@ -40,7 +40,7 @@ public:
         : size_(size)
         , offset_(0)
         , memory_(nullptr) {
-        memory_ = static_cast<char*>(std::aligned_alloc(64, size_)); // 64-byte alignment for cache lines
+        memory_ = static_cast<char*>(std::aligned_alloc(64, size_));
         if (!memory_) {
             throw std::bad_alloc();
         }
@@ -54,45 +54,48 @@ public:
     MCTSArena(const MCTSArena&) = delete;
     MCTSArena& operator=(const MCTSArena&) = delete;
 
-    // Allocate memory for type T with proper alignment
+    // Lock-free allocate using CAS bump allocator
     template<typename T>
     T* allocate(size_t count = 1) {
-        // Align to T's alignment requirement
         size_t alignment = alignof(T);
-        size_t alignedOffset = (offset_ + alignment - 1) & ~(alignment - 1);
         size_t totalBytes = sizeof(T) * count;
 
-        if (alignedOffset + totalBytes > size_) {
-            // Out of arena memory
-            return nullptr;
-        }
+        size_t oldOffset = offset_.load(std::memory_order_relaxed);
+        size_t alignedOffset;
+        do {
+            alignedOffset = (oldOffset + alignment - 1) & ~(alignment - 1);
+            if (alignedOffset + totalBytes > size_) {
+                return nullptr;
+            }
+        } while (!offset_.compare_exchange_weak(
+            oldOffset, alignedOffset + totalBytes, std::memory_order_relaxed));
 
-        T* ptr = reinterpret_cast<T*>(memory_ + alignedOffset);
-        offset_ = alignedOffset + totalBytes;
-        return ptr;
+        return reinterpret_cast<T*>(memory_ + alignedOffset);
     }
 
     // O(1) tree destruction - just reset the offset
     void reset() {
-        offset_ = 0;
+        offset_.store(0, std::memory_order_relaxed);
     }
 
     // Swap internals with another arena (for subtree reuse)
     void swap(MCTSArena& other) {
         std::swap(size_, other.size_);
-        std::swap(offset_, other.offset_);
+        size_t tmp = offset_.load(std::memory_order_relaxed);
+        offset_.store(other.offset_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        other.offset_.store(tmp, std::memory_order_relaxed);
         std::swap(memory_, other.memory_);
     }
 
     // Statistics
-    size_t bytesUsed() const { return offset_; }
-    size_t bytesRemaining() const { return size_ - offset_; }
+    size_t bytesUsed() const { return offset_.load(std::memory_order_relaxed); }
+    size_t bytesRemaining() const { return size_ - offset_.load(std::memory_order_relaxed); }
     size_t totalSize() const { return size_; }
-    double utilizationPercent() const { return 100.0 * offset_ / size_; }
+    double utilizationPercent() const { return 100.0 * offset_.load(std::memory_order_relaxed) / size_; }
 
 private:
     size_t size_;
-    size_t offset_;
+    std::atomic<size_t> offset_;
     char* memory_;
 };
 
@@ -131,6 +134,7 @@ public:
         int batchSize = 32;           // Positions to batch for inference
         int batchTimeoutMs = 5;       // Max wait time for batch to fill
         bool useInferenceThread = true; // false = workers evaluate inline (CPU-only mode)
+        int virtualLossWeight = 3;    // VL visits added per node during selection
     };
 
     // Node in the MCTS tree - trivially destructible, ~64 bytes
@@ -324,26 +328,27 @@ private:
     void expandParallel(Node* node,
                        const std::vector<std::pair<PenteGame::Move, float>>& movePriors,
                        float value);
-    void backpropWithVirtualLoss(Node* node, double result);
+    void backpropWithVirtualLoss(Node* node, double result, int vlWeight);
 
     // Virtual loss helpers
-    void addVirtualLoss(Node* node);
-    void removeVirtualLoss(Node* node);
-    void cancelVirtualLoss(Node* node);
+    void addVirtualLoss(Node* node, int weight);
+    void removeVirtualLoss(Node* node, int weight);
+    void cancelVirtualLoss(Node* node, int weight);
 
     // Parallel solver propagation (CAS-based, each node solved at most once)
     void solveNode(Node* node, SolvedStatus status);
 
-    // Random rollout from a position (thread-safe, copies game)
-    double rollout(PenteGame game) const;
+    // Random rollout from a position (thread-safe)
+    double rollout(PenteGame& game) const;
 
     // Member variables
-    std::mutex expansionMutex_;
+    std::mutex lazyPolicyMutex_;
     PenteGame game;
     Config config_;
     MCTSArena arena_;
     Node* root_ = nullptr;  // Raw pointer into arena
     mutable std::mt19937 rng_;
+    int virtualLossWeight_ = 1;  // Set from ParallelConfig at search start
 
     // Statistics
     int totalSimulations_ = 0;

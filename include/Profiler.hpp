@@ -19,66 +19,83 @@
 #include <iostream>
 #include <iomanip>
 #include <mutex>
+#include <memory>
+#include <thread>
+#include <sstream>
 
 // ============================================================================
-// Profiler - Accumulates timing data across many function calls
+// Profiler - Lock-free per-thread accumulation, mutex only on registration
 // ============================================================================
 
 class Profiler {
 public:
     struct SectionStats {
         uint64_t callCount = 0;
-        double totalTimeNs = 0.0;  // Nanoseconds for precision
+        double totalTimeNs = 0.0;
     };
 
-    // Get singleton instance
+    struct ThreadData {
+        std::thread::id threadId;
+        std::string label;
+        std::unordered_map<std::string, SectionStats> sections;
+    };
+
     static Profiler& instance() {
         static Profiler profiler;
         return profiler;
     }
 
-    // Record a timing measurement for a section
+    // Fast path: write to thread-local map, no mutex
     void record(const std::string& section, double durationNs) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto& stats = sections_[section];
+        ThreadData* td = myData_;
+        if (!td) {
+            td = registerThread();
+        }
+        auto& stats = td->sections[section];
         stats.callCount++;
         stats.totalTimeNs += durationNs;
     }
 
-    // Reset all accumulated data
     void reset() {
         std::lock_guard<std::mutex> lock(mutex_);
-        sections_.clear();
+        allThreadData_.clear();
+        myData_ = nullptr;  // Only clears the calling thread's pointer
     }
 
-    // Print formatted report
     void printReport() const {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (sections_.empty()) {
+        if (allThreadData_.empty()) {
             std::cout << "\n=== Profiler Report ===\n";
             std::cout << "No profiling data collected.\n";
             return;
         }
 
-        // Collect and sort by total time (descending)
+        // ---- Aggregate table ----
+        std::unordered_map<std::string, SectionStats> aggregate;
+        for (const auto& td : allThreadData_) {
+            for (const auto& [name, stats] : td->sections) {
+                auto& agg = aggregate[name];
+                agg.callCount += stats.callCount;
+                agg.totalTimeNs += stats.totalTimeNs;
+            }
+        }
+
         std::vector<std::pair<std::string, SectionStats>> sorted(
-            sections_.begin(), sections_.end());
+            aggregate.begin(), aggregate.end());
         std::sort(sorted.begin(), sorted.end(),
             [](const auto& a, const auto& b) {
                 return a.second.totalTimeNs > b.second.totalTimeNs;
             });
 
-        // Calculate total time for percentage
         double grandTotal = 0.0;
         for (const auto& [name, stats] : sorted) {
             grandTotal += stats.totalTimeNs;
         }
 
-        // Print header
         std::cout << "\n";
         std::cout << "================================================================================\n";
-        std::cout << "                              PROFILER REPORT                                   \n";
+        std::cout << "                         PROFILER REPORT (AGGREGATE)                             \n";
         std::cout << "================================================================================\n";
         std::cout << std::left << std::setw(28) << "Section"
                   << std::right << std::setw(14) << "Total Time"
@@ -88,7 +105,6 @@ public:
                   << "\n";
         std::cout << std::string(80, '-') << "\n";
 
-        // Print each section
         for (const auto& [name, stats] : sorted) {
             double totalMs = stats.totalTimeNs / 1e6;
             double avgNs = stats.callCount > 0 ? stats.totalTimeNs / stats.callCount : 0.0;
@@ -106,20 +122,87 @@ public:
         std::cout << std::left << std::setw(28) << "TOTAL"
                   << std::right << std::setw(10) << std::fixed << std::setprecision(2) << (grandTotal / 1e6) << " ms"
                   << "\n";
-        std::cout << "================================================================================\n\n";
+        std::cout << "================================================================================\n";
+
+        // ---- Per-thread breakdown ----
+        if (allThreadData_.size() > 1) {
+            std::cout << "\n";
+            std::cout << "================================================================================\n";
+            std::cout << "                          PER-THREAD BREAKDOWN                                   \n";
+            std::cout << "================================================================================\n";
+
+            for (size_t t = 0; t < allThreadData_.size(); ++t) {
+                const auto& td = allThreadData_[t];
+
+                double threadTotal = 0.0;
+                for (const auto& [name, stats] : td->sections) {
+                    threadTotal += stats.totalTimeNs;
+                }
+
+                std::cout << "\n--- " << td->label << " (total: "
+                          << std::fixed << std::setprecision(2) << (threadTotal / 1e6)
+                          << " ms) ---\n";
+
+                // Sort this thread's sections by time
+                std::vector<std::pair<std::string, SectionStats>> threadSorted(
+                    td->sections.begin(), td->sections.end());
+                std::sort(threadSorted.begin(), threadSorted.end(),
+                    [](const auto& a, const auto& b) {
+                        return a.second.totalTimeNs > b.second.totalTimeNs;
+                    });
+
+                std::cout << std::left << std::setw(28) << "Section"
+                          << std::right << std::setw(14) << "Total Time"
+                          << std::setw(10) << "   %"
+                          << std::setw(14) << "Calls"
+                          << "\n";
+                std::cout << std::string(66, '-') << "\n";
+
+                for (const auto& [name, stats] : threadSorted) {
+                    double totalMs = stats.totalTimeNs / 1e6;
+                    double pct = threadTotal > 0 ? (stats.totalTimeNs / threadTotal) * 100.0 : 0.0;
+
+                    std::cout << std::left << std::setw(28) << name
+                              << std::right << std::setw(10) << std::fixed << std::setprecision(2) << totalMs << " ms"
+                              << std::setw(8) << std::fixed << std::setprecision(1) << pct << " %"
+                              << std::setw(14) << stats.callCount
+                              << "\n";
+                }
+            }
+
+            std::cout << "================================================================================\n";
+        }
+
+        std::cout << "\n";
     }
 
 private:
     Profiler() = default;
     ~Profiler() = default;
-
-    // Non-copyable
     Profiler(const Profiler&) = delete;
     Profiler& operator=(const Profiler&) = delete;
 
+    // Called once per thread on first record() call
+    ThreadData* registerThread() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto td = std::make_unique<ThreadData>();
+        td->threadId = std::this_thread::get_id();
+        std::ostringstream oss;
+        oss << "Thread " << allThreadData_.size();
+        td->label = oss.str();
+        ThreadData* raw = td.get();
+        allThreadData_.push_back(std::move(td));
+        myData_ = raw;
+        return raw;
+    }
+
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, SectionStats> sections_;
+    std::vector<std::unique_ptr<ThreadData>> allThreadData_;
+    static thread_local ThreadData* myData_;
 };
+
+// Definition of the thread_local pointer (inline for header-only)
+inline thread_local Profiler::ThreadData* Profiler::myData_ = nullptr;
 
 // ============================================================================
 // ScopedTimer - RAII helper that records timing when it goes out of scope
@@ -138,7 +221,6 @@ public:
         Profiler::instance().record(section_, durationNs);
     }
 
-    // Non-copyable, non-movable
     ScopedTimer(const ScopedTimer&) = delete;
     ScopedTimer& operator=(const ScopedTimer&) = delete;
 

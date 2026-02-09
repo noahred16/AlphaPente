@@ -805,6 +805,8 @@ PenteGame::Move MCTS::parallelSearch(const PenteGame& game,
     this->game = game;
     auto startTime = std::chrono::high_resolution_clock::now();
 
+    virtualLossWeight_ = pconfig.virtualLossWeight;
+
     clearTree();
     root_ = allocateNode();
     root_->player = game.getCurrentPlayer();
@@ -896,19 +898,26 @@ void MCTS::workerThread(
         InferenceResult result;
         if (backpropQueue.tryPop(result)) {
             iterationCount.fetch_add(1, std::memory_order_relaxed);
-            expandParallel(result.node, result.movePriors, result.value);
-            backpropWithVirtualLoss(result.node, result.value);
+            { PROFILE_SCOPE("worker::expand");
+              expandParallel(result.node, result.movePriors, result.value); }
+            { PROFILE_SCOPE("worker::backprop");
+              backpropWithVirtualLoss(result.node, result.value, virtualLossWeight_); }
             continue;
         }
 
         // PHASE 2: Selection - traverse tree to find leaf
-        localGame.syncFrom(rootGame);
-        Node* leaf = selectParallel(root_, localGame);
+        { PROFILE_SCOPE("worker::syncFrom");
+          localGame.syncFrom(rootGame); }
+
+        Node* leaf;
+        { PROFILE_SCOPE("worker::select");
+          leaf = selectParallel(root_, localGame); }
         if (!leaf) continue;
 
         // Check for terminal game state or solver-proved node
         PenteGame::Player winner = localGame.getWinner();
         if (winner != PenteGame::NONE || leaf->isTerminal()) {
+            PROFILE_SCOPE("worker::terminal");
             iterationCount.fetch_add(1, std::memory_order_relaxed);
             double terminalResult;
             if (winner != PenteGame::NONE) {
@@ -924,16 +933,18 @@ void MCTS::workerThread(
                 auto status = leaf->solvedStatus.load(std::memory_order_relaxed);
                 terminalResult = (status == SolvedStatus::SOLVED_WIN) ? 1.0 : -1.0;
             }
-            backpropWithVirtualLoss(leaf, terminalResult);
+            backpropWithVirtualLoss(leaf, terminalResult, virtualLossWeight_);
             continue;
         }
 
         // Try to claim this leaf for expansion (CAS: UNEXPANDED → EXPANDING)
+        // acq_rel on success (publish ownership), relaxed on failure (just retry)
         NodeState expected = NodeState::UNEXPANDED;
         if (!leaf->state.compare_exchange_strong(expected, NodeState::EXPANDING,
-                std::memory_order_acq_rel)) {
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
             // Another thread owns this leaf — cancel VL and retry
-            cancelVirtualLoss(leaf);
+            PROFILE_SCOPE("worker::casFail");
+            cancelVirtualLoss(leaf, virtualLossWeight_);
             continue;
         }
 
@@ -950,13 +961,21 @@ void MCTS::workerThread(
             inferenceQueue.push(std::move(req));
         } else {
             // Inline evaluation (CPU-only mode)
-            auto [movePriors, value] = config_.evaluator->evaluate(localGame);
-            expandParallel(leaf, movePriors, value);
+            std::vector<std::pair<PenteGame::Move, float>> movePriors;
+            float value;
+            { PROFILE_SCOPE("worker::evaluate");
+              auto result = config_.evaluator->evaluate(localGame);
+              movePriors = std::move(result.first);
+              value = result.second; }
+            { PROFILE_SCOPE("worker::expand");
+              expandParallel(leaf, movePriors, value); }
             double simResult = static_cast<double>(value);
             if (value == 0.0f) {
+                PROFILE_SCOPE("worker::rollout");
                 simResult = rollout(localGame);
             }
-            backpropWithVirtualLoss(leaf, simResult);
+            { PROFILE_SCOPE("worker::backprop");
+              backpropWithVirtualLoss(leaf, simResult, virtualLossWeight_); }
         }
     }
 }
@@ -1009,7 +1028,7 @@ void MCTS::inferenceThread(
 // ============================================================================
 
 MCTS::Node* MCTS::selectParallel(Node* node, PenteGame& game) {
-    addVirtualLoss(node);
+    addVirtualLoss(node, virtualLossWeight_);
 
     while (true) {
         if (node->isTerminal()) {
@@ -1022,14 +1041,14 @@ MCTS::Node* MCTS::selectParallel(Node* node, PenteGame& game) {
 
         // Lazy policy load (heuristic mode)
         if (node->childCount == 0 && config_.heuristicMode == HeuristicMode::HEURISTIC) {
-            std::lock_guard<std::mutex> lock(expansionMutex_);
-            if (node->childCount == 0) {
-                std::vector<std::pair<PenteGame::Move, float>> movePriors =
-                    config_.evaluator->evaluatePolicy(game);
-                if (!movePriors.empty()) {
-                    initNodeChildren(node, static_cast<int>(movePriors.size()));
-                    initializeNodePriors(node, movePriors);
-                }
+            // Evaluate policy OUTSIDE the lock (expensive ~12us computation)
+            std::vector<std::pair<PenteGame::Move, float>> movePriors =
+                config_.evaluator->evaluatePolicy(game);
+            // Lightweight lock only for the install step (pointer writes)
+            std::lock_guard<std::mutex> lock(lazyPolicyMutex_);
+            if (node->childCount == 0 && !movePriors.empty()) {
+                initNodeChildren(node, static_cast<int>(movePriors.size()));
+                initializeNodePriors(node, movePriors);
             }
         }
 
@@ -1038,7 +1057,7 @@ MCTS::Node* MCTS::selectParallel(Node* node, PenteGame& game) {
             return node;
         }
 
-        addVirtualLoss(bestChild);
+        addVirtualLoss(bestChild, virtualLossWeight_);
         game.makeMove(bestChild->move.x, bestChild->move.y);
         node = bestChild;
     }
@@ -1049,8 +1068,8 @@ void MCTS::expandParallel(
     const std::vector<std::pair<PenteGame::Move, float>>& movePriors,
     float value)
 {
-    // Lock to protect arena allocation (only the CAS-winning thread calls this)
-    std::lock_guard<std::mutex> lock(expansionMutex_);
+    // No lock needed: CAS (UNEXPANDED→EXPANDING) ensures single-writer,
+    // and arena allocator is now lock-free.
 
     node->value = value;
 
@@ -1086,13 +1105,13 @@ void MCTS::expandParallel(
     node->state.store(NodeState::EXPANDED, std::memory_order_release);
 }
 
-void MCTS::backpropWithVirtualLoss(Node* node, double result) {
+void MCTS::backpropWithVirtualLoss(Node* node, double result, int vlWeight) {
     Node* current = node;
     double value = result;
 
     while (current != nullptr) {
         // Remove virtual loss (was added during selection)
-        removeVirtualLoss(current);
+        removeVirtualLoss(current, vlWeight);
 
         // Record real visit and stats
         current->visits.fetch_add(1, std::memory_order_relaxed);
@@ -1109,22 +1128,22 @@ void MCTS::backpropWithVirtualLoss(Node* node, double result) {
     }
 }
 
-void MCTS::addVirtualLoss(Node* node) {
-    node->visits.fetch_add(1, std::memory_order_relaxed);
-    node->virtualLoss.fetch_add(1, std::memory_order_relaxed);
+void MCTS::addVirtualLoss(Node* node, int weight) {
+    node->visits.fetch_add(weight, std::memory_order_relaxed);
+    node->virtualLoss.fetch_add(weight, std::memory_order_relaxed);
 }
 
-void MCTS::removeVirtualLoss(Node* node) {
-    node->visits.fetch_sub(1, std::memory_order_relaxed);
-    node->virtualLoss.fetch_sub(1, std::memory_order_relaxed);
+void MCTS::removeVirtualLoss(Node* node, int weight) {
+    node->visits.fetch_sub(weight, std::memory_order_relaxed);
+    node->virtualLoss.fetch_sub(weight, std::memory_order_relaxed);
 }
 
-void MCTS::cancelVirtualLoss(Node* node) {
+void MCTS::cancelVirtualLoss(Node* node, int weight) {
     // Remove virtual loss from entire selection path without adding real visits.
     // Used when a wasted selection finds an already-expanded leaf.
     Node* current = node;
     while (current != nullptr) {
-        removeVirtualLoss(current);
+        removeVirtualLoss(current, weight);
         current = current->parent;
     }
 }
@@ -1160,7 +1179,7 @@ void MCTS::solveNode(Node* node, SolvedStatus status) {
 // Rollout (Thread-Safe)
 // ============================================================================
 
-double MCTS::rollout(PenteGame game) const {
+double MCTS::rollout(PenteGame& game) const {
     PenteGame::Player startPlayer = game.getCurrentPlayer();
     PenteGame::Player winner = PenteGame::NONE;
     int depth = 0;
