@@ -7,6 +7,11 @@
 #include <random>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
 
 // ============================================================================
 // Arena Allocator for O(1) Tree Destruction
@@ -35,7 +40,7 @@ public:
         : size_(size)
         , offset_(0)
         , memory_(nullptr) {
-        memory_ = static_cast<char*>(std::aligned_alloc(64, size_)); // 64-byte alignment for cache lines
+        memory_ = static_cast<char*>(std::aligned_alloc(64, size_));
         if (!memory_) {
             throw std::bad_alloc();
         }
@@ -49,45 +54,48 @@ public:
     MCTSArena(const MCTSArena&) = delete;
     MCTSArena& operator=(const MCTSArena&) = delete;
 
-    // Allocate memory for type T with proper alignment
+    // Lock-free allocate using CAS bump allocator
     template<typename T>
     T* allocate(size_t count = 1) {
-        // Align to T's alignment requirement
         size_t alignment = alignof(T);
-        size_t alignedOffset = (offset_ + alignment - 1) & ~(alignment - 1);
         size_t totalBytes = sizeof(T) * count;
 
-        if (alignedOffset + totalBytes > size_) {
-            // Out of arena memory
-            return nullptr;
-        }
+        size_t oldOffset = offset_.load(std::memory_order_relaxed);
+        size_t alignedOffset;
+        do {
+            alignedOffset = (oldOffset + alignment - 1) & ~(alignment - 1);
+            if (alignedOffset + totalBytes > size_) {
+                return nullptr;
+            }
+        } while (!offset_.compare_exchange_weak(
+            oldOffset, alignedOffset + totalBytes, std::memory_order_relaxed));
 
-        T* ptr = reinterpret_cast<T*>(memory_ + alignedOffset);
-        offset_ = alignedOffset + totalBytes;
-        return ptr;
+        return reinterpret_cast<T*>(memory_ + alignedOffset);
     }
 
     // O(1) tree destruction - just reset the offset
     void reset() {
-        offset_ = 0;
+        offset_.store(0, std::memory_order_relaxed);
     }
 
     // Swap internals with another arena (for subtree reuse)
     void swap(MCTSArena& other) {
         std::swap(size_, other.size_);
-        std::swap(offset_, other.offset_);
+        size_t tmp = offset_.load(std::memory_order_relaxed);
+        offset_.store(other.offset_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        other.offset_.store(tmp, std::memory_order_relaxed);
         std::swap(memory_, other.memory_);
     }
 
     // Statistics
-    size_t bytesUsed() const { return offset_; }
-    size_t bytesRemaining() const { return size_ - offset_; }
+    size_t bytesUsed() const { return offset_.load(std::memory_order_relaxed); }
+    size_t bytesRemaining() const { return size_ - offset_.load(std::memory_order_relaxed); }
     size_t totalSize() const { return size_; }
-    double utilizationPercent() const { return 100.0 * offset_ / size_; }
+    double utilizationPercent() const { return 100.0 * offset_.load(std::memory_order_relaxed) / size_; }
 
 private:
     size_t size_;
-    size_t offset_;
+    std::atomic<size_t> offset_;
     char* memory_;
 };
 
@@ -105,6 +113,7 @@ public:
     };
     enum class SearchMode { UCB1, PUCT };
     enum class HeuristicMode { UNIFORM, HEURISTIC, NEURAL_NET };
+    enum class NodeState : uint8_t { UNEXPANDED = 0, EXPANDING, EXPANDED };
 
     // Configuration parameters
     struct Config {
@@ -120,6 +129,14 @@ public:
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
+    struct ParallelConfig {
+        int numWorkers = 7;
+        int batchSize = 32;           // Positions to batch for inference
+        int batchTimeoutMs = 5;       // Max wait time for batch to fill
+        bool useInferenceThread = true; // false = workers evaluate inline (CPU-only mode)
+        int virtualLossWeight = 3;    // VL visits added per node during selection
+    };
+
     // Node in the MCTS tree - trivially destructible, ~64 bytes
     // All dynamic arrays are arena-allocated via raw pointers
     struct Node {
@@ -129,32 +146,32 @@ public:
         // Player who made the move (1 byte, uint8_t-backed enum)
         PenteGame::Player player;
 
-        // Minimax proof status (1 byte)
-        SolvedStatus solvedStatus = SolvedStatus::UNSOLVED;
+        // Minimax proof status (atomic for parallel solver propagation)
+        std::atomic<SolvedStatus> solvedStatus{SolvedStatus::UNSOLVED};
 
         // Child array metadata (2 bytes each = 4 bytes)
         uint16_t childCount = 0;
         uint16_t childCapacity = 0;
 
-        // Untried moves metadata (2 bytes each = 4 bytes)
-        uint16_t unprovenCount = 0;
+        // Untried moves metadata (atomic for parallel solver)
+        std::atomic<int16_t> unprovenCount{0};
 
         // Statistics (16 bytes)
-        int32_t visits = 0;
-        int32_t wins = 0;
-        double totalValue = 0.0;
+        std::atomic<int32_t> visits{0};
+        std::atomic<int32_t> wins{0};
+        std::atomic<double> totalValue{0.0};
+        std::atomic<int32_t> virtualLoss{0};
+        std::atomic<NodeState> state{NodeState::UNEXPANDED};
+
         float prior = -1.0f;
         float value = 0.0f;
 
         // Pointers (24 bytes)
         Node* parent = nullptr;
         Node** children = nullptr;            // Arena-allocated array of child pointers
-        bool expanded = false;
 
-        // Total: 4 + 1 + 1 + 4 + 4 + 16 + 24 = 54 bytes + padding = 56-64 bytes
-
-        bool isFullyExpanded() const { return expanded; } // HMM
-        bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; } // HMM
+        bool isFullyExpanded() const { return state.load(std::memory_order_acquire) == NodeState::EXPANDED; }
+        bool isTerminal() const { return solvedStatus.load(std::memory_order_relaxed) != SolvedStatus::UNSOLVED; }
         double getUCB1Value(double explorationFactor) const;
         double getPUCTValue(double explorationFactor, int parentVisits) const;
     };
@@ -165,6 +182,8 @@ public:
 
     // Main search interface
     PenteGame::Move search(const PenteGame& game);
+    PenteGame::Move parallelSearch(const PenteGame& game,
+                                   const ParallelConfig& pconfig);
 
     // Get best move from current tree (no additional search)
     PenteGame::Move getBestMove() const;
@@ -216,12 +235,120 @@ private:
     void printMovesFromNode(Node* node, int topN) const;
     int countNodes(Node* node) const;
 
+    // ---- Parallel search infrastructure ----
+
+    struct InferenceRequest {
+        Node* node;
+        PenteGame gameState;
+        int threadId;
+    };
+
+    struct InferenceResult {
+        Node* node;
+        std::vector<std::pair<PenteGame::Move, float>> movePriors;
+        float value;
+    };
+
+    template<typename T>
+    class ThreadSafeQueue {
+    public:
+        void push(T item) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            queue_.push(std::move(item));
+            cv_.notify_one();
+        }
+
+        bool tryPop(T& item) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (queue_.empty()) return false;
+            item = std::move(queue_.front());
+            queue_.pop();
+            return true;
+        }
+
+        bool waitPop(T& item, int timeoutMs) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                            [this] { return !queue_.empty(); })) {
+                item = std::move(queue_.front());
+                queue_.pop();
+                return true;
+            }
+            return false;
+        }
+
+        size_t drainTo(std::vector<T>& out, size_t maxCount) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            size_t count = 0;
+            while (!queue_.empty() && count < maxCount) {
+                out.push_back(std::move(queue_.front()));
+                queue_.pop();
+                count++;
+            }
+            return count;
+        }
+
+        size_t size() const {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return queue_.size();
+        }
+
+        bool empty() const {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return queue_.empty();
+        }
+
+    private:
+        mutable std::mutex mutex_;
+        std::condition_variable cv_;
+        std::queue<T> queue_;
+    };
+
+    // Parallel worker/inference thread entry points
+    void workerThread(
+        int threadId,
+        std::atomic<bool>& stopFlag,
+        std::atomic<int>& iterationCount,
+        ThreadSafeQueue<InferenceRequest>& inferenceQueue,
+        ThreadSafeQueue<InferenceResult>& backpropQueue,
+        const PenteGame& rootGame,
+        const ParallelConfig& pconfig
+    );
+
+    void inferenceThread(
+        std::atomic<bool>& stopFlag,
+        ThreadSafeQueue<InferenceRequest>& inferenceQueue,
+        ThreadSafeQueue<InferenceResult>& backpropQueue,
+        int batchSize,
+        int batchTimeoutMs
+    );
+
+    // Parallel MCTS phases
+    Node* selectParallel(Node* node, PenteGame& game);
+    void expandParallel(Node* node,
+                       const std::vector<std::pair<PenteGame::Move, float>>& movePriors,
+                       float value);
+    void backpropWithVirtualLoss(Node* node, double result, int vlWeight);
+
+    // Virtual loss helpers
+    void addVirtualLoss(Node* node, int weight);
+    void removeVirtualLoss(Node* node, int weight);
+    void cancelVirtualLoss(Node* node, int weight);
+
+    // Parallel solver propagation (CAS-based, each node solved at most once)
+    void solveNode(Node* node, SolvedStatus status);
+
+    // Random rollout from a position (thread-safe)
+    double rollout(PenteGame& game) const;
+
     // Member variables
+    std::mutex lazyPolicyMutex_;
     PenteGame game;
     Config config_;
     MCTSArena arena_;
     Node* root_ = nullptr;  // Raw pointer into arena
     mutable std::mt19937 rng_;
+    int virtualLossWeight_ = 1;  // Set from ParallelConfig at search start
 
     // Statistics
     int totalSimulations_ = 0;

@@ -1,0 +1,88 @@
+Parallel MCTS Implementation - Session Summary
+================================================
+
+1. Atomic Explicit Loads/Stores
+-------------------------------
+Converted all implicit atomic accesses in MCTS::Node to explicit .load(), .store(),
+fetch_add() with proper memory orderings:
+- expanded: release on store (publishes children), acquire on load
+- Stats counters (visits, wins, totalValue): relaxed throughout
+- CAS loop for std::atomic<double> totalValue since C++17 has no fetch_add for double/float
+
+
+2. Parallel Search Infrastructure
+----------------------------------
+Reviewed proposed multithreaded code, identified ~10 bugs, and implemented a corrected version:
+- parallelSearch(), workerThread(), inferenceThread()
+- selectParallel(), expandParallel(), backpropWithVirtualLoss()
+- Virtual loss (addVirtualLoss / removeVirtualLoss) using std::atomic<int32_t> (not float)
+- ThreadSafeQueue<T> with push, tryPop, waitPop, drainTo
+- std::mutex expansionMutex_ to protect arena allocation + child array setup
+- All tree nodes live in main arena_ (not per-worker arenas)
+
+
+3. Thread-Safe Solver Logic
+----------------------------
+- Changed solvedStatus to std::atomic<SolvedStatus> and unprovenCount to std::atomic<int16_t>
+- Implemented solveNode() with CAS — each node solved exactly once, prevents
+  double-decrement races on unprovenCount
+- Minimax propagation: WIN child -> parent is LOSS; all children LOSS -> parent is WIN
+
+
+4. Rollout on Zero Value
+-------------------------
+- Added rollout() as a thread-safe standalone method (takes game by value)
+- When evaluator returns value == 0, a rollout determines the result
+  (both inline and inference-thread paths)
+
+
+5. Unit Tests
+-------------
+Created tests/MCTSParallelTests.cpp with two test cases:
+- "Parallel search returns a valid move" — validates move bounds, legality, and tree visits
+- "Parallel search tree invariants" — recursive checker for no lingering virtual loss,
+  non-negative visits, solved status consistency, and unprovenCount accuracy
+
+
+6. SIGSEGV Bug Fix
+-------------------
+Root cause: In heuristic mode, evaluate() returns empty movePriors (by design, for lazy
+loading). expandParallel set expanded = true with children = nullptr. Then selectParallel's
+lazy load path called initializeNodePriors without allocating the children array first
+-> NULL pointer dereference.
+
+Fix: Added initNodeChildren() call before initializeNodePriors() in the lazy load path,
+guarded by an empty check.
+
+
+Known Issues / TODOs
+====================
+
+1. isLegalMove() inconsistency
+   At moveCount == 1, getLegalMoves() returns hardcoded preset moves that bypass the
+   moveIndex lookup used by isLegalMove(). These two methods disagree on what's legal.
+   Not a parallel search issue, but a pre-existing game logic inconsistency.
+
+2. Thread Sanitizer (TSAN) validation
+   The parallel code hasn't been tested under TSAN. Would be valuable to run with
+   -fsanitize=thread to catch any subtle data races.
+
+3. expandParallel with empty movePriors on non-terminal nodes
+   If an evaluator returns empty movePriors for a position that has legal moves,
+   expandParallel still marks the node as expanded = true with no children. The lazy load
+   path handles this for heuristic mode, but other modes could get stuck. Consider guarding
+   this more robustly.
+
+4. Train.cpp
+   Currently a minimal parallel search test harness, not a real training loop. Needs to be
+   restored/expanded for self-play training.
+
+5. Neural network evaluator + batched inference
+   The inferenceThread path is wired up but there's no NN evaluator yet. evaluateBatch()
+   doesn't exist on the Evaluator interface — will need to be added when NN support comes.
+
+6. checkNodeInvariants not called recursively in tests
+   The invariant checker function exists but the "tree invariants" test only checks
+   getTotalVisits() and getTreeSize() — it doesn't call checkNodeInvariants(root) since
+   the root node isn't publicly accessible. Would need a getRoot() accessor or a
+   checkTreeInvariants() public method.

@@ -68,31 +68,31 @@ private:
     int countConsecutive(const BitBoard& stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> legalMovesVector;
-    std::array<size_t, BOARD_SIZE * BOARD_SIZE> moveIndex;  // -1 = not present
-    static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1);  // Max size_t value
+    std::array<uint16_t, BOARD_SIZE * BOARD_SIZE> moveIndex;  // INVALID_INDEX = not present
+    static constexpr uint16_t INVALID_INDEX = static_cast<uint16_t>(-1);  // 65535
 
-    size_t encodePos(int x, int y) const { 
-        return static_cast<size_t>(y * BOARD_SIZE + x); 
+    int encodePos(int x, int y) const {
+        return y * BOARD_SIZE + x;
     }
 
     // Add a legal move - O(1)
     // Happens during captures. Both involve pieces being taken off the board, therefore freeing up legal moves.
     void setLegalMove(int x, int y) {
-        size_t pos = encodePos(x, y);
+        int pos = encodePos(x, y);
         if (moveIndex[pos] != INVALID_INDEX) return;
-        
+
         legalMovesVector.emplace_back(x, y);
-        moveIndex[pos] = legalMovesVector.size() - 1;
+        moveIndex[pos] = static_cast<uint16_t>(legalMovesVector.size() - 1);
     }
-    
+
     // Remove a legal move - O(1)
     // Happens during makeMove. involve pieces being placed on the board, therefore removing legal moves.
     void clearLegalMove(int x, int y) {
-        size_t pos = encodePos(x, y);
-        size_t idx = moveIndex[pos];
-        
+        int pos = encodePos(x, y);
+        uint16_t idx = moveIndex[pos];
+
         if (idx == INVALID_INDEX) return;
-        
+
         if (idx != legalMovesVector.size() - 1) {  // No warning!
             Move lastMove = legalMovesVector.back();
             legalMovesVector[idx] = lastMove;

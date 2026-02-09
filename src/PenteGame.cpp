@@ -26,7 +26,7 @@ void PenteGame::reset() {
         for (int y = 0; y < BOARD_SIZE; y++) {
             for (int x = 0; x < BOARD_SIZE; x++) {
                 legalMovesVector.emplace_back(x, y);
-                moveIndex[encodePos(x, y)] = legalMovesVector.size() - 1;
+                moveIndex[encodePos(x, y)] = static_cast<uint16_t>(legalMovesVector.size() - 1);
             }
         }
     }
@@ -413,8 +413,7 @@ PenteGame::Move PenteGame::getRandomMove(const std::vector<Move>& moves) const {
         return Move();  // Invalid move
     }
 
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
+    static thread_local std::mt19937 gen(std::random_device{}());
     std::uniform_int_distribution<> dis(0, moves.size() - 1);
 
     return moves[dis(gen)];
@@ -433,8 +432,7 @@ PenteGame::Move PenteGame::getRandomLegalMove() const {
         return Move();
     }
 
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
+    static thread_local std::mt19937 gen(std::random_device{}());
     std::uniform_int_distribution<size_t> dis(0, legalMovesVector.size() - 1);
 
     return legalMovesVector[dis(gen)];

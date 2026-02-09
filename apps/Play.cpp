@@ -3,10 +3,14 @@
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
 #include <iostream>
+#include <thread>
 
 
 int main(int argc, char* argv[]) {
     std::cout << "Playing Pente..." << std::endl;
+
+    unsigned int hardware_threads = std::thread::hardware_concurrency();
+    std::cout << "Hardware threads available: " << hardware_threads << std::endl;
 
     // ============================================
     // TOGGLE THIS: true = Heuristic goes first (BLACK)
