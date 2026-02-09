@@ -9,6 +9,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
+# Threading
+find_package(Threads REQUIRED)
+
 # Include directories
 include_directories(include)
 
@@ -20,6 +23,7 @@ add_library(pente_core
     src/GameUtils.cpp
     src/Evaluator.cpp
 )
+target_link_libraries(pente_core Threads::Threads)
 
 # Executable: Train
 add_executable(train apps/Train.cpp)
@@ -49,5 +53,6 @@ target_link_libraries(keryopente pente_core)
 add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
+    tests/MCTSParallelTests.cpp
 )
 target_link_libraries(unit_tests pente_core)
