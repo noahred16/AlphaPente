@@ -143,6 +143,12 @@ public:
         int32_t visits = 0;
         int32_t wins = 0;
         double totalValue = 0.0;
+        
+        // moves and priors share the same size, and are accessed together
+        PenteGame::Move* moves;
+        float* priors;
+        int moveCount = 0;
+
         float prior = -1.0f;
         float value = 0.0f;
 
@@ -150,6 +156,7 @@ public:
         Node* parent = nullptr;
         Node** children = nullptr;            // Arena-allocated array of child pointers
         bool expanded = false;
+        bool evaluated = false;
 
         // Total: 4 + 1 + 1 + 4 + 4 + 16 + 24 = 54 bytes + padding = 56-64 bytes
 
@@ -198,14 +205,13 @@ private:
     void backpropagate(Node* node, double result);
 
     // Helper methods
-    Node* selectBestChild(Node* node) const;
+    int selectBestMoveIndex(Node* node, const PenteGame& game) const;
     void updateChildrenPriors(Node* node, const PenteGame& game);
     double evaluateTerminalState(const PenteGame& game, int depth = 0) const;
 
     // Arena allocation helpers
     Node* allocateNode();
     void initNodeChildren(Node* node, int capacity);
-    void initializeNodePriors(Node* node, const std::vector<std::pair<PenteGame::Move, float>>& movePriors);
 
     // Tree reuse helpers (copies subtree to fresh arena)
     Node* copySubtree(Node* source, MCTSArena& destArena);

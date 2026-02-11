@@ -119,6 +119,8 @@ From the `build/` directory:
 ./train   # Training AlphaPente
 ./play    # Playing Pente
 ./test    # Testing AlphaPente
+
+gdb -ex run -ex bt -ex quit --args ./pente "1  K10 ..."
 ```
 
 ## Unit Tests
