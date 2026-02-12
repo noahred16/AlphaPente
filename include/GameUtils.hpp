@@ -5,8 +5,9 @@
 #include <vector>
 #include <utility>
 
-// Forward declaration
+// Forward declarations
 class PenteGame;
+class MCTS;
 
 class GameUtils {
 public:
@@ -23,6 +24,10 @@ public:
 
     // Number formatting
     static std::string formatWithCommas(int value);
+
+    // Search utilities
+    static void runSearchAndReport(MCTS& mcts, const PenteGame& game);
+    static void interactiveSearchLoop(MCTS& mcts, PenteGame game);
 };
 
 #endif // GAMEUTILS_HPP

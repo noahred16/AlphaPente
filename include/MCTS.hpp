@@ -180,6 +180,7 @@ public:
     void reset();
     void clearTree();
     void reuseSubtree(const PenteGame::Move& move);
+    bool undoSubtree();
 
     // Statistics and debugging
     int getTotalVisits() const;

@@ -513,14 +513,16 @@ void MCTS::reuseSubtree(const PenteGame::Move& move) {
         return;
     }
 
-    // Create fresh arena and copy subtree into it
-    MCTSArena freshArena(arena_.totalSize());
-    Node* newRoot = copySubtree(matchingChild, freshArena);
-    newRoot->parent = nullptr;
+    // Just move root down - parent pointer is preserved for undo
+    root_ = matchingChild;
+}
 
-    // Swap arenas - old arena gets freed when freshArena destructor runs
-    arena_.swap(freshArena);
-    root_ = newRoot;
+bool MCTS::undoSubtree() {
+    if (!root_ || !root_->parent) {
+        return false;
+    }
+    root_ = root_->parent;
+    return true;
 }
 
 void MCTS::pruneTree(Node* keepNode) {
@@ -622,8 +624,8 @@ void MCTS::printBestMoves(int topN) const {
               << std::setw(10) << "Avg Val"
               << std::setw(10) << "UCB1"
               << std::setw(10) << "PUCT"
-              << std::setw(8) << "Status\n";
-    std::cout << std::string(74, '-') << "\n";
+              << std::setw(10) << "Status\n";
+    std::cout << std::string(86, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
@@ -660,7 +662,7 @@ void MCTS::printBestMoves(int topN) const {
                   << std::setw(10) << std::fixed << std::setprecision(3) << avgScore
                   << std::setw(10) << std::fixed << std::setprecision(3) << ucb1
                   << std::setw(10) << std::fixed << std::setprecision(3) << puct
-                  << std::setw(8) << status
+                  << std::setw(10) << status
                   << "\n";
     }
 
@@ -714,8 +716,8 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
               << std::setw(10) << "Prior"
               << std::setw(10) << "UCB1"
               << std::setw(10) << "PUCT"
-              << std::setw(8) << "Status\n";
-    std::cout << std::string(64, '-') << "\n";
+              << std::setw(10) << "Status\n";
+    std::cout << std::string(66, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
         Node* child = children[i];
@@ -741,8 +743,8 @@ void MCTS::printMovesFromNode(MCTS::Node* node, int topN) const {
                   << std::setw(10) << std::fixed << std::setprecision(3) << avgValue
                   << std::setw(10) << std::fixed << std::setprecision(3) << child->prior
                   << std::setw(10) << std::fixed << std::setprecision(3) << ucb1
-                  << std::setw(12) << std::fixed << std::setprecision(3) << puct
-                  << std::setw(12) << status
+                  << std::setw(10) << std::fixed << std::setprecision(3) << puct
+                  << std::setw(10) << status
                   << "\n";
     }
 

@@ -179,11 +179,6 @@ bool PenteGame::isLegalMove(int x, int y) const {
         return x == BOARD_SIZE / 2 && y == BOARD_SIZE / 2;
     }
 
-    // TODO: Tournament rule for 3rd move? might not even need this function
-    // 
-    std::cerr << "isLegalMove: Using BitBoard legalMoves check. We shouldnt worry.\n";
-
-    // 
     return moveIndex[encodePos(x, y)] != INVALID_INDEX;
 }
 

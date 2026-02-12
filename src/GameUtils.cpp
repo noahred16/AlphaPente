@@ -1,8 +1,11 @@
 #include "GameUtils.hpp"
 #include "PenteGame.hpp"
+#include "MCTS.hpp"
+#include "Profiler.hpp"
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <chrono>
 
 std::pair<int, int> GameUtils::parseMove(const char* move) {
     if (strlen(move) < 2) {
@@ -115,4 +118,87 @@ std::string GameUtils::formatWithCommas(int value) {
         ++count;
     }
     return result;
+}
+
+void GameUtils::runSearchAndReport(MCTS& mcts, const PenteGame& game) {
+    auto start = std::chrono::high_resolution_clock::now();
+    mcts.search(game);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+    int minutes = elapsed.count() / 60;
+    int seconds = elapsed.count() % 60;
+    std::cout << "Search took: " << minutes << " min " << seconds << " sec." << std::endl;
+    mcts.printStats();
+    mcts.printBestMoves(15);
+    PenteGame::Move bestMove = mcts.getBestMove();
+    std::string bestMoveStr = displayMove(bestMove.x, bestMove.y);
+    std::cout << "MCTS selected move: " << bestMoveStr << std::endl;
+    std::cout << '\a' << std::flush;
+}
+
+void GameUtils::interactiveSearchLoop(MCTS& mcts, PenteGame game) {
+    runSearchAndReport(mcts, game);
+
+    Profiler::instance().printReport();
+
+    int iterationsToAdd = mcts.getConfig().maxIterations;
+    std::vector<PenteGame> gameHistory;
+
+    while (iterationsToAdd > 0) {
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+        std::cout << "Enter iterations (0 to quit, 1-5 for millions, enter for default "
+                  << formatWithCommas(iterationsToAdd) << "), move (e.g. K10), or -1 to undo: ";
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+
+        std::string input;
+        std::getline(std::cin, input);
+
+        if (input.empty()) {
+            // Default: run more iterations
+        } else if (std::isalpha(input[0])) {
+            // Input looks like a move
+            auto [mx, my] = parseMove(input.c_str());
+            if (mx < 0 || my < 0 || !game.isLegalMove(mx, my)) {
+                std::cout << "Invalid or illegal move: " << input << std::endl;
+                continue;
+            }
+            gameHistory.push_back(game);
+            PenteGame::Move move(mx, my);
+            game.makeMove(mx, my);
+            mcts.reuseSubtree(move);
+            std::cout << "Played " << input << ", reusing subtree." << std::endl;
+            printGameState(game);
+        } else {
+            try {
+                int val = std::stoi(input);
+                if (val == -1) {
+                    if (mcts.undoSubtree() && !gameHistory.empty()) {
+                        game = gameHistory.back();
+                        gameHistory.pop_back();
+                        std::cout << "Undid last move." << std::endl;
+                        printGameState(game);
+                    } else {
+                        std::cout << "Nothing to undo." << std::endl;
+                    }
+                    continue;
+                } else if (val >= 1 && val <= 5) {
+                    iterationsToAdd = val * 1000000;
+                } else {
+                    iterationsToAdd = val;
+                }
+            } catch (const std::invalid_argument&) {
+                std::cout << "Invalid input." << std::endl;
+                continue;
+            }
+        }
+
+        if (iterationsToAdd <= 0) break;
+
+        std::cout << "RUNNING SEARCH with " << formatWithCommas(iterationsToAdd) << " iterations..." << std::endl;
+
+        MCTS::Config config = mcts.getConfig();
+        config.maxIterations = iterationsToAdd;
+        mcts.setConfig(config);
+        runSearchAndReport(mcts, game);
+    }
 }

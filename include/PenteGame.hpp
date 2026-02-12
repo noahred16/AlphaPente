@@ -21,11 +21,12 @@ public:
         bool keryoRules = false;       // Keryo: true (3-stone captures)
         bool capturesEnabled = true;   // Gomoku: false
         bool tournamentRule = true;    // 3rd move restriction
+        int dilationDistance = 1;      // Legal move dilation radius (1 or 2)
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
-        static Config gomoku() { return Config{10, false, false, true}; }
-        static Config keryoPente() { return Config{15, true, true, true}; }
+        static Config gomoku() { return Config{10, false, false, true, 1}; }
+        static Config keryoPente() { return Config{15, true, true, true, 2}; }
     };
 
     enum Player : uint8_t {
@@ -102,18 +103,14 @@ private:
         legalMovesVector.pop_back();
         moveIndex[pos] = INVALID_INDEX;
 
-        // Dilate legal moves around the cleared position (3x3 neighborhood)
-        // TODO: replace hard coded true with a heuristic config option
-        if (true) {
-            // Standard 8 directions + center
-            // static const int dirs[8][2] = {
-            //     {-1, -1}, {0, -1}, {1, -1},
-            //     {-1,  0},          {1,  0},
-            //     {-1,  1}, {0,  1}, {1,  1}
-            // };
-
-            // All moves within distance 2 (for more aggressive dilation, especially in early game)
-            static const int dirs[24][2] = {
+        // Dilate legal moves around the placed stone (0 = no dilation)
+        if (config_.dilationDistance > 0) {
+            static const int dirs1[8][2] = {
+                {-1, -1}, {0, -1}, {1, -1},
+                {-1,  0},          {1,  0},
+                {-1,  1}, {0,  1}, {1,  1}
+            };
+            static const int dirs2[24][2] = {
                 {-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2},
                 {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1},
                 {-2,  0}, {-1,  0},          {1,  0}, {2,  0},
@@ -121,22 +118,13 @@ private:
                 {-2,  2}, {-1,  2}, {0,  2}, {1,  2}, {2,  2}
             };
 
-            // custom
-            // static const int dirs[11][2] = {
-            //     {-1, -1}, {0, -1}, {1, -1},
-            //     {-1,  0},          {1,  0},
-            //     {-1,  1}, {0,  1}, {1,  1},
-            //     // {2, 2}, {0, 2}, {-2, 2} // x o x o x top row 2 up
-            //     // {-1, -2}, {0, -2}, {-2, -2} // x x x o o bottom row 2 down
-            //     {2, -2}, {0, -2}, {-2, -2} // x o x o x bottom row 2 down
-            // };
+            const auto* dirs = (config_.dilationDistance >= 2) ? dirs2 : dirs1;
+            int size = (config_.dilationDistance >= 2) ? 24 : 8;
 
-            int size = std::size(dirs);
             for (int i = 0; i < size; i++) {
                 int nx = x + dirs[i][0];
                 int ny = y + dirs[i][1];
                 if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
-                    // Use unchecked access - bounds already validated
                     if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
                         setLegalMove(nx, ny);
                     }
