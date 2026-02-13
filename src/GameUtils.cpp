@@ -146,7 +146,7 @@ void GameUtils::interactiveSearchLoop(MCTS& mcts, PenteGame game) {
 
     while (iterationsToAdd > 0) {
         std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-        std::cout << "Enter iterations (0 to quit, 1-5 for millions, enter for default "
+        std::cout << "Enter iterations (0 to quit, 1-9 for millions, enter for default "
                   << formatWithCommas(iterationsToAdd) << "), move (e.g. K10), or -1 to undo: ";
         std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
 
@@ -181,7 +181,7 @@ void GameUtils::interactiveSearchLoop(MCTS& mcts, PenteGame game) {
                         std::cout << "Nothing to undo." << std::endl;
                     }
                     continue;
-                } else if (val >= 1 && val <= 5) {
+                } else if (val >= 1 && val <= 9) {
                     iterationsToAdd = val * 1000000;
                 } else {
                     iterationsToAdd = val;

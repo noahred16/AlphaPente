@@ -8,6 +8,28 @@
 #include <iomanip>
 
 // ============================================================================
+// Base Evaluator - rollout helper
+// ============================================================================
+float Evaluator::rollout(const PenteGame& game) {
+    PROFILE_SCOPE("Evaluator::rollout");
+    PenteGame simGame = game;
+    PenteGame::Player startPlayer = simGame.getCurrentPlayer();
+    PenteGame::Player winner = PenteGame::NONE;
+    int depth = 0;
+
+    while ((winner = simGame.getWinner()) == PenteGame::NONE && depth < maxRolloutDepth_) {
+        PenteGame::Move move = simGame.getRandomLegalMove();
+        simGame.makeMove(move.x, move.y);
+        depth++;
+    }
+
+    if (winner != PenteGame::NONE) {
+        return (winner == startPlayer) ? -1.0f : 1.0f;
+    }
+    return 0.0f;
+}
+
+// ============================================================================
 // UniformEvaluator Implementation
 // ============================================================================
 std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> UniformEvaluator::evaluate(const PenteGame& game) {
@@ -36,7 +58,7 @@ std::vector<std::pair<PenteGame::Move, float>> UniformEvaluator::evaluatePolicy(
 }
 
 float UniformEvaluator::evaluateValue(const PenteGame& game) {
-    return 0.0f; // No position knowledge
+    return rollout(game);
 }
 
 // ============================================================================
@@ -87,7 +109,11 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
 
 
 float HeuristicEvaluator::evaluateValue(const PenteGame& game) {
-    return game.evaluatePosition() * -1; // invert for opponent's perspective
+    float value = game.evaluatePosition() * -1; // invert for opponent's perspective
+    if (value != 0.0f) {
+        return value;
+    }
+    return rollout(game);
 }
 
 

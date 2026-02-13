@@ -296,37 +296,7 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
 
 double MCTS::simulate(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::simulate");
-
-    if (node->value != 0.0f) {
-        return node->value;
-    }
-
-
-    // Fallback: random rollout (when no evaluator, or evaluation returned 0)
-    PenteGame simGame = game;
-
-    PenteGame::Player startPlayer = simGame.getCurrentPlayer();
-    PenteGame::Player winner = PenteGame::NONE;
-    int depth = 0;
-
-    // Play out game randomly until terminal or max depth
-    while ((winner = simGame.getWinner()) == PenteGame::NONE && depth < config_.maxSimulationDepth) {
-        PenteGame::Move move = simGame.getRandomLegalMove();
-        simGame.makeMove(move.x, move.y);
-        depth++;
-    }
-
-    // Evaluate result
-    double result = evaluateTerminalState(simGame, depth);
-
-    if (winner != PenteGame::NONE) {
-        result *= (winner == startPlayer) ? -1.0 : 1.0;
-    } else {
-        result = 0.0;
-    }
-
-    // Copy is discarded when function returns - no undo needed
-    return result;
+    return node->value;
 }
 
 void MCTS::backpropagate(Node* node, double result) {
