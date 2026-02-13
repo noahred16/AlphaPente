@@ -2,6 +2,7 @@
 #define PENTEGAME_HPP
 
 #include "BitBoard.hpp"
+#include "Zobrist.hpp"
 #include <vector>
 #include <cstdint>
 #include <stack>
@@ -62,6 +63,7 @@ private:
     // std::vector<MoveInfo> moveHistory;
 
     Move lastMove;
+    uint64_t hash_;
 
     // Helper functions
     bool checkFiveInRow(int x, int y) const;

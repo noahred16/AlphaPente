@@ -19,6 +19,7 @@ add_library(pente_core
     src/MCTS.cpp
     src/GameUtils.cpp
     src/Evaluator.cpp
+    src/Zobrist.cpp
 )
 
 # Executable: Train

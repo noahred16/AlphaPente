@@ -40,6 +40,8 @@ void PenteGame::reset() {
     whiteCaptures = 0;
     moveCount = 0;
     lastMove = Move();
+    hash_ = Zobrist::instance().computeFullHash(
+        blackStones, whiteStones, blackCaptures, whiteCaptures, currentPlayer);
 }
 
 bool PenteGame::makeMove(const char* move) {
@@ -54,26 +56,38 @@ bool PenteGame::makeMove(const char* move) {
 bool PenteGame::makeMove(int x, int y) {
     PROFILE_SCOPE("PenteGame::makeMove");
 
+    const auto& zob = Zobrist::instance();
+    int pIdx = Zobrist::playerIndex(currentPlayer);
+    int cell = y * BOARD_SIZE + x;
+
     // Place stone
     if (currentPlayer == BLACK) {
         blackStones.setBit(x, y);
     } else {
         whiteStones.setBit(x, y);
     }
+    hash_ ^= zob.stoneKeys[pIdx][cell];
     clearLegalMove(x, y);
 
     // Check and perform captures
     if (config_.capturesEnabled) {
         if (currentPlayer == BLACK) {
+            int oldCap = blackCaptures;
             blackCaptures += checkAndCapture(x, y);
+            hash_ ^= zob.captureKeys[0][oldCap];
+            hash_ ^= zob.captureKeys[0][blackCaptures];
         } else {
+            int oldCap = whiteCaptures;
             whiteCaptures += checkAndCapture(x, y);
+            hash_ ^= zob.captureKeys[1][oldCap];
+            hash_ ^= zob.captureKeys[1][whiteCaptures];
         }
     }
 
     lastMove = Move(x, y);
     moveCount++;
     currentPlayer = (currentPlayer == BLACK) ? WHITE : BLACK;
+    hash_ ^= zob.sideToMoveKey;
 
     return true;
 }
@@ -83,6 +97,9 @@ int PenteGame::checkAndCapture(int x, int y) {
 
     BitBoard& myStones = (currentPlayer == BLACK) ? blackStones : whiteStones;
     BitBoard& oppStones = (currentPlayer == BLACK) ? whiteStones : blackStones;
+
+    const auto& zob = Zobrist::instance();
+    int oppIdx = Zobrist::playerIndex((currentPlayer == BLACK) ? WHITE : BLACK);
 
     static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1},
                                    {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
@@ -112,6 +129,10 @@ int PenteGame::checkAndCapture(int x, int y) {
                     oppStones.clearBitUnchecked(x2, y2);
                     oppStones.clearBitUnchecked(x3, y3);
 
+                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
+                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
+                    hash_ ^= zob.stoneKeys[oppIdx][y3 * BOARD_SIZE + x3];
+
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
                     setLegalMove(x3, y3);
@@ -129,6 +150,9 @@ int PenteGame::checkAndCapture(int x, int y) {
                 {
                     oppStones.clearBitUnchecked(x1, y1);
                     oppStones.clearBitUnchecked(x2, y2);
+
+                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
+                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
 
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
@@ -155,6 +179,9 @@ int PenteGame::checkAndCapture(int x, int y) {
                 {
                     oppStones.clearBitUnchecked(x1, y1);
                     oppStones.clearBitUnchecked(x2, y2);
+
+                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
+                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
 
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
@@ -451,31 +478,11 @@ void PenteGame::syncFrom(const PenteGame& other) {
     moveCount = other.moveCount;
     // moveHistory = other.moveHistory;
     lastMove = other.lastMove;
+    hash_ = other.hash_;
 }
 
 uint64_t PenteGame::getHash() const {
-    // Simple hash combining board states and game state
-    // For a production system, you'd want Zobrist hashing
-    uint64_t hash = 0;
-    
-    // Mix in stone positions
-    for (int i = 0; i < BOARD_SIZE; i++) {
-        for (int j = 0; j < BOARD_SIZE; j++) {
-            if (blackStones.getBit(i, j)) {
-                hash ^= ((uint64_t)(i * BOARD_SIZE + j) << 1);
-            }
-            if (whiteStones.getBit(i, j)) {
-                hash ^= ((uint64_t)(i * BOARD_SIZE + j) << 2);
-            }
-        }
-    }
-    
-    // Mix in game state
-    hash ^= ((uint64_t)currentPlayer << 32);
-    hash ^= ((uint64_t)blackCaptures << 40);
-    hash ^= ((uint64_t)whiteCaptures << 44);
-    
-    return hash;
+    return hash_;
 }
 
 PenteGame::Player PenteGame::getStoneAt(int x, int y) const {

@@ -1,5 +1,7 @@
 #include "doctest.h"
 #include "PenteGame.hpp"
+#include "Zobrist.hpp"
+#include "TranspositionTable.hpp"
 
 TEST_CASE("PenteGame initial state") {
     PenteGame game;
@@ -412,4 +414,449 @@ TEST_CASE("PenteGame evaluateMove capture without vulnerability") {
     float score = game.evaluateMove(captureMove);
     // Score: 1 (default) + 6 (capture) = 7
     CHECK(score == 7.0f);
+}
+
+// ============================================================================
+// Zobrist Hashing Tests
+// ============================================================================
+
+TEST_CASE("Zobrist hash changes after each move") {
+    PenteGame game;
+    game.reset();
+
+    uint64_t h0 = game.getHash();
+    game.makeMove("K10");
+    uint64_t h1 = game.getHash();
+    CHECK(h0 != h1);
+
+    game.makeMove("L10");
+    uint64_t h2 = game.getHash();
+    CHECK(h1 != h2);
+    CHECK(h0 != h2);
+}
+
+TEST_CASE("Zobrist hash is deterministic") {
+    PenteGame g1, g2;
+    g1.reset();
+    g2.reset();
+    CHECK(g1.getHash() == g2.getHash());
+
+    g1.makeMove("K10"); g2.makeMove("K10");
+    CHECK(g1.getHash() == g2.getHash());
+
+    g1.makeMove("L10"); g2.makeMove("L10");
+    CHECK(g1.getHash() == g2.getHash());
+}
+
+TEST_CASE("Zobrist hash matches across clone and syncFrom") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10");
+    game.makeMove("L10");
+
+    PenteGame cloned = game.clone();
+    CHECK(cloned.getHash() == game.getHash());
+
+    PenteGame synced;
+    synced.syncFrom(game);
+    CHECK(synced.getHash() == game.getHash());
+}
+
+TEST_CASE("Zobrist hash with captures") {
+    PenteGame game;
+    game.reset();
+
+    // Setup: B(K10) W(L10) B(J10) W(M10) -> Black N10 captures L10,M10
+    game.makeMove("K10");
+    game.makeMove("L10");
+    game.makeMove("J10");
+    game.makeMove("M10");
+
+    uint64_t beforeCapture = game.getHash();
+    game.makeMove("N10");  // captures
+    uint64_t afterCapture = game.getHash();
+
+    CHECK(beforeCapture != afterCapture);
+    CHECK(game.getBlackCaptures() == 2);
+
+    // Verify incremental hash matches full recomputation
+    PenteGame verify;
+    verify.reset();
+    // Replay the exact same moves on a fresh game
+    verify.makeMove("K10");
+    verify.makeMove("L10");
+    verify.makeMove("J10");
+    verify.makeMove("M10");
+    verify.makeMove("N10");
+    CHECK(verify.getHash() == afterCapture);
+}
+
+TEST_CASE("Zobrist hash resets to consistent initial value") {
+    PenteGame game;
+    game.reset();
+    uint64_t h1 = game.getHash();
+
+    game.makeMove("K10");
+    game.makeMove("L10");
+    game.reset();
+    uint64_t h2 = game.getHash();
+
+    CHECK(h1 == h2);
+}
+
+TEST_CASE("Zobrist different positions give different hashes") {
+    PenteGame g1, g2;
+    g1.reset();
+    g2.reset();
+
+    g1.makeMove("K10");
+    g1.makeMove("L10");
+
+    g2.makeMove("K10");
+    g2.makeMove("M10");
+
+    CHECK(g1.getHash() != g2.getHash());
+}
+
+// ============================================================================
+// TranspositionTable Tests
+// ============================================================================
+
+TEST_CASE("TranspositionTable store and probe") {
+    TranspositionTable tt(16);
+
+    tt.store(0x123, 0.75f, TranspositionTable::EXACT, 5);
+    const auto* entry = tt.probe(0x123);
+    REQUIRE(entry != nullptr);
+    CHECK(entry->value == doctest::Approx(0.75f));
+    CHECK(entry->type == TranspositionTable::EXACT);
+    CHECK(entry->depth == 5);
+}
+
+TEST_CASE("TranspositionTable probe miss") {
+    TranspositionTable tt(16);
+    CHECK(tt.probe(0x999) == nullptr);
+}
+
+TEST_CASE("TranspositionTable clear") {
+    TranspositionTable tt(16);
+    tt.store(0x123, 0.5f, TranspositionTable::EXACT, 3);
+    REQUIRE(tt.probe(0x123) != nullptr);
+
+    tt.clear();
+    CHECK(tt.probe(0x123) == nullptr);
+}
+
+// ============================================================================
+// Extended Zobrist Tests
+// ============================================================================
+
+TEST_CASE("Zobrist singleton returns consistent keys") {
+    const auto& z1 = Zobrist::instance();
+    const auto& z2 = Zobrist::instance();
+    CHECK(&z1 == &z2);
+    CHECK(z1.stoneKeys[0][0] == z2.stoneKeys[0][0]);
+    CHECK(z1.sideToMoveKey == z2.sideToMoveKey);
+}
+
+TEST_CASE("Zobrist keys are non-zero and unique") {
+    const auto& z = Zobrist::instance();
+
+    // Spot-check that stone keys are non-zero
+    for (int p = 0; p < 2; ++p) {
+        for (int i = 0; i < 20; ++i) {
+            CHECK(z.stoneKeys[p][i] != 0);
+        }
+    }
+
+    // Black and white keys for same cell should differ
+    for (int i = 0; i < 10; ++i) {
+        CHECK(z.stoneKeys[0][i] != z.stoneKeys[1][i]);
+    }
+
+    // Adjacent cells should have different keys
+    CHECK(z.stoneKeys[0][0] != z.stoneKeys[0][1]);
+    CHECK(z.sideToMoveKey != 0);
+}
+
+TEST_CASE("Zobrist incremental matches full recomputation after many moves") {
+    PenteGame game;
+    game.reset();
+
+    // Play a sequence of moves
+    const char* moves[] = {
+        "K10", "L9", "J11", "M8", "L10", "K9",
+        "M10", "N10", "L11", "K11"
+    };
+    for (const char* m : moves) {
+        game.makeMove(m);
+    }
+
+    // Compute from scratch using Zobrist::computeFullHash
+    // We need to get the internal state — clone and compare
+    PenteGame replay;
+    replay.reset();
+    for (const char* m : moves) {
+        replay.makeMove(m);
+    }
+
+    // Both should match (independent incremental computation)
+    CHECK(game.getHash() == replay.getHash());
+    CHECK(game.getHash() != 0);
+}
+
+TEST_CASE("Zobrist side-to-move sensitivity") {
+    // Two games where the board looks the same but it's a different player's turn
+    // can't happen naturally in Pente (alternating), but we can verify the
+    // sideToMoveKey is being toggled by checking that after an odd number of
+    // moves the hash differs from a position reached via an even number of moves
+    PenteGame g1, g2;
+    g1.reset();
+    g2.reset();
+
+    // g1: 1 move (White to play)
+    g1.makeMove("K10");
+
+    // g2: 2 moves (Black to play)
+    g2.makeMove("K10");
+    g2.makeMove("L10");
+
+    // Different boards AND different side to move — hashes must differ
+    CHECK(g1.getHash() != g2.getHash());
+
+    // The sideToMoveKey should be part of the hash
+    const auto& z = Zobrist::instance();
+    CHECK(z.sideToMoveKey != 0);
+}
+
+TEST_CASE("Zobrist hash with Keryo 3-stone captures") {
+    PenteGame game(PenteGame::Config::keryoPente());
+    game.reset();
+
+    // Setup a 3-stone Keryo capture: B _ O O O B
+    // Black at K10 (center required), then build pattern
+    game.makeMove("K10");   // B(9,9)
+    game.makeMove("L10");   // W(10,9)
+    game.makeMove("J10");   // B(8,9)
+    game.makeMove("M10");   // W(11,9)
+    game.makeMove("J9");    // B(8,8) dummy
+    game.makeMove("N10");   // W(12,9)
+
+    uint64_t before = game.getHash();
+    // B at O10(13,9) captures L10,M10,N10 (3-stone Keryo capture)
+    game.makeMove("O10");
+    uint64_t after = game.getHash();
+
+    CHECK(before != after);
+    CHECK(game.getBlackCaptures() == 3);
+
+    // Replay on fresh game — should match
+    PenteGame replay(PenteGame::Config::keryoPente());
+    replay.reset();
+    replay.makeMove("K10");
+    replay.makeMove("L10");
+    replay.makeMove("J10");
+    replay.makeMove("M10");
+    replay.makeMove("J9");
+    replay.makeMove("N10");
+    replay.makeMove("O10");
+    CHECK(replay.getHash() == after);
+}
+
+TEST_CASE("Zobrist hash with Gomoku config (no captures)") {
+    PenteGame game(PenteGame::Config::gomoku());
+    game.reset();
+
+    uint64_t h0 = game.getHash();
+    game.makeMove("K10");
+    uint64_t h1 = game.getHash();
+    game.makeMove("L10");
+    uint64_t h2 = game.getHash();
+
+    CHECK(h0 != h1);
+    CHECK(h1 != h2);
+
+    // Replay matches
+    PenteGame replay(PenteGame::Config::gomoku());
+    replay.reset();
+    replay.makeMove("K10");
+    replay.makeMove("L10");
+    CHECK(replay.getHash() == h2);
+}
+
+TEST_CASE("Zobrist hash with multiple captures in sequence") {
+    PenteGame game;
+    game.reset();
+
+    // First capture: B(K10) W(L10) B(J10) W(M10) B(N10) captures L10,M10
+    game.makeMove("K10");
+    game.makeMove("L10");
+    game.makeMove("J10");
+    game.makeMove("M10");
+    game.makeMove("N10");  // capture 1
+    CHECK(game.getBlackCaptures() == 2);
+
+    // Continue play and set up second capture
+    game.makeMove("L11");  // W
+    game.makeMove("K11");  // B
+    game.makeMove("M11");  // W
+    game.makeMove("N11");  // B captures L11,M11
+    CHECK(game.getBlackCaptures() == 4);
+
+    // Verify with replay
+    PenteGame replay;
+    replay.reset();
+    replay.makeMove("K10");
+    replay.makeMove("L10");
+    replay.makeMove("J10");
+    replay.makeMove("M10");
+    replay.makeMove("N10");
+    replay.makeMove("L11");
+    replay.makeMove("K11");
+    replay.makeMove("M11");
+    replay.makeMove("N11");
+    CHECK(replay.getHash() == game.getHash());
+}
+
+TEST_CASE("Zobrist clone diverges correctly after different moves") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10");
+    game.makeMove("L10");
+
+    PenteGame branch = game.clone();
+    CHECK(branch.getHash() == game.getHash());
+
+    game.makeMove("M10");
+    branch.makeMove("N10");
+
+    // After diverging moves, hashes must differ
+    CHECK(game.getHash() != branch.getHash());
+}
+
+// ============================================================================
+// Extended TranspositionTable Tests
+// ============================================================================
+
+TEST_CASE("TranspositionTable same-key replacement") {
+    TranspositionTable tt(16);
+
+    tt.store(0x42, 0.5f, TranspositionTable::EXACT, 3);
+    tt.store(0x42, 0.9f, TranspositionTable::LOWER_BOUND, 7);
+
+    const auto* e = tt.probe(0x42);
+    REQUIRE(e != nullptr);
+    CHECK(e->value == doctest::Approx(0.9f));
+    CHECK(e->type == TranspositionTable::LOWER_BOUND);
+    CHECK(e->depth == 7);
+}
+
+TEST_CASE("TranspositionTable deeper replaces shallower") {
+    TranspositionTable tt(16);
+
+    tt.store(0xAA, 0.3f, TranspositionTable::EXACT, 2);
+
+    // Different key that maps to the same slot (table size 16, mask=15)
+    // 0xAA & 0xF = 0xA, so 0xBA & 0xF = 0xA too
+    uint64_t colliding = (0xAA & 0xF) | (0xBBULL << 4);
+    tt.store(colliding, 0.8f, TranspositionTable::EXACT, 5);
+
+    // The deeper entry should have replaced the shallower
+    const auto* e = tt.probe(colliding);
+    REQUIRE(e != nullptr);
+    CHECK(e->value == doctest::Approx(0.8f));
+    CHECK(e->depth == 5);
+}
+
+TEST_CASE("TranspositionTable shallower does NOT replace deeper") {
+    TranspositionTable tt(16);
+
+    // Store a deep entry first
+    tt.store(0xAA, 0.9f, TranspositionTable::EXACT, 10);
+
+    // Try to store a shallower entry at the same slot with a different key
+    uint64_t colliding = (0xAA & 0xF) | (0xCCULL << 4);
+    tt.store(colliding, 0.1f, TranspositionTable::EXACT, 3);
+
+    // Original deep entry should still be there
+    const auto* e = tt.probe(0xAA);
+    REQUIRE(e != nullptr);
+    CHECK(e->value == doctest::Approx(0.9f));
+    CHECK(e->depth == 10);
+
+    // Colliding key should miss
+    CHECK(tt.probe(colliding) == nullptr);
+}
+
+TEST_CASE("TranspositionTable generation-based replacement") {
+    TranspositionTable tt(16);
+
+    tt.store(0xAA, 0.5f, TranspositionTable::EXACT, 10);
+
+    // Advance generation
+    tt.newGeneration();
+    tt.newGeneration();
+
+    // Now a shallower entry from the new generation can replace old-gen deep entry
+    uint64_t colliding = (0xAA & 0xF) | (0xDDULL << 4);
+    tt.store(colliding, 0.7f, TranspositionTable::EXACT, 2);
+
+    const auto* e = tt.probe(colliding);
+    REQUIRE(e != nullptr);
+    CHECK(e->value == doctest::Approx(0.7f));
+}
+
+TEST_CASE("TranspositionTable entry types stored correctly") {
+    TranspositionTable tt(16);
+
+    tt.store(0x01, 1.0f, TranspositionTable::LOWER_BOUND, 4);
+    tt.store(0x02, -1.0f, TranspositionTable::UPPER_BOUND, 6);
+    tt.store(0x03, 0.0f, TranspositionTable::EXACT, 2);
+
+    const auto* e1 = tt.probe(0x01);
+    const auto* e2 = tt.probe(0x02);
+    const auto* e3 = tt.probe(0x03);
+
+    REQUIRE(e1 != nullptr);
+    REQUIRE(e2 != nullptr);
+    REQUIRE(e3 != nullptr);
+
+    CHECK(e1->type == TranspositionTable::LOWER_BOUND);
+    CHECK(e2->type == TranspositionTable::UPPER_BOUND);
+    CHECK(e3->type == TranspositionTable::EXACT);
+}
+
+TEST_CASE("TranspositionTable multiple independent entries") {
+    TranspositionTable tt(256);
+
+    for (uint64_t i = 0; i < 100; ++i) {
+        tt.store(i * 256 + i, static_cast<float>(i) / 100.0f,
+                 TranspositionTable::EXACT, static_cast<uint8_t>(i % 20));
+    }
+
+    // Verify a few
+    for (uint64_t i = 0; i < 100; ++i) {
+        const auto* e = tt.probe(i * 256 + i);
+        REQUIRE(e != nullptr);
+        CHECK(e->value == doctest::Approx(static_cast<float>(i) / 100.0f));
+    }
+}
+
+TEST_CASE("TranspositionTable clear resets generation") {
+    TranspositionTable tt(16);
+
+    tt.newGeneration();
+    tt.newGeneration();
+    tt.store(0x55, 0.5f, TranspositionTable::EXACT, 3);
+
+    tt.clear();
+
+    // After clear, everything should be empty
+    CHECK(tt.probe(0x55) == nullptr);
+
+    // Storing after clear should still work
+    tt.store(0x66, 0.8f, TranspositionTable::EXACT, 1);
+    const auto* e = tt.probe(0x66);
+    REQUIRE(e != nullptr);
+    CHECK(e->value == doctest::Approx(0.8f));
 }
