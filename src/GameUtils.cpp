@@ -1,13 +1,13 @@
 #include "GameUtils.hpp"
-#include "PenteGame.hpp"
 #include "MCTS.hpp"
+#include "PenteGame.hpp"
 #include "Profiler.hpp"
-#include <cstring>
-#include <cstdlib>
-#include <iostream>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 
-std::pair<int, int> GameUtils::parseMove(const char* move) {
+std::pair<int, int> GameUtils::parseMove(const char *move) {
     if (strlen(move) < 2) {
         return {-1, -1};
     }
@@ -31,10 +31,10 @@ std::string GameUtils::displayMove(int x, int y) {
     return std::string(1, colChar) + std::to_string(y + 1);
 }
 
-std::vector<std::string> GameUtils::parseGameString(const char* gameStr) {
+std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
     std::vector<std::string> moves;
-    char* gameDataCopy = strdup(gameStr);
-    char* token = std::strtok(gameDataCopy, " \t\n\r");
+    char *gameDataCopy = strdup(gameStr);
+    char *token = std::strtok(gameDataCopy, " \t\n\r");
 
     int tokenIndex = 0;
     while (token != nullptr) {
@@ -50,7 +50,7 @@ std::vector<std::string> GameUtils::parseGameString(const char* gameStr) {
     return moves;
 }
 
-void GameUtils::printBoard(const PenteGame& game) {
+void GameUtils::printBoard(const PenteGame &game) {
     const std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
 
     // Helper to handle skipping 'I'
@@ -70,12 +70,12 @@ void GameUtils::printBoard(const PenteGame& game) {
         for (int x = 0; x < PenteGame::BOARD_SIZE; x++) {
             PenteGame::Player stone = game.getStoneAt(x, y);
             if (stone == PenteGame::BLACK) {
-                std::cout << "\u25CB ";  // White circle for Black stones
+                std::cout << "\u25CB "; // White circle for Black stones
             } else if (stone == PenteGame::WHITE) {
-                std::cout << "\u25CF ";  // Black circle for White stones
+                std::cout << "\u25CF "; // Black circle for White stones
             } else {
                 bool isLegal = false;
-                for (const auto& move : legalMoves) {
+                for (const auto &move : legalMoves) {
                     if (move.x == x && move.y == y) {
                         isLegal = true;
                         break;
@@ -94,18 +94,17 @@ void GameUtils::printBoard(const PenteGame& game) {
     std::cout << "\n";
 }
 
-void GameUtils::printGameState(const PenteGame& game) {
+void GameUtils::printGameState(const PenteGame &game) {
     printBoard(game);
 
-    const PenteGame::Config& config = game.getConfig();
+    const PenteGame::Config &config = game.getConfig();
 
     if (config.capturesEnabled) {
         std::cout << game.getBlackCaptures() << "/" << config.capturesToWin << " Black \u25CB, "
                   << game.getWhiteCaptures() << "/" << config.capturesToWin << " White \u25CF, ";
     }
 
-    std::cout << "Current player: "
-              << (game.getCurrentPlayer() == PenteGame::BLACK ? "Black" : "White") << "\n";
+    std::cout << "Current player: " << (game.getCurrentPlayer() == PenteGame::BLACK ? "Black" : "White") << "\n";
 }
 
 std::string GameUtils::formatWithCommas(int value) {
@@ -113,14 +112,15 @@ std::string GameUtils::formatWithCommas(int value) {
     std::string result;
     int count = 0;
     for (int i = num.length() - 1; i >= 0; --i) {
-        if (count > 0 && count % 3 == 0) result = ',' + result;
+        if (count > 0 && count % 3 == 0)
+            result = ',' + result;
         result = num[i] + result;
         ++count;
     }
     return result;
 }
 
-void GameUtils::runSearchAndReport(MCTS& mcts, const PenteGame& game) {
+void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     auto start = std::chrono::high_resolution_clock::now();
     mcts.search(game);
     auto end = std::chrono::high_resolution_clock::now();
@@ -136,7 +136,7 @@ void GameUtils::runSearchAndReport(MCTS& mcts, const PenteGame& game) {
     std::cout << '\a' << std::flush;
 }
 
-void GameUtils::interactiveSearchLoop(MCTS& mcts, PenteGame game) {
+void GameUtils::interactiveSearchLoop(MCTS &mcts, PenteGame game) {
     runSearchAndReport(mcts, game);
 
     Profiler::instance().printReport();
@@ -186,13 +186,14 @@ void GameUtils::interactiveSearchLoop(MCTS& mcts, PenteGame game) {
                 } else {
                     iterationsToAdd = val;
                 }
-            } catch (const std::invalid_argument&) {
+            } catch (const std::invalid_argument &) {
                 std::cout << "Invalid input." << std::endl;
                 continue;
             }
         }
 
-        if (iterationsToAdd <= 0) break;
+        if (iterationsToAdd <= 0)
+            break;
 
         std::cout << "RUNNING SEARCH with " << formatWithCommas(iterationsToAdd) << " iterations..." << std::endl;
 

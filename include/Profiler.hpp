@@ -11,36 +11,36 @@
 
 #ifdef ENABLE_PROFILING
 
+#include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <iostream>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <algorithm>
-#include <iostream>
-#include <iomanip>
-#include <mutex>
 
 // ============================================================================
 // Profiler - Accumulates timing data across many function calls
 // ============================================================================
 
 class Profiler {
-public:
+  public:
     struct SectionStats {
         uint64_t callCount = 0;
-        double totalTimeNs = 0.0;  // Nanoseconds for precision
+        double totalTimeNs = 0.0; // Nanoseconds for precision
     };
 
     // Get singleton instance
-    static Profiler& instance() {
+    static Profiler &instance() {
         static Profiler profiler;
         return profiler;
     }
 
     // Record a timing measurement for a section
-    void record(const std::string& section, double durationNs) {
+    void record(const std::string &section, double durationNs) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto& stats = sections_[section];
+        auto &stats = sections_[section];
         stats.callCount++;
         stats.totalTimeNs += durationNs;
     }
@@ -62,16 +62,13 @@ public:
         }
 
         // Collect and sort by total time (descending)
-        std::vector<std::pair<std::string, SectionStats>> sorted(
-            sections_.begin(), sections_.end());
+        std::vector<std::pair<std::string, SectionStats>> sorted(sections_.begin(), sections_.end());
         std::sort(sorted.begin(), sorted.end(),
-            [](const auto& a, const auto& b) {
-                return a.second.totalTimeNs > b.second.totalTimeNs;
-            });
+                  [](const auto &a, const auto &b) { return a.second.totalTimeNs > b.second.totalTimeNs; });
 
         // Calculate total time for percentage
         double grandTotal = 0.0;
-        for (const auto& [name, stats] : sorted) {
+        for (const auto &[name, stats] : sorted) {
             grandTotal += stats.totalTimeNs;
         }
 
@@ -80,42 +77,38 @@ public:
         std::cout << "================================================================================\n";
         std::cout << "                              PROFILER REPORT                                   \n";
         std::cout << "================================================================================\n";
-        std::cout << std::left << std::setw(28) << "Section"
-                  << std::right << std::setw(14) << "Total Time"
-                  << std::setw(10) << "   %"
-                  << std::setw(14) << "Calls"
-                  << std::setw(14) << "Avg/Call"
+        std::cout << std::left << std::setw(28) << "Section" << std::right << std::setw(14) << "Total Time"
+                  << std::setw(10) << "   %" << std::setw(14) << "Calls" << std::setw(14) << "Avg/Call"
                   << "\n";
         std::cout << std::string(80, '-') << "\n";
 
         // Print each section
-        for (const auto& [name, stats] : sorted) {
+        for (const auto &[name, stats] : sorted) {
             double totalMs = stats.totalTimeNs / 1e6;
             double avgNs = stats.callCount > 0 ? stats.totalTimeNs / stats.callCount : 0.0;
             double pct = grandTotal > 0 ? (stats.totalTimeNs / grandTotal) * 100.0 : 0.0;
 
-            std::cout << std::left << std::setw(28) << name
-                      << std::right << std::setw(10) << std::fixed << std::setprecision(2) << totalMs << " ms"
-                      << std::setw(8) << std::fixed << std::setprecision(1) << pct << " %"
-                      << std::setw(14) << stats.callCount
-                      << std::setw(10) << std::fixed << std::setprecision(1) << avgNs << " ns"
+            std::cout << std::left << std::setw(28) << name << std::right << std::setw(10) << std::fixed
+                      << std::setprecision(2) << totalMs << " ms" << std::setw(8) << std::fixed << std::setprecision(1)
+                      << pct << " %" << std::setw(14) << stats.callCount << std::setw(10) << std::fixed
+                      << std::setprecision(1) << avgNs << " ns"
                       << "\n";
         }
 
         std::cout << std::string(80, '-') << "\n";
-        std::cout << std::left << std::setw(28) << "TOTAL"
-                  << std::right << std::setw(10) << std::fixed << std::setprecision(2) << (grandTotal / 1e6) << " ms"
+        std::cout << std::left << std::setw(28) << "TOTAL" << std::right << std::setw(10) << std::fixed
+                  << std::setprecision(2) << (grandTotal / 1e6) << " ms"
                   << "\n";
         std::cout << "================================================================================\n\n";
     }
 
-private:
+  private:
     Profiler() = default;
     ~Profiler() = default;
 
     // Non-copyable
-    Profiler(const Profiler&) = delete;
-    Profiler& operator=(const Profiler&) = delete;
+    Profiler(const Profiler &) = delete;
+    Profiler &operator=(const Profiler &) = delete;
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, SectionStats> sections_;
@@ -126,11 +119,9 @@ private:
 // ============================================================================
 
 class ScopedTimer {
-public:
-    explicit ScopedTimer(const std::string& section)
-        : section_(section)
-        , start_(std::chrono::high_resolution_clock::now()) {
-    }
+  public:
+    explicit ScopedTimer(const std::string &section)
+        : section_(section), start_(std::chrono::high_resolution_clock::now()) {}
 
     ~ScopedTimer() {
         auto end = std::chrono::high_resolution_clock::now();
@@ -139,10 +130,10 @@ public:
     }
 
     // Non-copyable, non-movable
-    ScopedTimer(const ScopedTimer&) = delete;
-    ScopedTimer& operator=(const ScopedTimer&) = delete;
+    ScopedTimer(const ScopedTimer &) = delete;
+    ScopedTimer &operator=(const ScopedTimer &) = delete;
 
-private:
+  private:
     std::string section_;
     std::chrono::high_resolution_clock::time_point start_;
 };
@@ -161,13 +152,13 @@ private:
 // ============================================================================
 
 class Profiler {
-public:
-    static Profiler& instance() {
+  public:
+    static Profiler &instance() {
         static Profiler profiler;
         return profiler;
     }
-    void printReport() const {}  // No-op
-    void reset() {}              // No-op
+    void printReport() const {} // No-op
+    void reset() {}             // No-op
 };
 
 // ============================================================================

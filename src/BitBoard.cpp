@@ -1,5 +1,5 @@
 #include "BitBoard.hpp"
-#include <cstring>  // for memset and memcpy
+#include <cstring> // for memset and memcpy
 
 BitBoard::BitBoard(int size) : boardSize(size) {
     // Initialize all bits to 0
@@ -11,11 +11,11 @@ void BitBoard::setBit(int x, int y) {
     if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) {
         return;
     }
-    
+
     int index = toIndex(x, y);
     int segment = index / BITS_PER_UINT64;
     int bit = index % BITS_PER_UINT64;
-    
+
     board[segment] |= (1ULL << bit);
 }
 
@@ -24,11 +24,11 @@ void BitBoard::clearBit(int x, int y) {
     if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) {
         return;
     }
-    
+
     int index = toIndex(x, y);
     int segment = index / BITS_PER_UINT64;
     int bit = index % BITS_PER_UINT64;
-    
+
     board[segment] &= ~(1ULL << bit);
 }
 
@@ -37,30 +37,28 @@ bool BitBoard::getBit(int x, int y) const {
     if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) {
         return false;
     }
-    
+
     int index = toIndex(x, y);
     int segment = index / BITS_PER_UINT64;
     int bit = index % BITS_PER_UINT64;
-    
+
     return (board[segment] >> bit) & 1;
 }
 
-void BitBoard::clear() {
-    std::memset(board, 0, sizeof(board));
-}
+void BitBoard::clear() { std::memset(board, 0, sizeof(board)); }
 
-BitBoard BitBoard::operator|(const BitBoard& other) const {
+BitBoard BitBoard::operator|(const BitBoard &other) const {
     BitBoard result(boardSize);
-    
+
     // OR each segment
     for (int i = 0; i < NUM_SEGMENTS; i++) {
         result.board[i] = board[i] | other.board[i];
     }
-    
+
     return result;
 }
 
-BitBoard BitBoard::operator&(const BitBoard& other) const {
+BitBoard BitBoard::operator&(const BitBoard &other) const {
     BitBoard result(boardSize);
     for (int i = 0; i < NUM_SEGMENTS; i++) {
         result.board[i] = board[i] & other.board[i];
@@ -90,14 +88,15 @@ uint64_t BitBoard::MASK_NOT_COL_17_18[NUM_SEGMENTS] = {0};
 bool BitBoard::masksInitialized = false;
 
 void BitBoard::initMasks() {
-    if (masksInitialized) return;
+    if (masksInitialized)
+        return;
 
     // 1. Initialize ALL masks to all-ones (0xFFFFFFFFFFFFFFFF)
     for (int i = 0; i < NUM_SEGMENTS; i++) {
         MASK_NOT_COL_0[i] = ~0ULL;
         MASK_NOT_COL_18[i] = ~0ULL;
-        MASK_NOT_COL_0_1[i] = ~0ULL;      // Added this
-        MASK_NOT_COL_17_18[i] = ~0ULL;    // Added this
+        MASK_NOT_COL_0_1[i] = ~0ULL;   // Added this
+        MASK_NOT_COL_17_18[i] = ~0ULL; // Added this
     }
 
     // 2. Punch out the prohibited columns
@@ -105,7 +104,7 @@ void BitBoard::initMasks() {
         // Distance 1 columns
         int i0 = y * 19 + 0;
         MASK_NOT_COL_0[i0 / 64] &= ~(1ULL << (i0 % 64));
-        
+
         int i18 = y * 19 + 18;
         MASK_NOT_COL_18[i18 / 64] &= ~(1ULL << (i18 % 64));
 
@@ -126,7 +125,7 @@ void BitBoard::initMasks() {
     int lastSegment = totalBits / 64;
     int remainingBits = totalBits % 64;
     uint64_t validBitsMask = (1ULL << remainingBits) - 1;
-    
+
     // Apply this to all masks to keep the "junk" area clean
     MASK_NOT_COL_0[lastSegment] &= validBitsMask;
     MASK_NOT_COL_18[lastSegment] &= validBitsMask;
@@ -145,7 +144,8 @@ void BitBoard::applyMask(const uint64_t maskArray[NUM_SEGMENTS]) {
 
 // Logic for Dilate (Distance 1)
 BitBoard BitBoard::dilate() const {
-    if (!masksInitialized) initMasks();
+    if (!masksInitialized)
+        initMasks();
 
     BitBoard res = *this;
 
@@ -154,10 +154,10 @@ BitBoard BitBoard::dilate() const {
     res |= shiftFixed(-19); // Up
 
     // Prepare masked versions for Horizontal/Diagonal movement
-    BitBoard maskL = *this; 
+    BitBoard maskL = *this;
     maskL.applyMask(MASK_NOT_COL_0); // Safe to move Left
-    
-    BitBoard maskR = *this; 
+
+    BitBoard maskR = *this;
     maskR.applyMask(MASK_NOT_COL_18); // Safe to move Right
 
     // Horizontal
@@ -173,9 +173,10 @@ BitBoard BitBoard::dilate() const {
     return res;
 }
 
-BitBoard& BitBoard::operator|=(const BitBoard& other) {
+BitBoard &BitBoard::operator|=(const BitBoard &other) {
     // Standard Pente board is 6 segments (361 bits)
-    // Unrolling this loop or using SIMD is possible, but 6 iterations is already blazing fast.
+    // Unrolling this loop or using SIMD is possible, but 6 iterations is
+    // already blazing fast.
     for (int i = 0; i < NUM_SEGMENTS; ++i) {
         this->board[i] |= other.board[i];
     }
@@ -183,7 +184,7 @@ BitBoard& BitBoard::operator|=(const BitBoard& other) {
 }
 
 // In BitBoard.cpp
-void BitBoard::orShifted(int count, const BitBoard& source) {
+void BitBoard::orShifted(int count, const BitBoard &source) {
     if (count == 0) {
         *this |= source;
         return;
@@ -216,14 +217,17 @@ void BitBoard::orShifted(int count, const BitBoard& source) {
 }
 
 BitBoard BitBoard::dilate1_5() const {
-    if (!masksInitialized) initMasks();
+    if (!masksInitialized)
+        initMasks();
 
     // Start with Distance 1
-    BitBoard res = this->dilate(); 
+    BitBoard res = this->dilate();
 
     // Reuse these buffers to avoid calling the constructor 20 times
-    BitBoard maskL2 = *this; maskL2.applyMask(MASK_NOT_COL_0_1);
-    BitBoard maskR2 = *this; maskR2.applyMask(MASK_NOT_COL_17_18);
+    BitBoard maskL2 = *this;
+    maskL2.applyMask(MASK_NOT_COL_0_1);
+    BitBoard maskR2 = *this;
+    maskR2.applyMask(MASK_NOT_COL_17_18);
 
     // Use our new orShifted to modify 'res' in place
     res.orShifted(38, *this);  // Down 2
@@ -244,7 +248,7 @@ BitBoard BitBoard::dilate1_5() const {
 //     if (!masksInitialized) initMasks();
 
 //     // Start with the standard 3x3 expansion
-//     BitBoard res = this->dilate(); 
+//     BitBoard res = this->dilate();
 
 //     // Add only the straight-line extensions (Distance 2)
 //     // Vertical
@@ -287,8 +291,8 @@ BitBoard BitBoard::dilate2() const {
     maskR2.applyMask(MASK_NOT_COL_17_18);
 
     // Horizontal distance 2
-    res |= maskL2.shiftFixed(-2);  // Left 2
-    res |= maskR2.shiftFixed(2);   // Right 2
+    res |= maskL2.shiftFixed(-2); // Left 2
+    res |= maskR2.shiftFixed(2);  // Right 2
 
     // Diagonal distance 2 (corners of 5x5)
     res |= maskL2.shiftFixed(-40); // Up 2, Left 2
@@ -320,7 +324,7 @@ BitBoard BitBoard::dilate2() const {
 
 BitBoard BitBoard::shiftFixed(int count) const {
     BitBoard res(boardSize);
-    if (count > 0) { // Shift "Forward" (Right/Down)
+    if (count > 0) {                // Shift "Forward" (Right/Down)
         int wordShift = count >> 6; // count / 64
         int bitShift = count & 63;  // count % 64
         // uint64_t carry = 0; TODO sus

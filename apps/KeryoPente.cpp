@@ -1,21 +1,21 @@
-#include "MCTS.hpp"
 #include "Evaluator.hpp"
-#include "PenteGame.hpp"
 #include "GameUtils.hpp"
-#include <iostream>
+#include "MCTS.hpp"
+#include "PenteGame.hpp"
 #include <cstring>
+#include <iostream>
 
 // How to run: ./keryopente "1. K10 K9 2. K6 L11 3. M8 J11" 100000
 //             ./keryopente -d 1 "1. K10 K9" 100000
 // Keryo-Pente: captures enabled, 3-stone captures, 15 captures to win
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     std::cout << "Playing Keryo-Pente (3-stone captures, 15 to win)..." << std::endl;
 
-    const char* hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
+    const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
 
     // Parse optional flags, collect positional args
     int dilationDistance = -1; // -1 = use default
-    std::vector<const char*> positional;
+    std::vector<const char *> positional;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-d") == 0 && i + 1 < argc) {
             dilationDistance = std::atoi(argv[++i]);
@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    const char* gameDataStr = positional.size() >= 1 ? positional[0] : hardCodedGame;
+    const char *gameDataStr = positional.size() >= 1 ? positional[0] : hardCodedGame;
     int mctsIterations = positional.size() >= 2 ? std::atoi(positional[1]) : 100000;
 
     // Parse the game data string using GameUtils
@@ -35,19 +35,20 @@ int main(int argc, char* argv[]) {
 
     // Show parsed moves on same line
     std::cout << "Parsed moves: ";
-    for (const auto& moveStr : moves) {
+    for (const auto &moveStr : moves) {
         std::cout << moveStr << " ";
     }
     std::cout << std::endl;
 
     // Game time - use Keryo-Pente config
     PenteGame::Config gameConfig = PenteGame::Config::keryoPente();
-    if (dilationDistance >= 0) gameConfig.dilationDistance = dilationDistance;
+    if (dilationDistance >= 0)
+        gameConfig.dilationDistance = dilationDistance;
     PenteGame game(gameConfig);
     game.reset();
 
     // Replay the moves
-    for (const auto& moveStr : moves) {
+    for (const auto &moveStr : moves) {
         game.makeMove(moveStr.c_str());
     }
 

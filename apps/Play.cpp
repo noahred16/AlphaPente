@@ -1,12 +1,11 @@
-#include "MCTS.hpp"
-#include "PenteGame.hpp"
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
-#include <iostream>
+#include "MCTS.hpp"
+#include "PenteGame.hpp"
 #include <chrono>
+#include <iostream>
 
-
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     std::cout << "Playing Pente..." << std::endl;
 
     PenteGame game(PenteGame::Config::pente());
@@ -29,10 +28,10 @@ int main(int argc, char* argv[]) {
     configHeuristic.evaluator = &heuristicEvaluator;
     MCTS mctsHeuristic(configHeuristic);
 
-    MCTS* blackPlayer = &mctsUniform;
-    MCTS* whitePlayer = &mctsHeuristic;
-    const char* blackPlayerName = "Uniform";
-    const char* whitePlayerName = "Heuristic";
+    MCTS *blackPlayer = &mctsUniform;
+    MCTS *whitePlayer = &mctsHeuristic;
+    const char *blackPlayerName = "Uniform";
+    const char *whitePlayerName = "Heuristic";
 
     double blackTotalTime = 0.0;
     double whiteTotalTime = 0.0;
@@ -79,7 +78,7 @@ int main(int argc, char* argv[]) {
 
     // Print moves
     std::cout << "Moves: ";
-    for (const auto& moveStr : moves) {
+    for (const auto &moveStr : moves) {
         std::cout << moveStr << " ";
     }
     std::cout << "\n\n";
