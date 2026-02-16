@@ -40,8 +40,8 @@ void PenteGame::reset() {
     whiteCaptures = 0;
     moveCount = 0;
     lastMove = Move();
-    hash_ = Zobrist::instance().computeFullHash(
-        blackStones, whiteStones, blackCaptures, whiteCaptures, currentPlayer);
+    Zobrist::instance().computeAllHashes(
+        hashes_, blackStones, whiteStones, blackCaptures, whiteCaptures, currentPlayer);
 }
 
 bool PenteGame::makeMove(const char* move) {
@@ -59,6 +59,8 @@ bool PenteGame::makeMove(int x, int y) {
     const auto& zob = Zobrist::instance();
     int pIdx = Zobrist::playerIndex(currentPlayer);
     int cell = y * BOARD_SIZE + x;
+    // Only maintain all 8 symmetry hashes within the ply limit
+    int nh = (moveCount < config_.canonicalHashPlyLimit) ? 8 : 1;
 
     // Place stone
     if (currentPlayer == BLACK) {
@@ -66,7 +68,8 @@ bool PenteGame::makeMove(int x, int y) {
     } else {
         whiteStones.setBit(x, y);
     }
-    hash_ ^= zob.stoneKeys[pIdx][cell];
+    for (int s = 0; s < nh; ++s)
+        hashes_[s] ^= zob.stoneKeys[pIdx][zob.symmetryMap[s][cell]];
     clearLegalMove(x, y);
 
     // Check and perform captures
@@ -74,20 +77,23 @@ bool PenteGame::makeMove(int x, int y) {
         if (currentPlayer == BLACK) {
             int oldCap = blackCaptures;
             blackCaptures += checkAndCapture(x, y);
-            hash_ ^= zob.captureKeys[0][oldCap];
-            hash_ ^= zob.captureKeys[0][blackCaptures];
+            uint64_t capDelta = zob.captureKeys[0][oldCap] ^ zob.captureKeys[0][blackCaptures];
+            for (int s = 0; s < nh; ++s)
+                hashes_[s] ^= capDelta;
         } else {
             int oldCap = whiteCaptures;
             whiteCaptures += checkAndCapture(x, y);
-            hash_ ^= zob.captureKeys[1][oldCap];
-            hash_ ^= zob.captureKeys[1][whiteCaptures];
+            uint64_t capDelta = zob.captureKeys[1][oldCap] ^ zob.captureKeys[1][whiteCaptures];
+            for (int s = 0; s < nh; ++s)
+                hashes_[s] ^= capDelta;
         }
     }
 
     lastMove = Move(x, y);
     moveCount++;
     currentPlayer = (currentPlayer == BLACK) ? WHITE : BLACK;
-    hash_ ^= zob.sideToMoveKey;
+    for (int s = 0; s < nh; ++s)
+        hashes_[s] ^= zob.sideToMoveKey;
 
     return true;
 }
@@ -100,6 +106,7 @@ int PenteGame::checkAndCapture(int x, int y) {
 
     const auto& zob = Zobrist::instance();
     int oppIdx = Zobrist::playerIndex((currentPlayer == BLACK) ? WHITE : BLACK);
+    int nh = (moveCount < config_.canonicalHashPlyLimit) ? 8 : 1;
 
     static const int dirs[8][2] = {{0,1}, {1,0}, {1,1}, {-1,1},
                                    {0,-1}, {-1,0}, {-1,-1}, {1,-1}};
@@ -129,9 +136,14 @@ int PenteGame::checkAndCapture(int x, int y) {
                     oppStones.clearBitUnchecked(x2, y2);
                     oppStones.clearBitUnchecked(x3, y3);
 
-                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
-                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
-                    hash_ ^= zob.stoneKeys[oppIdx][y3 * BOARD_SIZE + x3];
+                    int c1 = y1 * BOARD_SIZE + x1;
+                    int c2 = y2 * BOARD_SIZE + x2;
+                    int c3 = y3 * BOARD_SIZE + x3;
+                    for (int s = 0; s < nh; ++s) {
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c1]];
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c2]];
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c3]];
+                    }
 
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
@@ -151,8 +163,12 @@ int PenteGame::checkAndCapture(int x, int y) {
                     oppStones.clearBitUnchecked(x1, y1);
                     oppStones.clearBitUnchecked(x2, y2);
 
-                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
-                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
+                    int c1 = y1 * BOARD_SIZE + x1;
+                    int c2 = y2 * BOARD_SIZE + x2;
+                    for (int s = 0; s < nh; ++s) {
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c1]];
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c2]];
+                    }
 
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
@@ -180,8 +196,12 @@ int PenteGame::checkAndCapture(int x, int y) {
                     oppStones.clearBitUnchecked(x1, y1);
                     oppStones.clearBitUnchecked(x2, y2);
 
-                    hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
-                    hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
+                    int c1 = y1 * BOARD_SIZE + x1;
+                    int c2 = y2 * BOARD_SIZE + x2;
+                    for (int s = 0; s < nh; ++s) {
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c1]];
+                        hashes_[s] ^= zob.stoneKeys[oppIdx][zob.symmetryMap[s][c2]];
+                    }
 
                     setLegalMove(x1, y1);
                     setLegalMove(x2, y2);
@@ -478,11 +498,20 @@ void PenteGame::syncFrom(const PenteGame& other) {
     moveCount = other.moveCount;
     // moveHistory = other.moveHistory;
     lastMove = other.lastMove;
-    hash_ = other.hash_;
+    std::memcpy(hashes_, other.hashes_, sizeof(hashes_));
 }
 
 uint64_t PenteGame::getHash() const {
-    return hash_;
+    return hashes_[0];
+}
+
+uint64_t PenteGame::getCanonicalHash() const {
+    if (moveCount > config_.canonicalHashPlyLimit)
+        return hashes_[0];
+    uint64_t minHash = hashes_[0];
+    for (int s = 1; s < 8; ++s)
+        minHash = std::min(minHash, hashes_[s]);
+    return minHash;
 }
 
 PenteGame::Player PenteGame::getStoneAt(int x, int y) const {

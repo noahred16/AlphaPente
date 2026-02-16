@@ -1,8 +1,10 @@
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
 #include "BitBoard.hpp"
+#include "Evaluator.hpp"
 #include "GameUtils.hpp"
 #include <iostream>
+#include <chrono>
 
 void moveTwoAnalysis(PenteGame& game);
 void setupSimpleOpenThreeThreat(PenteGame& game);
@@ -16,64 +18,34 @@ int main(int argc, char* argv[]) {
     game.reset();
 
 
-    // moveTwoAnalysis(game);
-    // char expectedMove[] = "K10";
-    
-    // setupSimpleOpenThreeThreat(game);
-    // char expectedMove[] = "N10";
+    const char* moves[] = {"K10", "K9", "K7"};
+    for (const char* move : moves) {
+        game.makeMove(move);
+    }
 
-    setupOneSidedFourThreat(game);
-    char expectedMove[] = "L7";
 
-    // print
     GameUtils::printGameState(game);
 
-    // Test getting the current player
-    // PenteGame::Player currentPlayer = game.getCurrentPlayer();
-    // std::cout << "Current player: " << (currentPlayer == PenteGame::BLACK ? "Black" : "White") << std::endl;
-
-
     MCTS::Config config;
-    config.maxIterations = 10000;
+    // config.maxIterations = 5;
+    config.maxIterations = 1000;
+    // config.maxIterations = 10000;
     config.explorationConstant = 1.414;
+    config.explorationConstant = 1.7;
+    config.searchMode = MCTS::SearchMode::PUCT;
+    HeuristicEvaluator heuristicEvaluator;
+    config.evaluator = &heuristicEvaluator;
 
     MCTS mcts(config);
+    // starting at {curr_time} using built in cpp time 
+    std::cout << "Starting at " << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) << std::endl; 
+    std::cout << "Running MCTS search..." << std::endl;
     mcts.search(game);
     mcts.printStats();
     mcts.printBestMoves(10);
-    mcts.printBranch(expectedMove, 10);
+    std::cout << "Finished at " << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) << std::endl;
+    // mcts.printBranch("L10", 10);
 
     return 0;
-}
-
-void moveTwoAnalysis(PenteGame& game) {
-    game.makeMove("K10"); // Black
-    game.makeMove("L11"); // White
-}
-
-void setupSimpleOpenThreeThreat(PenteGame& game) {
-    // white one-sided four threat test
-    game.makeMove("K10"); // Black
-    game.makeMove("C17"); // White
-    game.makeMove("L10"); // Black
-    game.makeMove("E5"); // White
-    game.makeMove("M10"); // Black
-    game.makeMove("E15"); // White
-
-    // needs to cover either I10 or M10 to block black win
-}
-
-void setupOneSidedFourThreat(PenteGame& game) {
-    // white one-sided four threat test
-    game.makeMove("K10"); // Black
-    game.makeMove("K11"); // White
-    game.makeMove("K9"); // Black
-    game.makeMove("E5"); // White
-    game.makeMove("K8"); // Black
-    game.makeMove("E15"); // White
-
-    game.makeMove("K7"); // Black
-    game.makeMove("P15"); // White if white doesnt cover black wins
-    // L7 is winning move for black
 }
 

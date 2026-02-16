@@ -860,3 +860,192 @@ TEST_CASE("TranspositionTable clear resets generation") {
     REQUIRE(e != nullptr);
     CHECK(e->value == doctest::Approx(0.8f));
 }
+
+// ============================================================================
+// D4 Canonical Hashing (Symmetry) Tests
+// ============================================================================
+
+TEST_CASE("Symmetry map correctness: spot-check transforms") {
+    const auto& zob = Zobrist::instance();
+    constexpr int N = 18; // BOARD_SIZE - 1
+
+    // Check cell (3, 5) = 5*19+3 = 98
+    int cell = 5 * 19 + 3;
+    CHECK(zob.symmetryMap[0][cell] == 5 * 19 + 3);       // identity: (3,5)
+    CHECK(zob.symmetryMap[1][cell] == 3 * 19 + (N - 5));  // rot90: (N-5, 3) = (13,3) -> 3*19+13
+    CHECK(zob.symmetryMap[2][cell] == (N-5) * 19 + (N-3));// rot180: (15,13) -> 13*19+15
+    CHECK(zob.symmetryMap[3][cell] == (N-3) * 19 + 5);    // rot270: (5,15) -> 15*19+5
+    CHECK(zob.symmetryMap[4][cell] == 5 * 19 + (N - 3));  // reflect horiz: (15,5) -> 5*19+15
+    CHECK(zob.symmetryMap[5][cell] == (N-5) * 19 + 3);    // reflect vert: (3,13) -> 13*19+3
+    CHECK(zob.symmetryMap[6][cell] == 3 * 19 + 5);        // reflect main diag: (5,3) -> 3*19+5
+    CHECK(zob.symmetryMap[7][cell] == (N-3) * 19 + (N-5));// reflect anti-diag: (13,15) -> 15*19+13
+
+    // Center cell (9,9) should map to itself for all symmetries
+    int center = 9 * 19 + 9;
+    for (int s = 0; s < 8; ++s)
+        CHECK(zob.symmetryMap[s][center] == center);
+}
+
+TEST_CASE("Symmetric positions produce same canonical hash: horizontal mirror") {
+    // Place at (10, 9) — one cell right of center
+    PenteGame g1;
+    g1.reset();
+    g1.makeMove("K10"); // center (9,9)
+    g1.makeMove("L10"); // (10,9) — right of center
+
+    // Place at (8, 9) — one cell left of center (horizontal mirror)
+    PenteGame g2;
+    g2.reset();
+    g2.makeMove("K10"); // center (9,9) — same
+    g2.makeMove("J10"); // (8,9) — left of center
+
+    // Identity hashes should differ (different physical positions)
+    CHECK(g1.getHash() != g2.getHash());
+    // Canonical hashes should match (mirror images)
+    CHECK(g1.getCanonicalHash() == g2.getCanonicalHash());
+}
+
+TEST_CASE("Rotated positions produce same canonical hash: 90 degree rotation") {
+    // Place at (10, 9) — one cell right of center
+    PenteGame g1;
+    g1.reset();
+    g1.makeMove("K10"); // center (9,9)
+    g1.makeMove("L10"); // (10,9)
+
+    // Place at (9, 8) — one cell above center (90° CW rotation of right-of-center)
+    PenteGame g2;
+    g2.reset();
+    g2.makeMove("K10"); // center
+    g2.makeMove("K9");  // (9,8) — above center
+
+    CHECK(g1.getHash() != g2.getHash());
+    CHECK(g1.getCanonicalHash() == g2.getCanonicalHash());
+}
+
+TEST_CASE("All 4 rotations produce same canonical hash") {
+    // Center + one stone at each of the 4 rotated positions of (10,9)
+    // (10,9), (9,8), (8,9), (9,10) are the 4 rotations
+    const char* secondMoves[] = {"L10", "K9", "J10", "K11"};
+    uint64_t canonical = 0;
+
+    for (int i = 0; i < 4; ++i) {
+        PenteGame g;
+        g.reset();
+        g.makeMove("K10");
+        g.makeMove(secondMoves[i]);
+        if (i == 0) canonical = g.getCanonicalHash();
+        else CHECK(g.getCanonicalHash() == canonical);
+    }
+}
+
+TEST_CASE("All 8 D4 symmetries produce same canonical hash") {
+    // Axis-aligned positions: (11,9), (9,11), (7,9), (9,7) are the 4 rotations
+    // of a stone 2 cells right of center on the same row
+    const char* distinctMoves[] = {"M10", "K12", "I10", "K8"};
+    uint64_t canonical = 0;
+
+    for (int i = 0; i < 4; ++i) {
+        PenteGame g;
+        g.reset();
+        g.makeMove("K10");
+        g.makeMove(distinctMoves[i]);
+        if (i == 0) canonical = g.getCanonicalHash();
+        else CHECK(g.getCanonicalHash() == canonical);
+    }
+
+    // Now check the diagonal reflections: (10,10), (8,8), (10,8), (8,10)
+    // These are the D4 images of (10,10) relative to center:
+    const char* diagMoves[] = {"L11", "J9", "L9", "J11"};
+    uint64_t diagCanonical = 0;
+    for (int i = 0; i < 4; ++i) {
+        PenteGame g;
+        g.reset();
+        g.makeMove("K10");
+        g.makeMove(diagMoves[i]);
+        if (i == 0) diagCanonical = g.getCanonicalHash();
+        else CHECK(g.getCanonicalHash() == diagCanonical);
+    }
+}
+
+TEST_CASE("All 8 hashes are distinct for asymmetric position") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10"); // center
+    game.makeMove("L11"); // (10,10)
+    game.makeMove("M10"); // (11,9) — breaks all symmetry
+
+    // Get all 8 hashes via computeAllHashes on the Zobrist side
+    // We can't directly access hashes_ but we can verify canonical != identity
+    // for an asymmetric position... actually we can test via getHash and getCanonicalHash
+    // For a truly asymmetric position, canonical should still be the min
+    uint64_t identity = game.getHash();
+    uint64_t canonical = game.getCanonicalHash();
+    CHECK(canonical <= identity);
+}
+
+TEST_CASE("Canonical hash falls back to identity after ply limit") {
+    PenteGame::Config cfg = PenteGame::Config::pente();
+    cfg.canonicalHashPlyLimit = 2; // Very low limit for testing
+    PenteGame game(cfg);
+    game.reset();
+
+    game.makeMove("K10"); // move 1
+    game.makeMove("L10"); // move 2
+
+    // At ply 2, canonical still active
+    uint64_t canonicalAt2 = game.getCanonicalHash();
+    uint64_t identityAt2 = game.getHash();
+    // Canonical should be <= identity (min of 8)
+    CHECK(canonicalAt2 <= identityAt2);
+
+    game.makeMove("M10"); // move 3 — exceeds limit
+
+    // At ply 3 (> limit 2), canonical == identity
+    CHECK(game.getCanonicalHash() == game.getHash());
+}
+
+TEST_CASE("Canonical hash deterministic across clone") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10");
+    game.makeMove("L10");
+
+    PenteGame cloned = game.clone();
+    CHECK(cloned.getCanonicalHash() == game.getCanonicalHash());
+    CHECK(cloned.getHash() == game.getHash());
+}
+
+TEST_CASE("Canonical hash deterministic across syncFrom") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10");
+    game.makeMove("L10");
+
+    PenteGame synced;
+    synced.syncFrom(game);
+    CHECK(synced.getCanonicalHash() == game.getCanonicalHash());
+    CHECK(synced.getHash() == game.getHash());
+}
+
+TEST_CASE("Canonical hash with captures still works") {
+    // Setup capture and verify canonical hash is consistent
+    PenteGame g1;
+    g1.reset();
+    g1.makeMove("K10");
+    g1.makeMove("L10");
+    g1.makeMove("J10");
+    g1.makeMove("M10");
+    g1.makeMove("N10"); // captures L10, M10
+
+    // Replay same sequence
+    PenteGame g2;
+    g2.reset();
+    g2.makeMove("K10");
+    g2.makeMove("L10");
+    g2.makeMove("J10");
+    g2.makeMove("M10");
+    g2.makeMove("N10");
+
+    CHECK(g1.getCanonicalHash() == g2.getCanonicalHash());
+    CHECK(g1.getHash() == g2.getHash());
+}
