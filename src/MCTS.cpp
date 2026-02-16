@@ -1,11 +1,14 @@
 #include "MCTS.hpp"
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
+#include "Zobrist.hpp"
+#include <unordered_map>
 #include <algorithm>
 #include <chrono>
 #include <limits>
 #include <iostream>
 #include <iomanip>
+#include <unordered_set>
 
 
 // ============================================================================
@@ -135,11 +138,25 @@ PenteGame::Move MCTS::search(const PenteGame& game) {
         // Selection: traverse tree to find node to expand
         Node* node = select(root_, localGame);
 
+        // Node may already be solved via TT reuse — just backpropagate the proof
+        // if (node->isTerminal()) {
+        //     double result = (node->solvedStatus == SolvedStatus::SOLVED_WIN) ? -1.0 : 1.0;
+        //     backpropagate(node, result);
+        //     totalSimulations_++;
+        //     continue;
+        // }
+
+        // throw error if is terminal but local game doesnt recognize it as terminal - this should never happen
+        // if (node->isTerminal() && localGame.getWinner() == PenteGame::NONE) {
+        //     std::cerr << "FATAL ERROR: Node marked as terminal but local game state is not terminal! This indicates a logic error in the MCTS implementation.\n";
+        //     exit(1);
+        // }
+
         // Expansion: add a new child node if not terminal
         PenteGame::Player winner = localGame.getWinner();
         if (winner != PenteGame::NONE) {
             PenteGame::Player opponent = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
-            // if the game is over. that means the last move made was a winning move. 
+            // if the game is over. that means the last move made was a winning move.
             // which means the current player lost. which means this move was a "solve win" for the opponent.
             if (winner == opponent) {
                 node->solvedStatus = SolvedStatus::SOLVED_WIN;
@@ -224,25 +241,36 @@ MCTS::Node* MCTS::select(Node* node, PenteGame& game) {
     while (!node->isTerminal() && node->evaluated) {
         int best = selectBestMoveIndex(node, game);
         PenteGame::Move move = node->moves[best];
-        Node* child = node->children[best];
-
+        game.makeMove(move.x, move.y);
+        
+        
         // lazy expansion
+        Node* child = node->children[best];
         if (!child) {
-            // only expand the selected child
-            child = allocateNode();
-            child->move = move;
-            child->player = (node->player == PenteGame::BLACK)
-                ? PenteGame::WHITE
-                : PenteGame::BLACK;
-            child->parent = node;
-            child->prior = node->priors[best];
+            uint64_t hash = game.getCanonicalHash();
+            auto it = nodeTable.find(hash);
+            if (it != nodeTable.end()) {
+                child = it->second;
+                child->parent = node;
+                node->children[best] = child;
+                // node->childCount++;
+            } else {
+                child = allocateNode();
+                child->move = move;
+                child->player = (node->player == PenteGame::BLACK)
+                    ? PenteGame::WHITE
+                    : PenteGame::BLACK;
+                child->parent = node;
+                child->prior = node->priors[best];
 
-            node->children[best] = child;
-            node->childCount++;
+                nodeTable.emplace(hash, child);
+
+                node->children[best] = child;
+                node->childCount++;
+            }
         }
 
         node = child;
-        game.makeMove(move.x, move.y);
     }
     return node;
 }
@@ -252,9 +280,11 @@ MCTS::Node* MCTS::expand(Node* node, PenteGame& game) {
     PROFILE_SCOPE("MCTS::expand");
     
     if (node->evaluated) {
+        // I guess it could happen in DAGs graphs
         std::cout << "This should never happen: expanding a node that has already been evaluated.\n";
         std::cerr << "Error: Attempting to expand a node that has already been evaluated. This indicates a logic error in the MCTS implementation.\n";
         exit(1);
+        return node;
     }
 
     // if this is the first node being expanded, we need to allocate all children nodes and set priors
@@ -312,7 +342,7 @@ void MCTS::backpropagate(Node* node, double result) {
 
         // --- SOLVER LOGIC (Minimax Propagation) ---
         if (current->solvedStatus == SolvedStatus::SOLVED_WIN && current->parent) {
-            current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
+                current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
         }
 
         if (current->solvedStatus == SolvedStatus::SOLVED_LOSS && current->parent) {
@@ -321,7 +351,7 @@ void MCTS::backpropagate(Node* node, double result) {
             if (current->parent->unprovenCount < 0) {
                 std::cerr << "FATAL ERROR: unprovenCount dropped below 0!" << std::endl;
                 exit(1);
-            }
+                    }
 
             if (current->parent->unprovenCount == 0) {
                 current->parent->solvedStatus = SolvedStatus::SOLVED_WIN;
@@ -370,7 +400,7 @@ int MCTS::selectBestMoveIndex(Node* node, const PenteGame& game) const {
     for (uint16_t i = 0; i < node->moveCount; i++) {
         // if the child is null, it means it hasn't been expanded yet. we can still compute its PUCT value using the prior and 0 visits.
         double value;
-        if (node->children[i]) {
+        if (node->children[i] && i < node->childCount) {
             Node* child = node->children[i];
             value = child->getPUCTValue(explorationFactor, node->visits);
         } else {
@@ -408,6 +438,7 @@ void MCTS::clearTree() {
     // O(1) tree destruction - just reset the arena offset
     arena_.reset();
     root_ = nullptr;
+    nodeTable.clear();
 }
 
 MCTS::Node* MCTS::copySubtree(Node* source, MCTSArena& destArena) {
@@ -510,16 +541,23 @@ int MCTS::getTotalVisits() const {
 }
 
 int MCTS::countNodes(Node* node) const {
-    if (!node) return 0;
-
-    int count = 1;
-    for (int i = 0; i < node->moveCount; i++) {
-        if (node->children[i]) {
-            count += countNodes(node->children[i]);
-        }
-    }
-    return count;
+    std::unordered_set<Node*> seen;
+    return countNodesDfs(node, seen);
 }
+
+int MCTS::countNodesDfs(Node* node, std::unordered_set<Node*>& seen) const {
+    if (!node) return 0;
+    if (node == nullptr) return 0;
+    if (!seen.insert(node).second) return 0; // already counted
+
+    int total = 1;
+    if (!node->children) return total;
+    for (int i = 0; i < node->childCount; ++i) {
+        total += countNodesDfs(node->children ? node->children[i] : nullptr, seen);
+    }
+    return total;
+}
+
 
 int MCTS::getTreeSize() const {
     return countNodes(root_);
@@ -557,15 +595,15 @@ void MCTS::printStats() const {
 }
 
 void MCTS::printBestMoves(int topN) const {
-    if (!root_ || root_->moveCount == 0) {
+    if (!root_ || root_->childCount == 0) {
         std::cout << "No moves analyzed yet.\n";
         return;
     }
 
     // Collect non-null children pointers into a vector for sorting
     std::vector<Node*> children;
-    children.reserve(root_->moveCount);
-    for (int i = 0; i < root_->moveCount; i++) {
+    children.reserve(root_->childCount);
+    for (int i = 0; i < root_->childCount; i++) {
         if (root_->children[i]) {
             children.push_back(root_->children[i]);
         }
@@ -583,9 +621,9 @@ void MCTS::printBestMoves(int topN) const {
             return a->visits > b->visits;
         });
 
-    int movesConsidered = static_cast<int>(children.size());
-    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of "
-              << movesConsidered << " Considered ===\n";
+    // int movesConsidered = static_cast<int>(children.size());
+    int movesConsidered = root_->childCount;
+    std::cout << "\n=== Top " << std::min(topN, movesConsidered) << " Moves of " << movesConsidered << " Considered ===\n";
     std::cout << std::setw(6) << "Move"
               << std::setw(10) << "Visits"
               << std::setw(10) << "Wins"
@@ -597,7 +635,7 @@ void MCTS::printBestMoves(int topN) const {
               << std::setw(10) << "Status\n";
     std::cout << std::string(86, '-') << "\n";
 
-    for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
+    for (int i = 0; i < std::min(topN, movesConsidered); i++) {
         Node* child = children[i];
         double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
 

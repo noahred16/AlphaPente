@@ -7,6 +7,10 @@
 #include <random>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
 
 // ============================================================================
 // Arena Allocator for O(1) Tree Destruction
@@ -222,11 +226,14 @@ private:
     Node* findChildNode(Node* parent, int x, int y) const;
     void printMovesFromNode(Node* node, int topN) const;
     int countNodes(Node* node) const;
+    int countNodesDfs(Node* node, std::unordered_set<Node*>& seen) const;
+
 
     // Member variables
     PenteGame game;
     Config config_;
     MCTSArena arena_;
+    std::unordered_map<uint64_t, Node*> nodeTable;
     Node* root_ = nullptr;  // Raw pointer into arena
     mutable std::mt19937 rng_;
 

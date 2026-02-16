@@ -144,3 +144,8 @@ See `tests/README.md` for more details.
 ## PenteGame
 Pente is an amusing two-player strategy board game where the objective is to get five of your pieces in a row or capture five pairs of your opponent's pieces. The game is played on a 19x19 grid.
 
+
+
+## Inspiration
+<!-- lol https://www.pente.org/gameServer/forums/thread.jspa?forumID=1&threadID=4653&start=0&tstart=209 -->
+[Re: Hypothetical question: Pente software](https://www.pente.org/gameServer/forums/thread.jspa?forumID=1&threadID=4653&start=0&tstart=209)

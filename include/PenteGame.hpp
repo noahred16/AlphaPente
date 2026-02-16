@@ -23,11 +23,12 @@ public:
         bool capturesEnabled = true;   // Gomoku: false
         bool tournamentRule = true;    // 3rd move restriction
         int dilationDistance = 1;      // Legal move dilation radius (1 or 2)
+        int canonicalHashPlyLimit = 8; // Use canonical (min of D4 symmetries) hash up to this ply
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
-        static Config gomoku() { return Config{10, false, false, true, 1}; }
-        static Config keryoPente() { return Config{15, true, true, true, 2}; }
+        static Config gomoku() { return Config{10, false, false, true, 1, 8}; }
+        static Config keryoPente() { return Config{15, true, true, true, 2, 8}; }
     };
 
     enum Player : uint8_t {
@@ -63,7 +64,7 @@ private:
     // std::vector<MoveInfo> moveHistory;
 
     Move lastMove;
-    uint64_t hash_;
+    uint64_t hashes_[8]; // One hash per D4 symmetry
 
     // Helper functions
     bool checkFiveInRow(int x, int y) const;
@@ -167,6 +168,7 @@ public:
     PenteGame clone() const;
     void syncFrom(const PenteGame& other);
     uint64_t getHash() const;
+    uint64_t getCanonicalHash() const;
     
     // Debug
     void print() const;
