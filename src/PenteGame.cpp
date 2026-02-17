@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 
-PenteGame::PenteGame(const Config &config) : config_(config) { reset(); }
+PenteGame::PenteGame(const Config &config)
+    : config_(config), rng_(config.seed ? config.seed : std::random_device{}()) {
+    reset();
+}
 
 void PenteGame::reset() {
     blackStones.clear();
@@ -47,7 +49,17 @@ bool PenteGame::makeMove(const char *move) {
     if (blackStones.getBit(x, y) || whiteStones.getBit(x, y)) {
         return false;
     }
-    setLegalMove(x, y);
+
+    // if move is not legal, setLegalMove first. 
+    // legal moves
+    std::vector<Move> legalMoves = getLegalMoves();
+    auto it = std::find_if(legalMoves.begin(), legalMoves.end(), [x, y](const Move& m) { return m.x == x && m.y == y; });
+    bool isInLegalMoves = (it != legalMoves.end());
+    if (!isInLegalMoves) {
+        setLegalMove(x, y);
+    }
+
+    // setLegalMove(x, y);
     return makeMove(x, y);
 }
 
@@ -202,42 +214,42 @@ std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
 
     // optimization for moveCount 1
 
-    if (moveCount == 1) {
-        std::vector<std::string> presetMoves = {
-            "L9", "L10", "M9", "M10", "N9", "N8", "O9", "O8", "O7", "O6", "P6", "P7", "P9",
-        };
-        std::vector<Move> presetMovesVec;
-        for (const auto &moveStr : presetMoves) {
-            auto [x, y] = GameUtils::parseMove(moveStr.c_str());
-            presetMovesVec.emplace_back(x, y);
-        }
-        return presetMovesVec;
-    }
+    // if (moveCount == 1) {
+    //     std::vector<std::string> presetMoves = {
+    //         "L9", "L10", "M9", "M10", "N9", "N8", "O9", "O8", "O7", "O6", "P6", "P7", "P9",
+    //     };
+    //     std::vector<Move> presetMovesVec;
+    //     for (const auto &moveStr : presetMoves) {
+    //         auto [x, y] = GameUtils::parseMove(moveStr.c_str());
+    //         presetMovesVec.emplace_back(x, y);
+    //     }
+    //     return presetMovesVec;
+    // }
 
-    if (config_.tournamentRule && moveCount == 2) {
-        // start empty
-        std::vector<Move> moves = legalMovesVector;
+    // if (config_.tournamentRule && moveCount == 2) {
+    //     // start empty
+    //     std::vector<Move> moves = legalMovesVector;
 
-        int center = BOARD_SIZE / 2;
-        moves.erase(std::remove_if(moves.begin(), moves.end(),
-                                   [center](const Move &m) {
-                                       int distX = std::abs(m.x - center);
-                                       int distY = std::abs(m.y - center);
-                                       return distX < 3 && distY < 3;
-                                   }),
-                    moves.end());
-        // if (moves.empty()) {
-        // TODO: maybe add others?
-        std::vector<std::string> presetMoves = {"K7",  "L7",  "M7",  "N7",  "N8", "N9", "N10",
-                                                "N11", "N12", "N13", "O10", "M6", "K6"};
-        std::vector<Move> presetMovesVec;
-        for (const auto &moveStr : presetMoves) {
-            auto [x, y] = GameUtils::parseMove(moveStr.c_str());
-            presetMovesVec.emplace_back(x, y);
-        }
-        // }
-        return presetMovesVec;
-    }
+    //     int center = BOARD_SIZE / 2;
+    //     moves.erase(std::remove_if(moves.begin(), moves.end(),
+    //                                [center](const Move &m) {
+    //                                    int distX = std::abs(m.x - center);
+    //                                    int distY = std::abs(m.y - center);
+    //                                    return distX < 3 && distY < 3;
+    //                                }),
+    //                 moves.end());
+    //     // if (moves.empty()) {
+    //     // TODO: maybe add others?
+    //     std::vector<std::string> presetMoves = {"K7",  "L7",  "M7",  "N7",  "N8", "N9", "N10",
+    //                                             "N11", "N12", "N13", "O10", "M6", "K6"};
+    //     std::vector<Move> presetMovesVec;
+    //     for (const auto &moveStr : presetMoves) {
+    //         auto [x, y] = GameUtils::parseMove(moveStr.c_str());
+    //         presetMovesVec.emplace_back(x, y);
+    //     }
+    //     // }
+    //     return presetMovesVec;
+    // }
 
     return legalMovesVector;
 
@@ -418,11 +430,8 @@ PenteGame::Move PenteGame::getRandomMove(const std::vector<Move> &moves) const {
         return Move(); // Invalid move
     }
 
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, moves.size() - 1);
-
-    return moves[dis(gen)];
+    return moves[dis(rng_)];
 }
 
 PenteGame::Move PenteGame::getRandomLegalMove() const {
@@ -438,11 +447,8 @@ PenteGame::Move PenteGame::getRandomLegalMove() const {
         return Move();
     }
 
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
     std::uniform_int_distribution<size_t> dis(0, legalMovesVector.size() - 1);
-
-    return legalMovesVector[dis(gen)];
+    return legalMovesVector[dis(rng_)];
 }
 
 PenteGame PenteGame::clone() const {
@@ -462,6 +468,7 @@ void PenteGame::syncFrom(const PenteGame &other) {
     // moveHistory = other.moveHistory;
     lastMove = other.lastMove;
     hash_ = other.hash_;
+    // Note: rng_ intentionally NOT copied - each game instance advances its own rng
 }
 
 uint64_t PenteGame::computeHash() const {
@@ -469,9 +476,18 @@ uint64_t PenteGame::computeHash() const {
     return zob.computeFullHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
 }
 
-uint64_t PenteGame::getHash() const { return hash_; }
+uint64_t PenteGame::getHash() const { 
+    PROFILE_SCOPE("PenteGame::getHash");
+    // if game is within first N moves, use canonical hash to increase transposition hits in opening book
+    int n = 10;
+    if (moveCount <= n) {
+        return getCanonicalHash();
+    }
+    return hash_;
+}
 
 uint64_t PenteGame::getCanonicalHash() const {
+    PROFILE_SCOPE("PenteGame::getCanonicalHash");
     const auto &zob = Zobrist::instance();
     return zob.computeCanonicalHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
 }

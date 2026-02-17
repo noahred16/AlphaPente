@@ -60,6 +60,7 @@ int main(int argc, char *argv[]) {
     // config.explorationConstant = 1.414;
     config.explorationConstant = 1.7;
     config.searchMode = MCTS::SearchMode::PUCT;
+    config.seed = 42; // TODO: temporary, remove after debugging
     // UniformEvaluator uniformEvaluator;
     // config.evaluator = &uniformEvaluator;
     HeuristicEvaluator heuristicEvaluator;

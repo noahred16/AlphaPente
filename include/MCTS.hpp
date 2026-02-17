@@ -108,6 +108,7 @@ class MCTS {
         SearchMode searchMode = SearchMode::UCB1;
         Evaluator *evaluator = nullptr; // For PUCT priors and value evaluation
         HeuristicMode heuristicMode = HeuristicMode::HEURISTIC;
+        uint32_t seed = 0; // 0 = non-deterministic (random_device), non-zero = deterministic seed
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };

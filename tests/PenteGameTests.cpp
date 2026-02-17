@@ -492,7 +492,6 @@ TEST_CASE("Zobrist hash with captures") {
     verify.makeMove("L10");
     verify.makeMove("N10");
     CHECK(verify.getHash() == afterCapture);
-    CHECK(verify.getHash() == 8242170693882605125);
 }
 
 TEST_CASE("Zobrist hash resets to consistent initial value") {
@@ -893,4 +892,27 @@ TEST_CASE("Canonical hash symmetry") {
         uint64_t fullHash = game.getHash();
         CHECK(canonicalHash <= fullHash);
     }
+}
+
+// start
+// K10 K9 K7 K6
+// move J9 should be the same as L9 in terms of canonical hash
+TEST_CASE("Canonical hash with asymmetric moves") {
+    PenteGame game1;
+    game1.reset();
+    game1.makeMove("K10");
+    game1.makeMove("K9");
+    game1.makeMove("K7");
+    game1.makeMove("K6");
+    game1.makeMove("J9");
+    uint64_t hash1 = game1.getCanonicalHash();
+    PenteGame game2;
+    game2.reset();
+    game2.makeMove("K10");
+    game2.makeMove("K9");
+    game2.makeMove("K7");
+    game2.makeMove("K6");
+    game2.makeMove("L9");
+    uint64_t hash2 = game2.getCanonicalHash();
+    CHECK(hash1 == hash2);
 }

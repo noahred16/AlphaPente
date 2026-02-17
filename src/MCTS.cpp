@@ -1,5 +1,6 @@
 #include "MCTS.hpp"
 #include "GameUtils.hpp"
+#include "PenteGame.hpp"
 #include "Profiler.hpp"
 #include <algorithm>
 #include <cassert>
@@ -51,8 +52,8 @@ double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits, floa
 // ============================================================================
 
 MCTS::MCTS(const Config &config)
-    : config_(config), arena_(config.arenaSize), root_(nullptr), rng_(std::random_device{}()), totalSimulations_(0),
-      totalSearchTime_(0.0) {}
+    : config_(config), arena_(config.arenaSize), root_(nullptr),
+      rng_(config.seed ? config.seed : std::random_device{}()), totalSimulations_(0), totalSearchTime_(0.0) {}
 
 MCTS::~MCTS() {
     // Arena destructor handles all memory - no need to traverse tree
@@ -114,8 +115,10 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
     }
     root_->player = game.getCurrentPlayer();
 
-    // Local copy of game for simulations
-    PenteGame localGame;
+    // Local copy of game for simulations - inherit seed from MCTS config for reproducibility
+    PenteGame::Config localGameConfig = game.getConfig();
+    localGameConfig.seed = config_.seed;
+    PenteGame localGame(localGameConfig);
 
     // Run MCTS iterations
     for (int i = 0; i < config_.maxIterations; i++) {
@@ -227,6 +230,15 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
     while (!node->isTerminal() && node->evaluated) {
         int best = selectBestMoveIndex(node, game);
         PenteGame::Move move = node->moves[best];
+
+        // assert node->moves size is > 0
+        assert(node->moves != nullptr);
+
+
+        // FAILING HERE, exception! assert move is >= 0 and < board size
+        assert(move.x >= 0 && move.x < PenteGame::BOARD_SIZE);
+        assert(move.y >= 0 && move.y < PenteGame::BOARD_SIZE);
+
         game.makeMove(move.x, move.y);
 
         Node *child = node->children[best];
@@ -288,13 +300,22 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
 
         // Arena-allocate moves and priors arrays, then populate from policy
         node->moves = arena_.allocate<PenteGame::Move>(childCapacity);
+        assert(node->moves != nullptr);
         node->priors = arena_.allocate<float>(childCapacity);
         // Mark all priors as unset (-1.0f sentinel). Policy loop overwrites the ones we have data for.
         std::fill(node->priors, node->priors + childCapacity, -1.0f);
         // We allocate the full size, even if the policy returns empty. In selection we can do a lazy policy calc.
         int policyCount = static_cast<int>(policy.size());
+
+        // assert(policyCount == childCapacity); 
+
         for (int i = 0; i < policyCount; i++) {
             node->moves[i] = policy[i].first;
+
+            // assert moves are legal, between 0 and board size
+            assert(node->moves[i].x >= 0 && node->moves[i].x < PenteGame::BOARD_SIZE);
+            assert(node->moves[i].y >= 0 && node->moves[i].y < PenteGame::BOARD_SIZE);
+
             node->priors[i] = policy[i].second;
         }
 
@@ -393,6 +414,18 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     // Lazy policy load: -1.0f sentinel means priors weren't populated during expand
     if (node->priors[0] < 0.0f) {
         std::vector<std::pair<PenteGame::Move, float>> movePriors = config_.evaluator->evaluatePolicy(game);
+
+        int priorsSize = static_cast<int>(movePriors.size());
+        int childCapSize = static_cast<int>(node->childCapacity);
+        if (priorsSize != childCapSize) {
+            std::cerr << "FATAL ERROR: Policy size does not match node's child capacity during lazy policy load.\n";
+            std::cerr << "Policy size: " << priorsSize << ", Child capacity: " << childCapSize << "\n";
+            // game util print
+            GameUtils::printGameState(game);
+            // exit(1);
+        }
+        assert(priorsSize == childCapSize); 
+
         for (int i = 0; i < node->childCapacity; i++) {
             node->moves[i] = movePriors[i].first;
             node->priors[i] = movePriors[i].second;
@@ -613,66 +646,68 @@ void MCTS::printBestMoves(int topN) const {
         return;
     }
 
-    // Collect non-null children pointers into a vector for sorting
-    std::vector<Node *> children;
-    children.reserve(root_->childCapacity);
+    struct MoveInfo {
+        std::string moveStr;
+        int visits;
+        int wins;
+        int moveEval;
+        float prior;
+        double avgVal;
+        double ucb1;
+        double puct;
+        SolvedStatus solvedStatus;
+    };
+
+    std::vector<MoveInfo> moves;
+    moves.reserve(root_->childCapacity);
+
+    double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
+
     for (int i = 0; i < root_->childCapacity; i++) {
-        if (root_->children[i]) {
-            children.push_back(root_->children[i]);
-        }
+        Node *child = root_->children[i];
+        if (!child)
+            continue;
+
+        MoveInfo info;
+        info.moveStr = GameUtils::displayMove(root_->moves[i].x, root_->moves[i].y);
+        info.visits = child->visits;
+        info.wins = child->wins;
+        info.moveEval = static_cast<int>(this->game.evaluateMove(root_->moves[i]));
+        info.prior = root_->priors[i];
+        info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
+        info.ucb1 = child->getUCB1Value(explorationFactor);
+        info.puct = child->getPUCTValue(config_.explorationConstant, root_->visits, root_->priors[i]);
+        info.solvedStatus = child->solvedStatus;
+        moves.push_back(info);
     }
 
-    std::sort(children.begin(), children.end(), [](Node *a, Node *b) {
-        if (a->solvedStatus == SolvedStatus::SOLVED_WIN && b->solvedStatus != SolvedStatus::SOLVED_WIN) {
+    std::sort(moves.begin(), moves.end(), [](const MoveInfo &a, const MoveInfo &b) {
+        if (a.solvedStatus == SolvedStatus::SOLVED_WIN && b.solvedStatus != SolvedStatus::SOLVED_WIN)
             return true;
-        }
-        if (a->solvedStatus != SolvedStatus::SOLVED_WIN && b->solvedStatus == SolvedStatus::SOLVED_WIN) {
+        if (a.solvedStatus != SolvedStatus::SOLVED_WIN && b.solvedStatus == SolvedStatus::SOLVED_WIN)
             return false;
-        }
-
-        return a->visits > b->visits;
+        return a.visits > b.visits;
     });
 
-    int movesConsidered = static_cast<int>(children.size());
-    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves of " << movesConsidered
+    int movesConsidered = static_cast<int>(moves.size());
+    std::cout << "\n=== Top " << std::min(topN, movesConsidered) << " Moves of " << movesConsidered
               << " Considered ===\n";
     std::cout << std::setw(6) << "Move" << std::setw(10) << "Visits" << std::setw(10) << "Wins" << std::setw(10)
               << "MoveEval" << std::setw(10) << "Prior" << std::setw(10) << "Avg Val" << std::setw(10) << "UCB1"
               << std::setw(10) << "PUCT" << std::setw(10) << "Status\n";
     std::cout << std::string(86, '-') << "\n";
 
-    for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
-        Node *child = children[i];
-        double avgScore = child->visits > 0 ? child->totalValue / child->visits : 0.0;
+    for (int i = 0; i < std::min(topN, movesConsidered); i++) {
+        const auto &m = moves[i];
+        const char *status = m.solvedStatus == SolvedStatus::SOLVED_WIN    ? "WIN"
+                             : m.solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS"
+                                                                           : "-";
 
-        double explorationFactor =
-            config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
-        double ucb1 = child->getUCB1Value(explorationFactor);
-        double puct = child->getPUCTValue(config_.explorationConstant, root_->visits, root_->priors[i]);
-
-        double moveEval = this->game.evaluateMove(child->move);
-
-        // if moveEval = 1, skip and inc i so it doesnt count towards topN
-        // if (moveEval == 1.0) {
-        //     continue;
-        // }
-
-        std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
-
-        std::string status;
-        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
-            status = "WIN";
-        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-            status = "LOSS";
-        } else {
-            status = "-";
-        }
-
-        std::cout << std::setw(6) << moveStr << std::setw(10) << child->visits << std::setw(10) << child->wins
-                  << std::setw(10) << static_cast<int>(moveEval) << std::setw(10) << std::fixed << std::setprecision(3)
-                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << avgScore
-                  << std::setw(10) << std::fixed << std::setprecision(3) << ucb1 << std::setw(10) << std::fixed
-                  << std::setprecision(3) << puct << std::setw(10) << status << "\n";
+        std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << m.wins
+                  << std::setw(10) << m.moveEval << std::setw(10) << std::fixed << std::setprecision(3) << m.prior
+                  << std::setw(10) << std::fixed << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed
+                  << std::setprecision(3) << m.ucb1 << std::setw(10) << std::fixed << std::setprecision(3) << m.puct
+                  << std::setw(10) << status << "\n";
     }
 
     std::cout << std::string(74, '=') << "\n\n";
@@ -699,51 +734,61 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         return;
     }
 
-    std::vector<Node *> children;
-    children.reserve(node->childCapacity);
+    struct MoveInfo {
+        std::string moveStr;
+        int visits;
+        double avgVal;
+        float prior;
+        double ucb1;
+        double puct;
+        SolvedStatus solvedStatus;
+    };
+
+    std::vector<MoveInfo> moves;
+    moves.reserve(node->childCapacity);
+
+    double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
+
     for (int i = 0; i < node->childCapacity; i++) {
-        if (node->children[i]) {
-            children.push_back(node->children[i]);
-        }
+        Node *child = node->children[i];
+        if (!child)
+            continue;
+
+        MoveInfo info;
+        info.moveStr = GameUtils::displayMove(node->moves[i].x, node->moves[i].y);
+        info.visits = child->visits;
+        info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
+        info.prior = node->priors[i];
+        info.ucb1 = child->getUCB1Value(explorationFactor);
+        info.puct = child->getPUCTValue(config_.explorationConstant, node->visits, node->priors[i]);
+        info.solvedStatus = child->solvedStatus;
+        moves.push_back(info);
     }
 
-    std::sort(children.begin(), children.end(), [](Node *a, Node *b) {
-        if (a->solvedStatus == SolvedStatus::SOLVED_WIN && b->solvedStatus != SolvedStatus::SOLVED_WIN) {
+    std::sort(moves.begin(), moves.end(), [](const MoveInfo &a, const MoveInfo &b) {
+        if (a.solvedStatus == SolvedStatus::SOLVED_WIN && b.solvedStatus != SolvedStatus::SOLVED_WIN)
             return true;
-        }
-        if (a->solvedStatus != SolvedStatus::SOLVED_WIN && b->solvedStatus == SolvedStatus::SOLVED_WIN) {
+        if (a.solvedStatus != SolvedStatus::SOLVED_WIN && b.solvedStatus == SolvedStatus::SOLVED_WIN)
             return false;
-        }
-        return a->visits > b->visits;
+        return a.visits > b.visits;
     });
 
-    std::cout << "\n=== Top " << std::min(topN, (int)children.size()) << " Moves ===\n";
+    int movesConsidered = static_cast<int>(moves.size());
+    std::cout << "\n=== Top " << std::min(topN, movesConsidered) << " Moves ===\n";
     std::cout << std::setw(6) << "Move" << std::setw(10) << "Visits" << std::setw(10) << "Avg Val" << std::setw(10)
               << "Prior" << std::setw(10) << "UCB1" << std::setw(10) << "PUCT" << std::setw(10) << "Status\n";
     std::cout << std::string(66, '-') << "\n";
 
-    for (int i = 0; i < std::min(topN, (int)children.size()); i++) {
-        Node *child = children[i];
-        double avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
-        double ucb1 = child->getUCB1Value(explorationFactor);
-        double puct = child->getPUCTValue(config_.explorationConstant, node->visits, node->priors[i]);
+    for (int i = 0; i < std::min(topN, movesConsidered); i++) {
+        const auto &m = moves[i];
+        const char *status = m.solvedStatus == SolvedStatus::SOLVED_WIN    ? "WIN"
+                             : m.solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS"
+                                                                           : "-";
 
-        std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
-
-        std::string status;
-        if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
-            status = "WIN";
-        } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-            status = "LOSS";
-        } else {
-            status = "-";
-        }
-
-        std::cout << std::setw(6) << moveStr << std::setw(10) << child->visits << std::setw(10) << std::fixed
-                  << std::setprecision(3) << avgValue << std::setw(10) << std::fixed << std::setprecision(3)
-                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << ucb1 << std::setw(10)
-                  << std::fixed << std::setprecision(3) << puct << std::setw(10) << status << "\n";
+        std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << std::fixed
+                  << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed << std::setprecision(3) << m.prior
+                  << std::setw(10) << std::fixed << std::setprecision(3) << m.ucb1 << std::setw(10) << std::fixed
+                  << std::setprecision(3) << m.puct << std::setw(10) << status << "\n";
     }
 
     std::cout << "===================\n\n";

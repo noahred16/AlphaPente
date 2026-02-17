@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <random>
 #include <stack>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ class PenteGame {
         bool capturesEnabled = true; // Gomoku: false
         bool tournamentRule = true;  // 3rd move restriction
         int dilationDistance = 1;    // Legal move dilation radius (1 or 2)
+        uint32_t seed = 0;          // 0 = non-deterministic, non-zero = deterministic
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
@@ -60,6 +62,7 @@ class PenteGame {
 
     Move lastMove;
     uint64_t hash_;
+    mutable std::mt19937 rng_;
 
     // Helper functions
     bool checkFiveInRow(int x, int y) const;
