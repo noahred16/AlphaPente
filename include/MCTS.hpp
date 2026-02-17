@@ -142,7 +142,6 @@ class MCTS {
         float value = 0.0f;
 
         // Pointers (24 bytes)
-        Node *parent = nullptr;
         Node **children = nullptr; // Arena-allocated array of child pointers
         bool expanded = false;
         bool evaluated = false;
@@ -217,7 +216,9 @@ class MCTS {
     Config config_;
     MCTSArena arena_;
     std::unordered_map<uint64_t, Node *> nodeTranspositionTable;
+    std::vector<Node *> searchPath;
     Node *root_ = nullptr; // Raw pointer into arena
+    std::vector<Node *> reusePath; // For subtree reuse during search
     mutable std::mt19937 rng_;
 
     // Statistics

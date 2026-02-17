@@ -2,11 +2,11 @@
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <cassert>
 
 // ============================================================================
 // Node Implementation
@@ -25,7 +25,7 @@ double MCTS::Node::getUCB1Value(double explorationFactor) const {
         return std::numeric_limits<double>::infinity();
     }
 
-    double exploitation = this->totalValue / this->visits;
+    double exploitation = this->totalValue / (this->visits);
     double exploration = explorationFactor / std::sqrt(static_cast<double>(this->visits));
 
     return exploitation + exploration;
@@ -102,6 +102,8 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
     this->game = game;
     auto startTime = std::chrono::high_resolution_clock::now();
 
+    searchPath.reserve(400); // 19x19=361 max moves in a game + a few for caps. 400 to be safe
+
     // Reset statistics and arena
     // reset();
     // clearTree();
@@ -117,6 +119,8 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
 
     // Run MCTS iterations
     for (int i = 0; i < config_.maxIterations; i++) {
+        searchPath.clear();
+        searchPath.push_back(root_);
 
         if (root_->solvedStatus != SolvedStatus::UNSOLVED) {
             std::cout << "Root node solved status: "
@@ -229,7 +233,7 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 
         // if child is null, we need to create it (lazy expansion). Otherwise we continue down the tree.
         if (!child) {
-            // Check transposition table 
+            // Check transposition table
             uint64_t hash = game.getHash();
             auto it = nodeTranspositionTable.find(hash);
             bool foundInTable = (it != nodeTranspositionTable.end());
@@ -248,8 +252,10 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
             node->childCount++;
         }
 
-        child->parent = node; // TODO TEMP Ensure parent pointer is set (in case we found an existing node)
+        assert(child != nullptr);
+
         node = child;
+        searchPath.push_back(node);
     }
     return node;
 }
@@ -315,36 +321,53 @@ double MCTS::simulate(Node *node, PenteGame &game) {
 
 void MCTS::backpropagate(Node *node, double result) {
     PROFILE_SCOPE("MCTS::backpropagate");
-    Node *current = node;
     double currentResult = result;
 
-    while (current != nullptr) {
+    // assert currnet node is on top of the "stack" search path
+    assert(!searchPath.empty());
+
+    Node *current = searchPath.back();
+    searchPath.pop_back();
+
+    assert(current == node);
+
+    Node *parent;
+    // parent pointer no longer available
+    // while (!searchPath.empty()) {
+
+    // while current != root
+    while (true) {
+
         // Backpropagate stats
         current->visits++;
         current->totalValue += currentResult;
         current->wins += (currentResult > 0) ? 1 : 0;
 
-        // --- SOLVER LOGIC (Minimax Propagation) ---
-        if (current->solvedStatus == SolvedStatus::SOLVED_WIN && current->parent) {
-            current->parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
+        if (!searchPath.empty()) {
+            parent = searchPath.back();
+            searchPath.pop_back();
+        } else {
+            break;
         }
 
-        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS && current->parent) {
-            current->parent->unprovenCount--;
+        // --- SOLVER LOGIC (Minimax Propagation) ---
+        if (current->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
+        }
 
-            if (current->parent->unprovenCount < 0) {
-                std::cerr << "FATAL ERROR: unprovenCount dropped below 0!" << std::endl;
-                exit(1);
-            }
+        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            parent->unprovenCount--;
 
-            if (current->parent->unprovenCount == 0) {
-                current->parent->solvedStatus = SolvedStatus::SOLVED_WIN;
+            assert(parent->unprovenCount >= 0);
+
+            if (parent->unprovenCount == 0) {
+                parent->solvedStatus = SolvedStatus::SOLVED_WIN;
             }
         }
 
         // Flip result for parent (opponent's perspective)
         currentResult = currentResult * -1.0;
-        current = current->parent;
+        current = parent;
     }
 }
 
@@ -398,15 +421,15 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         }
     }
 
-    // if -1 still then all are proven losses, 
-    // this could happen if there is symmetry 
+    // if -1 still then all are proven losses,
+    // this could happen if there is symmetry
     // and that one node represents more than 1 move but still only decrements the unproven count by 1
     if (bestIndex == -1) {
         assert(node->unprovenCount >= 1);
         assert(node->childCount == node->childCapacity);
         assert(node->children[0] != nullptr);
-        node->unprovenCount = 1; // last node to get sent through. 
-        // slightly redundant since we already know this node is a proven loss...    
+        node->unprovenCount = 1; // last node to get sent through.
+        // slightly redundant since we already know this node is a proven loss...
         return 0;
     }
 
@@ -431,6 +454,8 @@ void MCTS::clearTree() {
     // O(1) tree destruction - just reset the arena offset
     arena_.reset();
     root_ = nullptr;
+    reusePath.clear();
+    nodeTranspositionTable.clear();
 }
 
 MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
@@ -454,7 +479,6 @@ MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
     dest->visits = source->visits;
     dest->wins = source->wins;
     dest->totalValue = source->totalValue;
-    dest->parent = nullptr; // Will be set by parent during recursion
     dest->children = nullptr;
     dest->moves = nullptr;
     dest->priors = nullptr;
@@ -475,9 +499,6 @@ MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
         std::memcpy(dest->priors, source->priors, sizeof(float) * source->childCapacity);
         for (int i = 0; i < source->childCapacity; i++) {
             dest->children[i] = copySubtree(source->children[i], destArena);
-            if (dest->children[i]) {
-                dest->children[i]->parent = dest;
-            }
         }
     }
 
@@ -505,15 +526,16 @@ void MCTS::reuseSubtree(const PenteGame::Move &move) {
         return;
     }
 
-    // Just move root down - parent pointer is preserved for undo
+    reusePath.push_back(root_);
     root_ = matchingChild;
 }
 
 bool MCTS::undoSubtree() {
-    if (!root_ || !root_->parent) {
+    if (reusePath.empty()) {
         return false;
     }
-    root_ = root_->parent;
+    root_ = reusePath.back();
+    reusePath.pop_back();
     return true;
 }
 
@@ -648,9 +670,9 @@ void MCTS::printBestMoves(int topN) const {
 
         std::cout << std::setw(6) << moveStr << std::setw(10) << child->visits << std::setw(10) << child->wins
                   << std::setw(10) << static_cast<int>(moveEval) << std::setw(10) << std::fixed << std::setprecision(3)
-                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << avgScore << std::setw(10)
-                  << std::fixed << std::setprecision(3) << ucb1 << std::setw(10) << std::fixed << std::setprecision(3)
-                  << puct << std::setw(10) << status << "\n";
+                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << avgScore
+                  << std::setw(10) << std::fixed << std::setprecision(3) << ucb1 << std::setw(10) << std::fixed
+                  << std::setprecision(3) << puct << std::setw(10) << status << "\n";
     }
 
     std::cout << std::string(74, '=') << "\n\n";
