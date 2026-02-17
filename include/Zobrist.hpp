@@ -12,7 +12,6 @@ class Zobrist {
 
     uint64_t stoneKeys[2][BOARD_CELLS];    // [playerIdx][y*19+x]
     uint64_t captureKeys[2][MAX_CAPTURES]; // [playerIdx][captureCount]
-    uint64_t sideToMoveKey;
 
     static const Zobrist &instance() {
         static const Zobrist z;
@@ -22,19 +21,21 @@ class Zobrist {
     // playerIndex: BLACK=1 -> 0, WHITE=2 -> 1
     static int playerIndex(int p) { return p - 1; }
 
-    uint64_t computeFullHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap, int whiteCap,
-                             int currentPlayer) const;
+    uint64_t computeFullHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap, int whiteCap) const;
 
   private:
     Zobrist() {
         std::mt19937_64 rng(0xDEADBEEFCAFEBABEULL);
-        for (int p = 0; p < 2; ++p)
-            for (int i = 0; i < BOARD_CELLS; ++i)
+        for (int p = 0; p < 2; ++p) {
+            for (int i = 0; i < BOARD_CELLS; ++i) {
                 stoneKeys[p][i] = rng();
-        for (int p = 0; p < 2; ++p)
-            for (int i = 0; i < MAX_CAPTURES; ++i)
+            }
+        }
+        for (int p = 0; p < 2; ++p) {
+            for (int i = 0; i < MAX_CAPTURES; ++i) {
                 captureKeys[p][i] = rng();
-        sideToMoveKey = rng();
+            }
+        }
     }
 };
 

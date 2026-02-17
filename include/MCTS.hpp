@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <unordered_map>
+#include <unordered_set>
 
 // ============================================================================
 // Arena Allocator for O(1) Tree Destruction
@@ -211,12 +213,13 @@ class MCTS {
     // Print helpers
     Node *findChildNode(Node *parent, int x, int y) const;
     void printMovesFromNode(Node *node, int topN) const;
-    int countNodes(Node *node) const;
+    int countNodes(Node *node, std::unordered_set<Node *> &visited) const;
 
     // Member variables
     PenteGame game;
     Config config_;
     MCTSArena arena_;
+    std::unordered_map<uint64_t, Node *> nodeTranspositionTable;
     Node *root_ = nullptr; // Raw pointer into arena
     mutable std::mt19937 rng_;
 

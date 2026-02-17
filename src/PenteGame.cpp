@@ -38,7 +38,7 @@ void PenteGame::reset() {
     whiteCaptures = 0;
     moveCount = 0;
     lastMove = Move();
-    hash_ = Zobrist::instance().computeFullHash(blackStones, whiteStones, blackCaptures, whiteCaptures, currentPlayer);
+    hash_ = Zobrist::instance().computeFullHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
 }
 
 bool PenteGame::makeMove(const char *move) {
@@ -84,7 +84,6 @@ bool PenteGame::makeMove(int x, int y) {
     lastMove = Move(x, y);
     moveCount++;
     currentPlayer = (currentPlayer == BLACK) ? WHITE : BLACK;
-    hash_ ^= zob.sideToMoveKey;
 
     return true;
 }

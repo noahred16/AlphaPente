@@ -1,7 +1,7 @@
 #include "Zobrist.hpp"
 
-uint64_t Zobrist::computeFullHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap, int whiteCap,
-                                  int currentPlayer) const {
+uint64_t Zobrist::computeFullHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap,
+                                  int whiteCap) const {
     uint64_t h = 0;
 
     // XOR in black stones
@@ -19,11 +19,6 @@ uint64_t Zobrist::computeFullHash(const BitBoard &blackStones, const BitBoard &w
     // XOR in capture counts
     h ^= captureKeys[0][blackCap];
     h ^= captureKeys[1][whiteCap];
-
-    // XOR in side to move (convention: XOR when it's WHITE's turn)
-    if (currentPlayer == 2) { // WHITE
-        h ^= sideToMoveKey;
-    }
 
     return h;
 }

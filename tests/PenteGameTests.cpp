@@ -482,13 +482,14 @@ TEST_CASE("Zobrist hash with captures") {
     // Verify incremental hash matches full recomputation
     PenteGame verify;
     verify.reset();
-    // Replay the exact same moves on a fresh game
+    // Replay the exact same moves on a fresh game but different order
     verify.makeMove("K10");
-    verify.makeMove("L10");
-    verify.makeMove("J10");
     verify.makeMove("M10");
+    verify.makeMove("J10");
+    verify.makeMove("L10");
     verify.makeMove("N10");
     CHECK(verify.getHash() == afterCapture);
+    CHECK(verify.getHash() == 8242170693882605125);
 }
 
 TEST_CASE("Zobrist hash resets to consistent initial value") {
@@ -556,7 +557,6 @@ TEST_CASE("Zobrist singleton returns consistent keys") {
     const auto& z2 = Zobrist::instance();
     CHECK(&z1 == &z2);
     CHECK(z1.stoneKeys[0][0] == z2.stoneKeys[0][0]);
-    CHECK(z1.sideToMoveKey == z2.sideToMoveKey);
 }
 
 TEST_CASE("Zobrist keys are non-zero and unique") {
@@ -576,7 +576,6 @@ TEST_CASE("Zobrist keys are non-zero and unique") {
 
     // Adjacent cells should have different keys
     CHECK(z.stoneKeys[0][0] != z.stoneKeys[0][1]);
-    CHECK(z.sideToMoveKey != 0);
 }
 
 TEST_CASE("Zobrist incremental matches full recomputation after many moves") {
@@ -608,7 +607,6 @@ TEST_CASE("Zobrist incremental matches full recomputation after many moves") {
 TEST_CASE("Zobrist side-to-move sensitivity") {
     // Two games where the board looks the same but it's a different player's turn
     // can't happen naturally in Pente (alternating), but we can verify the
-    // sideToMoveKey is being toggled by checking that after an odd number of
     // moves the hash differs from a position reached via an even number of moves
     PenteGame g1, g2;
     g1.reset();
@@ -623,10 +621,6 @@ TEST_CASE("Zobrist side-to-move sensitivity") {
 
     // Different boards AND different side to move — hashes must differ
     CHECK(g1.getHash() != g2.getHash());
-
-    // The sideToMoveKey should be part of the hash
-    const auto& z = Zobrist::instance();
-    CHECK(z.sideToMoveKey != 0);
 }
 
 TEST_CASE("Zobrist hash with Keryo 3-stone captures") {
@@ -859,4 +853,37 @@ TEST_CASE("TranspositionTable clear resets generation") {
     const auto* e = tt.probe(0x66);
     REQUIRE(e != nullptr);
     CHECK(e->value == doctest::Approx(0.8f));
+}
+
+// ============================================================================
+// Canonical Hashing Tests
+// ============================================================================
+
+// K10 +
+// [J8, J12, L8, L12, H9, H11, M9, M11]
+// all of these should be symmetric and yield the same canonical hash
+TEST_CASE("Canonical hash symmetry") {
+
+    // string first move
+    char firstMove[] = "K10";
+
+    // array of symmetric second moves around K10
+    const char* symmetricMoves[] = {
+        "J8", "J12", "L8", "L12", "H9", "H11", "M9", "M11"
+    };
+
+    // Compute canonical hash for each symmetric move
+    uint64_t canonicalHash = 0;
+    for (const char* move : symmetricMoves) {
+        PenteGame game;
+        game.reset();
+        game.makeMove(firstMove);  // K10
+        game.makeMove(move);       // Symmetric move
+        uint64_t h = game.getCanonicalHash();
+        if (canonicalHash == 0) {
+            canonicalHash = h;  // Set the first hash as the reference
+        } else {
+            CHECK(h == canonicalHash);  // All symmetric moves should yield the same hash
+        }
+    }
 }

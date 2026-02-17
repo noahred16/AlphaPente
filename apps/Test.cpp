@@ -4,10 +4,6 @@
 #include "PenteGame.hpp"
 #include <iostream>
 
-void moveTwoAnalysis(PenteGame &game);
-void setupSimpleOpenThreeThreat(PenteGame &game);
-void setupOneSidedFourThreat(PenteGame &game);
-
 int main(int argc, char *argv[]) {
     std::cout << "Testing AlphaPente..." << std::endl;
 
@@ -15,14 +11,18 @@ int main(int argc, char *argv[]) {
     PenteGame game;
     game.reset();
 
-    // moveTwoAnalysis(game);
-    // char expectedMove[] = "K10";
+    // K10 L9 F10 J9 H10 J10 J8 J11 G10 H9 E10 D10 K9 K11 G9 H9 G8 F8 G9 G7 G11 G12 E9 E11 H6 H8 G9 G7 F10 E8 E9 D8 J13
+    // H12 G13 H12 J12
 
-    // setupSimpleOpenThreeThreat(game);
-    // char expectedMove[] = "N10";
-
-    setupOneSidedFourThreat(game);
-    char expectedMove[] = "L7";
+    // const char *moves[] = {"K10", "L9", "F10", "J9", "H10", "J10", "J8",  "J11", "G10", "H9",  "E10", "D10", "K9",
+    //                        "K11", "G9", "H9",  "G8", "F8",  "G9",  "G7",  "G11", "G12", "E9",  "E11", "H6",  "H8",
+    //                        "G9",  "G7", "F10", "E8", "E9",  "D8",  "J13", "H12", "G13", "H12", "J12"};
+    const char *moves[] = {"K10", "L9", "F10", "J9", "H10", "J10", "J8",  "J11", "G10", "H9",  "E10", "D10", "K9",
+                           "K11", "G9", "H9",  "G8", "F8",  "G9",  "G7",  "G11", "G12", "E9",  "E11", "H6",  "H8",
+                           "G9",  "G7", "F10", "E8", "E9",  "D8",  "J13", "H12", "G13"};
+    for (const char *move : moves) {
+        game.makeMove(move);
+    }
 
     // print
     GameUtils::printGameState(game);
@@ -32,45 +32,30 @@ int main(int argc, char *argv[]) {
     // std::cout << "Current player: " << (currentPlayer == PenteGame::BLACK ? "Black" : "White") << std::endl;
 
     MCTS::Config config;
-    config.maxIterations = 10000;
-    config.explorationConstant = 1.414;
+    config.maxIterations = 100000;
+    // config.maxIterations = 10000;
+    // config.explorationConstant = 1.414;
+    config.explorationConstant = 1.7;
+    config.searchMode = MCTS::SearchMode::PUCT;
+    HeuristicEvaluator heuristicEvaluator;
+    config.evaluator = &heuristicEvaluator;
 
+    std::cout << "TEST: Running MCTS search..." << std::endl;
     MCTS mcts(config);
     mcts.search(game);
     mcts.printStats();
     mcts.printBestMoves(10);
-    mcts.printBranch(expectedMove, 10);
+    // mcts.printBranch("K10", 10);
+
+    // round n - do 10 loops
+
+    for (int i = 0; i < 10; i++) {
+        std::cout << "\n=== Round " << (i + 1) << " ===\n";
+        mcts.setConfig(config);
+        mcts.search(game);
+        mcts.printStats();
+        mcts.printBestMoves(10);
+    }
 
     return 0;
-}
-
-void moveTwoAnalysis(PenteGame &game) {
-    game.makeMove("K10"); // Black
-    game.makeMove("L11"); // White
-}
-
-void setupSimpleOpenThreeThreat(PenteGame &game) {
-    // white one-sided four threat test
-    game.makeMove("K10"); // Black
-    game.makeMove("C17"); // White
-    game.makeMove("L10"); // Black
-    game.makeMove("E5");  // White
-    game.makeMove("M10"); // Black
-    game.makeMove("E15"); // White
-
-    // needs to cover either I10 or M10 to block black win
-}
-
-void setupOneSidedFourThreat(PenteGame &game) {
-    // white one-sided four threat test
-    game.makeMove("K10"); // Black
-    game.makeMove("K11"); // White
-    game.makeMove("K9");  // Black
-    game.makeMove("E5");  // White
-    game.makeMove("K8");  // Black
-    game.makeMove("E15"); // White
-
-    game.makeMove("K7");  // Black
-    game.makeMove("P15"); // White if white doesnt cover black wins
-    // L7 is winning move for black
 }

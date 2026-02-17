@@ -64,7 +64,7 @@ class BitBoard {
     BitBoard shiftFixed(int count) const;
     void orShifted(int count, const BitBoard &source);
 
-    // Extract all set positions
+    // Extract all set positions for legal moves
     template <typename T = std::pair<int, int>> std::vector<T> getSetPositions() const;
 };
 

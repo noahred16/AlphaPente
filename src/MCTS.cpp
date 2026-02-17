@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <cassert>
 
 // ============================================================================
 // Node Implementation
@@ -63,6 +64,8 @@ MCTS::~MCTS() {
 
 MCTS::Node *MCTS::allocateNode() {
     Node *node = arena_.allocate<Node>();
+    assert(reinterpret_cast<std::uintptr_t>(node) % alignof(Node) == 0);
+
     if (!node) {
         std::cerr << "FATAL: Arena out of memory! Used: " << arena_.bytesUsed() << " / " << arena_.totalSize()
                   << " bytes\n";
@@ -143,6 +146,7 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
                 node->unprovenCount = 0;
                 backpropagate(node, -1.0);
             }
+            totalSimulations_++;
             continue;
         }
         node = expand(node, localGame);
@@ -219,23 +223,51 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
     while (!node->isTerminal() && node->evaluated) {
         int best = selectBestMoveIndex(node, game);
         PenteGame::Move move = node->moves[best];
+        game.makeMove(move.x, move.y);
+
         Node *child = node->children[best];
 
-        // lazy expansion
         if (!child) {
+            uint64_t hash = game.getHash();
+            auto it = nodeTranspositionTable.find(hash);
+            if (it != nodeTranspositionTable.end()) {
+                child = it->second;
+                child->parent = node;              // Update parent pointer in case we found an existing node
+                child->prior = node->priors[best]; // Update prior in case it wasn't set before
+
+                // is this redundant? we could track a childIndex and only use 1 hash lookup per selection step, but
+                // this is simpler and the hash lookup should be O(1) anyway. node->children[best] = child; // Link
+                // child to parent if it wasn't already node->childCount++;           // Increment child count if this
+                // is a new child for the parent
+                // hmm may want to track 
+
+                if (!node->children[best]) { // redundant? since already checked in if
+                    node->children[best] = child;
+                    node->childCount++;
+                }
+
+
+                node = child;
+                continue;
+            }
+
+            // lazy expansion
             // only expand the selected child
             child = allocateNode();
+            assert(child && "allocateNode returned null");
             child->move = move;
             child->player = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
             child->parent = node;
             child->prior = node->priors[best];
 
+            nodeTranspositionTable[hash] = child;
+
             node->children[best] = child;
             node->childCount++;
         }
 
+        child->parent = node; // TODO TEMP Ensure parent pointer is set (in case we found an existing node)
         node = child;
-        game.makeMove(move.x, move.y);
     }
     return node;
 }
@@ -243,10 +275,17 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
     PROFILE_SCOPE("MCTS::expand");
 
+    if (node->solvedStatus != SolvedStatus::UNSOLVED) {
+        return node;
+    }
+
     if (node->evaluated) {
         std::cout << "This should never happen: expanding a node that has already been evaluated.\n";
         std::cerr << "Error: Attempting to expand a node that has already been evaluated. This indicates a logic error "
                      "in the MCTS implementation.\n";
+        // game util print
+        std::cerr << "Solved Status of node: " << static_cast<int>(node->solvedStatus) << "\n";
+        GameUtils::printGameState(game);
         exit(1);
     }
 
@@ -380,6 +419,17 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         }
     }
 
+    // if -1 still then all are proven losses, 
+    // this could happen if there is symmetry 
+    // and that one node represents more than 1 move but still only decrements the unproven count by 1
+    if (bestIndex == -1) {
+        assert(node->unprovenCount >= 1);
+        assert(node->childCount == node->moveCount);
+        assert(node->children[0] != nullptr);
+        node->unprovenCount = 1; // last node to get sent through.    
+        return 0;
+    }
+
     return bestIndex;
 }
 
@@ -501,26 +551,33 @@ void MCTS::pruneTree(Node *keepNode) {
 
 int MCTS::getTotalVisits() const { return root_ ? root_->visits : 0; }
 
-int MCTS::countNodes(Node *node) const {
-    if (!node)
+int MCTS::countNodes(Node *node, std::unordered_set<Node *> &visited) const {
+    if (!node || !visited.insert(node).second)
         return 0;
 
     int count = 1;
     for (int i = 0; i < node->moveCount; i++) {
         if (node->children[i]) {
-            count += countNodes(node->children[i]);
+            count += countNodes(node->children[i], visited);
         }
     }
     return count;
 }
 
-int MCTS::getTreeSize() const { return countNodes(root_); }
+int MCTS::getTreeSize() const {
+    std::unordered_set<Node *> visited;
+    return countNodes(root_, visited);
+}
 
 void MCTS::printStats() const {
     std::cout << "\n=== MCTS Statistics ===\n";
+    int treeSize = getTreeSize();
+    int totalVisits = getTotalVisits();
+    int transpositionTableSize = nodeTranspositionTable.size();
     std::cout << "Total simulations: " << GameUtils::formatWithCommas(totalSimulations_)
-              << ". Tree size: " << GameUtils::formatWithCommas(getTreeSize())
-              << ". Root visits: " << GameUtils::formatWithCommas(getTotalVisits()) << "\n";
+              << ". Tree size: " << GameUtils::formatWithCommas(treeSize)
+              << ". Root visits: " << GameUtils::formatWithCommas(totalVisits)
+              << ". Transposition table size: " << GameUtils::formatWithCommas(transpositionTableSize) << "\n";
 
     std::cout << "Total search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
               << static_cast<int>(totalSearchTime_) % 60 << " sec\n";
