@@ -2,6 +2,7 @@
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -463,7 +464,18 @@ void PenteGame::syncFrom(const PenteGame &other) {
     hash_ = other.hash_;
 }
 
+uint64_t PenteGame::computeHash() const {
+    const auto &zob = Zobrist::instance();
+    return zob.computeFullHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
+}
+
 uint64_t PenteGame::getHash() const { return hash_; }
+
+uint64_t PenteGame::getCanonicalHash() const {
+    const auto &zob = Zobrist::instance();
+    return zob.computeCanonicalHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
+}
+
 
 PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
     if (blackStones.getBit(x, y))

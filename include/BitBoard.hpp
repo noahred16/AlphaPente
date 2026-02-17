@@ -64,6 +64,19 @@ class BitBoard {
     BitBoard shiftFixed(int count) const;
     void orShifted(int count, const BitBoard &source);
 
+    // Iterate over all set bit indices without allocation
+    template <typename F> void forEachSetBit(F &&func) const {
+        for (int seg = 0; seg < NUM_SEGMENTS; ++seg) {
+            uint64_t word = board[seg];
+            while (word) {
+                int bit_pos = __builtin_ctzll(word);
+                int cell = seg * BITS_PER_UINT64 + bit_pos;
+                func(cell);
+                word &= word - 1;
+            }
+        }
+    }
+
     // Extract all set positions for legal moves
     template <typename T = std::pair<int, int>> std::vector<T> getSetPositions() const;
 };

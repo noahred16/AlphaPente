@@ -154,7 +154,9 @@ class PenteGame {
     Move getRandomLegalMove() const; // Zero-copy version for simulations
     PenteGame clone() const;
     void syncFrom(const PenteGame &other);
+    uint64_t computeHash() const;
     uint64_t getHash() const;
+    uint64_t getCanonicalHash() const;
 
     // Debug
     void print() const;

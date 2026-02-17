@@ -473,6 +473,9 @@ TEST_CASE("Zobrist hash with captures") {
     game.makeMove("M10");
 
     uint64_t beforeCapture = game.getHash();
+    uint64_t fullHashBefore = game.computeHash();
+    CHECK(beforeCapture == fullHashBefore);
+
     game.makeMove("N10");  // captures
     uint64_t afterCapture = game.getHash();
 
@@ -885,5 +888,9 @@ TEST_CASE("Canonical hash symmetry") {
         } else {
             CHECK(h == canonicalHash);  // All symmetric moves should yield the same hash
         }
+        
+        // check canonical hash is less than or equal to full hash
+        uint64_t fullHash = game.getHash();
+        CHECK(canonicalHash <= fullHash);
     }
 }

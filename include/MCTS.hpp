@@ -139,9 +139,6 @@ class MCTS {
         // moves and priors share the same size, and are accessed together
         PenteGame::Move *moves;
         float *priors;
-        int moveCount = 0;
-
-        float prior = -1.0f;
         float value = 0.0f;
 
         // Pointers (24 bytes)
@@ -155,7 +152,7 @@ class MCTS {
         bool isFullyExpanded() const { return expanded; }                          // HMM
         bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; } // HMM
         double getUCB1Value(double explorationFactor) const;
-        double getPUCTValue(double explorationFactor, int parentVisits) const;
+        double getPUCTValue(double explorationFactor, int parentVisits, float prior) const;
     };
 
     // Constructor
@@ -224,6 +221,7 @@ class MCTS {
     mutable std::mt19937 rng_;
 
     // Statistics
+    int startSimulations_ = 0;
     int totalSimulations_ = 0;
     double totalSearchTime_ = 0.0;
 };

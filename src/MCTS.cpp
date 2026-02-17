@@ -31,7 +31,7 @@ double MCTS::Node::getUCB1Value(double explorationFactor) const {
     return exploitation + exploration;
 }
 
-double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits) const {
+double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits, float prior) const {
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
     }
@@ -41,7 +41,7 @@ double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits) cons
 
     double exploitation = (this->visits == 0) ? 0.0 : this->totalValue / this->visits;
     double exploration =
-        explorationFactor * this->prior * std::sqrt(static_cast<double>(parentVisits)) / (1.0 + this->visits);
+        explorationFactor * prior * std::sqrt(static_cast<double>(parentVisits)) / (1.0 + this->visits);
 
     return exploitation + exploration;
 }
@@ -98,7 +98,7 @@ void MCTS::initNodeChildren(Node *node, int capacity) {
 // ============================================================================
 
 PenteGame::Move MCTS::search(const PenteGame &game) {
-
+    this->startSimulations_ = totalSimulations_; // For tracking how many sims were done in this search
     this->game = game;
     auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -168,7 +168,7 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
 
 PenteGame::Move MCTS::getBestMove() const {
     PROFILE_SCOPE("MCTS::getBestMove");
-    if (!root_ || root_->moveCount == 0) {
+    if (!root_ || root_->childCapacity == 0) {
         std::cout << "Exiting: Unexpected state in getBestMove(). No children found.\n";
         std::cerr << "Error: No moves available to select as best move.\n";
         GameUtils::printBoard(PenteGame());
@@ -176,7 +176,7 @@ PenteGame::Move MCTS::getBestMove() const {
     }
 
     // First, check if any child is a proven win - always choose that
-    for (int i = 0; i < root_->moveCount; i++) {
+    for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
         if (child && child->solvedStatus == SolvedStatus::SOLVED_WIN) {
             return child->move;
@@ -187,7 +187,7 @@ PenteGame::Move MCTS::getBestMove() const {
     Node *bestChild = nullptr;
     int maxVisits = -1;
 
-    for (int i = 0; i < root_->moveCount; i++) {
+    for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
         if (!child)
             continue;
@@ -199,7 +199,7 @@ PenteGame::Move MCTS::getBestMove() const {
 
     // Fallback: If all are losses, just pick the one with the most visits
     if (!bestChild) {
-        for (int i = 0; i < root_->moveCount; i++) {
+        for (int i = 0; i < root_->childCapacity; i++) {
             Node *child = root_->children[i];
             if (!child)
                 continue;
@@ -227,40 +227,22 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 
         Node *child = node->children[best];
 
+        // if child is null, we need to create it (lazy expansion). Otherwise we continue down the tree.
         if (!child) {
+            // Check transposition table 
             uint64_t hash = game.getHash();
             auto it = nodeTranspositionTable.find(hash);
-            if (it != nodeTranspositionTable.end()) {
+            bool foundInTable = (it != nodeTranspositionTable.end());
+
+            if (!foundInTable) {
+                // lazy expansion
+                child = allocateNode();
+                child->move = move;
+                child->player = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
+                nodeTranspositionTable[hash] = child;
+            } else {
                 child = it->second;
-                child->parent = node;              // Update parent pointer in case we found an existing node
-                child->prior = node->priors[best]; // Update prior in case it wasn't set before
-
-                // is this redundant? we could track a childIndex and only use 1 hash lookup per selection step, but
-                // this is simpler and the hash lookup should be O(1) anyway. node->children[best] = child; // Link
-                // child to parent if it wasn't already node->childCount++;           // Increment child count if this
-                // is a new child for the parent
-                // hmm may want to track 
-
-                if (!node->children[best]) { // redundant? since already checked in if
-                    node->children[best] = child;
-                    node->childCount++;
-                }
-
-
-                node = child;
-                continue;
             }
-
-            // lazy expansion
-            // only expand the selected child
-            child = allocateNode();
-            assert(child && "allocateNode returned null");
-            child->move = move;
-            child->player = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
-            child->parent = node;
-            child->prior = node->priors[best];
-
-            nodeTranspositionTable[hash] = child;
 
             node->children[best] = child;
             node->childCount++;
@@ -292,17 +274,17 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
     // if this is the first node being expanded, we need to allocate all children nodes and set priors
     if (node->childCount == 0) {
 
-        int moveCount = static_cast<int>(game.getLegalMoves().size());
+        int childCapacity = static_cast<int>(game.getLegalMoves().size());
         // policy - vector of pairs of moves and priors, ordered by prior, filtered to legal moves.
         // std::vector<std::pair<Move, float>> policy value - static evaluation of the position
         auto [policy, value] = config_.evaluator->evaluate(game);
-        initNodeChildren(node, moveCount);
+        initNodeChildren(node, childCapacity);
 
         // Arena-allocate moves and priors arrays, then populate from policy
-        node->moves = arena_.allocate<PenteGame::Move>(moveCount);
-        node->priors = arena_.allocate<float>(moveCount);
+        node->moves = arena_.allocate<PenteGame::Move>(childCapacity);
+        node->priors = arena_.allocate<float>(childCapacity);
         // Mark all priors as unset (-1.0f sentinel). Policy loop overwrites the ones we have data for.
-        std::fill(node->priors, node->priors + moveCount, -1.0f);
+        std::fill(node->priors, node->priors + childCapacity, -1.0f);
         // We allocate the full size, even if the policy returns empty. In selection we can do a lazy policy calc.
         int policyCount = static_cast<int>(policy.size());
         for (int i = 0; i < policyCount; i++) {
@@ -310,11 +292,10 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
             node->priors[i] = policy[i].second;
         }
 
-        node->moveCount = moveCount;
         node->value = value;
         node->expanded = true;
         node->evaluated = true;
-        node->unprovenCount = moveCount;
+        node->unprovenCount = childCapacity;
 
     } else {
         // this should never happen right?
@@ -372,7 +353,7 @@ void MCTS::backpropagate(Node *node, double result) {
 // ============================================================================
 
 int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
-    if (!node || node->moveCount == 0) {
+    if (!node || node->childCapacity == 0) {
         std::cerr << "FATAL ERROR: selectBestMoveIndex called with null node or node with no moves.\n";
         exit(1);
     }
@@ -389,23 +370,21 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     // Lazy policy load: -1.0f sentinel means priors weren't populated during expand
     if (node->priors[0] < 0.0f) {
         std::vector<std::pair<PenteGame::Move, float>> movePriors = config_.evaluator->evaluatePolicy(game);
-        int moveCount = static_cast<int>(movePriors.size());
-        for (int i = 0; i < moveCount; i++) {
+        for (int i = 0; i < node->childCapacity; i++) {
             node->moves[i] = movePriors[i].first;
             node->priors[i] = movePriors[i].second;
         }
-        node->moveCount = moveCount;
     }
 
     double explorationFactor = config_.explorationConstant;
     // use moves and priors arrays to compute PUCT values without dereferencing child pointers
-    for (uint16_t i = 0; i < node->moveCount; i++) {
+    for (uint16_t i = 0; i < node->childCapacity; i++) {
         // if the child is null, it means it hasn't been expanded yet. we can still compute its PUCT value using the
         // prior and 0 visits.
         double value;
         if (node->children[i]) {
             Node *child = node->children[i];
-            value = child->getPUCTValue(explorationFactor, node->visits);
+            value = child->getPUCTValue(explorationFactor, node->visits, node->priors[i]);
         } else {
             // unexpanded child - use prior and 0 visits for PUCT calculation
             double exploitation = 0.0; // no visits yet, so exploitation is 0
@@ -424,9 +403,10 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     // and that one node represents more than 1 move but still only decrements the unproven count by 1
     if (bestIndex == -1) {
         assert(node->unprovenCount >= 1);
-        assert(node->childCount == node->moveCount);
+        assert(node->childCount == node->childCapacity);
         assert(node->children[0] != nullptr);
-        node->unprovenCount = 1; // last node to get sent through.    
+        node->unprovenCount = 1; // last node to get sent through. 
+        // slightly redundant since we already know this node is a proven loss...    
         return 0;
     }
 
@@ -470,7 +450,6 @@ MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
     dest->solvedStatus = source->solvedStatus;
     dest->childCount = source->childCount;
     dest->childCapacity = source->childCapacity;
-    dest->moveCount = source->moveCount;
     dest->unprovenCount = source->unprovenCount;
     dest->visits = source->visits;
     dest->wins = source->wins;
@@ -481,21 +460,20 @@ MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
     dest->priors = nullptr;
     dest->expanded = source->expanded;
     dest->evaluated = source->evaluated;
-    dest->prior = source->prior;
     dest->value = source->value;
 
-    // Copy moves/priors arrays and children (all sized by moveCount)
-    if (source->moveCount > 0 && source->children) {
-        dest->children = destArena.allocate<Node *>(source->moveCount);
-        dest->moves = destArena.allocate<PenteGame::Move>(source->moveCount);
-        dest->priors = destArena.allocate<float>(source->moveCount);
+    // Copy moves/priors arrays and children (all sized by childCapacity)
+    if (source->childCapacity > 0 && source->children) {
+        dest->children = destArena.allocate<Node *>(source->childCapacity);
+        dest->moves = destArena.allocate<PenteGame::Move>(source->childCapacity);
+        dest->priors = destArena.allocate<float>(source->childCapacity);
         if (!dest->children || !dest->moves || !dest->priors) {
             std::cerr << "FATAL: Destination arena out of memory for children!\n";
             throw std::bad_alloc();
         }
-        std::memcpy(dest->moves, source->moves, sizeof(PenteGame::Move) * source->moveCount);
-        std::memcpy(dest->priors, source->priors, sizeof(float) * source->moveCount);
-        for (int i = 0; i < source->moveCount; i++) {
+        std::memcpy(dest->moves, source->moves, sizeof(PenteGame::Move) * source->childCapacity);
+        std::memcpy(dest->priors, source->priors, sizeof(float) * source->childCapacity);
+        for (int i = 0; i < source->childCapacity; i++) {
             dest->children[i] = copySubtree(source->children[i], destArena);
             if (dest->children[i]) {
                 dest->children[i]->parent = dest;
@@ -513,7 +491,7 @@ void MCTS::reuseSubtree(const PenteGame::Move &move) {
 
     // Find child matching the move (sparse array - scan all slots)
     Node *matchingChild = nullptr;
-    for (int i = 0; i < root_->moveCount; i++) {
+    for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
         if (child && child->move.x == move.x && child->move.y == move.y) {
             matchingChild = child;
@@ -556,7 +534,7 @@ int MCTS::countNodes(Node *node, std::unordered_set<Node *> &visited) const {
         return 0;
 
     int count = 1;
-    for (int i = 0; i < node->moveCount; i++) {
+    for (int i = 0; i < node->childCapacity; i++) {
         if (node->children[i]) {
             count += countNodes(node->children[i], visited);
         }
@@ -579,10 +557,13 @@ void MCTS::printStats() const {
               << ". Root visits: " << GameUtils::formatWithCommas(totalVisits)
               << ". Transposition table size: " << GameUtils::formatWithCommas(transpositionTableSize) << "\n";
 
-    std::cout << "Total search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
+    std::cout << "Search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
               << static_cast<int>(totalSearchTime_) % 60 << " sec\n";
+
+    // total - startSimulations_ to get sims for just this search
+    int simsThisSearch = totalSimulations_ - startSimulations_;
     std::cout << "Simulations/second: " << std::fixed << std::setprecision(0)
-              << (totalSearchTime_ > 0 ? totalSimulations_ / totalSearchTime_ : 0) << "\n";
+              << (totalSearchTime_ > 0 ? simsThisSearch / totalSearchTime_ : 0) << "\n";
 
     // Arena memory stats
     std::cout << "Arena memory: " << std::fixed << std::setprecision(1) << (arena_.bytesUsed() / (1024.0 * 1024.0))
@@ -598,22 +579,22 @@ void MCTS::printStats() const {
               << " And Root avg value: " << std::fixed << std::setprecision(3)
               << (root_ && root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << "\n";
 
-    if (root_ && root_->moveCount > 0) {
+    if (root_ && root_->childCapacity > 0) {
         std::cout << "Best move: " << GameUtils::displayMove(getBestMove().x, getBestMove().y) << "\n";
     }
     std::cout << "=======================\n\n";
 }
 
 void MCTS::printBestMoves(int topN) const {
-    if (!root_ || root_->moveCount == 0) {
+    if (!root_ || root_->childCapacity == 0) {
         std::cout << "No moves analyzed yet.\n";
         return;
     }
 
     // Collect non-null children pointers into a vector for sorting
     std::vector<Node *> children;
-    children.reserve(root_->moveCount);
-    for (int i = 0; i < root_->moveCount; i++) {
+    children.reserve(root_->childCapacity);
+    for (int i = 0; i < root_->childCapacity; i++) {
         if (root_->children[i]) {
             children.push_back(root_->children[i]);
         }
@@ -645,7 +626,7 @@ void MCTS::printBestMoves(int topN) const {
         double explorationFactor =
             config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
         double ucb1 = child->getUCB1Value(explorationFactor);
-        double puct = child->getPUCTValue(config_.explorationConstant, root_->visits);
+        double puct = child->getPUCTValue(config_.explorationConstant, root_->visits, root_->priors[i]);
 
         double moveEval = this->game.evaluateMove(child->move);
 
@@ -667,7 +648,7 @@ void MCTS::printBestMoves(int topN) const {
 
         std::cout << std::setw(6) << moveStr << std::setw(10) << child->visits << std::setw(10) << child->wins
                   << std::setw(10) << static_cast<int>(moveEval) << std::setw(10) << std::fixed << std::setprecision(3)
-                  << child->prior << std::setw(10) << std::fixed << std::setprecision(3) << avgScore << std::setw(10)
+                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << avgScore << std::setw(10)
                   << std::fixed << std::setprecision(3) << ucb1 << std::setw(10) << std::fixed << std::setprecision(3)
                   << puct << std::setw(10) << status << "\n";
     }
@@ -680,7 +661,7 @@ MCTS::Node *MCTS::findChildNode(MCTS::Node *parent, int x, int y) const {
         return nullptr;
     }
 
-    for (int i = 0; i < parent->moveCount; i++) {
+    for (int i = 0; i < parent->childCapacity; i++) {
         Node *child = parent->children[i];
         if (child && child->move.x == x && child->move.y == y) {
             return child;
@@ -691,14 +672,14 @@ MCTS::Node *MCTS::findChildNode(MCTS::Node *parent, int x, int y) const {
 }
 
 void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
-    if (!node || node->moveCount == 0) {
+    if (!node || node->childCapacity == 0) {
         std::cout << "No moves analyzed for this position.\n";
         return;
     }
 
     std::vector<Node *> children;
-    children.reserve(node->moveCount);
-    for (int i = 0; i < node->moveCount; i++) {
+    children.reserve(node->childCapacity);
+    for (int i = 0; i < node->childCapacity; i++) {
         if (node->children[i]) {
             children.push_back(node->children[i]);
         }
@@ -724,7 +705,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         double avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
         double ucb1 = child->getUCB1Value(explorationFactor);
-        double puct = child->getPUCTValue(config_.explorationConstant, node->visits);
+        double puct = child->getPUCTValue(config_.explorationConstant, node->visits, node->priors[i]);
 
         std::string moveStr = GameUtils::displayMove(child->move.x, child->move.y);
 
@@ -739,7 +720,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
 
         std::cout << std::setw(6) << moveStr << std::setw(10) << child->visits << std::setw(10) << std::fixed
                   << std::setprecision(3) << avgValue << std::setw(10) << std::fixed << std::setprecision(3)
-                  << child->prior << std::setw(10) << std::fixed << std::setprecision(3) << ucb1 << std::setw(10)
+                  << root_->priors[i] << std::setw(10) << std::fixed << std::setprecision(3) << ucb1 << std::setw(10)
                   << std::fixed << std::setprecision(3) << puct << std::setw(10) << status << "\n";
     }
 
