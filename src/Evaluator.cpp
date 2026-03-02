@@ -2,6 +2,7 @@
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -18,7 +19,7 @@ float Evaluator::rollout(const PenteGame &game) {
     int depth = 0;
 
     while ((winner = simGame.getWinner()) == PenteGame::NONE && depth < maxRolloutDepth_) {
-        PenteGame::Move move = simGame.getRandomLegalMove();
+        PenteGame::Move move = simGame.getRandomPromisingMove();
         simGame.makeMove(move.x, move.y);
         depth++;
     }
@@ -84,17 +85,28 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     std::vector<std::pair<PenteGame::Move, float>> policyScores;
     policyScores.reserve(legalMoves.size());
 
+    int non_zero_scores = 0;
+
     float totalScore = 0.0f;
+    // TODO use promising moves as well as a base
     for (const auto &move : legalMoves) {
         float score = game.evaluateMove(move);
         policyScores.emplace_back(move, score);
         totalScore += score;
+        if (score > 0.0f) {
+            non_zero_scores++;
+        }
     }
 
     // Normalize to probabilities
     for (auto &[move, score] : policyScores) {
+        assert(totalScore > 0.0f);
         score /= totalScore;
     }
+
+    // TODO, we can use kmax from promising moves size OR maybe wq just use policy score count where size > 1 or
+    // something.
+    int k = std::min(10, non_zero_scores);
 
     // Sort from largest to smallest
     // (order doesnt matter, puct still loops)
@@ -102,6 +114,15 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     //           [](const auto& a, const auto& b) {
     //               return a.second > b.second;
     //           });
+
+    // sort using nth element so we only sort top k using partial sort, since we only care about top k for puct
+    // The first K elements are the K largest (for your descending cmp)
+    std::nth_element(policyScores.begin(), policyScores.begin() + k, policyScores.end(),
+                     [](const auto &a, const auto &b) { return a.second > b.second; });
+
+    // Now first K elements are sorted
+    std::sort(policyScores.begin(), policyScores.begin() + k,
+              [](const auto &a, const auto &b) { return a.second > b.second; });
 
     return policyScores;
 }

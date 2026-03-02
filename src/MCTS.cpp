@@ -227,15 +227,13 @@ PenteGame::Move MCTS::getBestMove() const {
 MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
     PROFILE_SCOPE("MCTS::select");
 
-    while (!node->isTerminal() && node->evaluated) {
+    while (node->evaluated && !node->isTerminal()) {
         int best = selectBestMoveIndex(node, game);
         PenteGame::Move move = node->moves[best];
 
         // assert node->moves size is > 0
         assert(node->moves != nullptr);
 
-
-        // FAILING HERE, exception! assert move is >= 0 and < board size
         assert(move.x >= 0 && move.x < PenteGame::BOARD_SIZE);
         assert(move.y >= 0 && move.y < PenteGame::BOARD_SIZE);
 
@@ -260,6 +258,7 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
                 child = it->second;
             }
 
+            child->positionHash = hash;
             node->children[best] = child;
             node->childCount++;
         }
@@ -279,20 +278,14 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
         return node;
     }
 
-    if (node->evaluated) {
-        std::cout << "This should never happen: expanding a node that has already been evaluated.\n";
-        std::cerr << "Error: Attempting to expand a node that has already been evaluated. This indicates a logic error "
-                     "in the MCTS implementation.\n";
-        // game util print
-        std::cerr << "Solved Status of node: " << static_cast<int>(node->solvedStatus) << "\n";
-        GameUtils::printGameState(game);
-        exit(1);
-    }
+    assert(node->expanded == false);
+    assert(node->evaluated == false);
 
     // if this is the first node being expanded, we need to allocate all children nodes and set priors
     if (node->childCount == 0) {
 
         int childCapacity = static_cast<int>(game.getLegalMoves().size());
+
         // policy - vector of pairs of moves and priors, ordered by prior, filtered to legal moves.
         // std::vector<std::pair<Move, float>> policy value - static evaluation of the position
         auto [policy, value] = config_.evaluator->evaluate(game);
@@ -307,7 +300,7 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
         // We allocate the full size, even if the policy returns empty. In selection we can do a lazy policy calc.
         int policyCount = static_cast<int>(policy.size());
 
-        // assert(policyCount == childCapacity); 
+        // assert(policyCount == childCapacity);
 
         for (int i = 0; i < policyCount; i++) {
             node->moves[i] = policy[i].first;
@@ -354,9 +347,7 @@ void MCTS::backpropagate(Node *node, double result) {
 
     Node *parent;
     // parent pointer no longer available
-    // while (!searchPath.empty()) {
 
-    // while current != root
     while (true) {
 
         // Backpropagate stats
@@ -396,20 +387,11 @@ void MCTS::backpropagate(Node *node, double result) {
 // Helper Methods
 // ============================================================================
 
+// oh shoot, if a node can have multiple parents then its move index might be wrong?
 int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
-    if (!node || node->childCapacity == 0) {
-        std::cerr << "FATAL ERROR: selectBestMoveIndex called with null node or node with no moves.\n";
-        exit(1);
-    }
-
-    // only supporting PUCT mode
-    if (config_.searchMode != SearchMode::PUCT) {
-        std::cerr << "FATAL ERROR: selectBestMoveIndex only supports PUCT mode in this implementation.\n";
-        exit(1);
-    }
-
-    int bestIndex = -1;
-    double bestValue = -std::numeric_limits<double>::infinity();
+    assert(node != nullptr && node->childCapacity > 0);
+    assert(config_.searchMode == SearchMode::PUCT);
+    assert(node->positionHash == game.getHash() || node->positionHash == 0);
 
     // Lazy policy load: -1.0f sentinel means priors weren't populated during expand
     if (node->priors[0] < 0.0f) {
@@ -420,11 +402,9 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         if (priorsSize != childCapSize) {
             std::cerr << "FATAL ERROR: Policy size does not match node's child capacity during lazy policy load.\n";
             std::cerr << "Policy size: " << priorsSize << ", Child capacity: " << childCapSize << "\n";
-            // game util print
             GameUtils::printGameState(game);
-            // exit(1);
         }
-        assert(priorsSize == childCapSize); 
+        assert(priorsSize == childCapSize);
 
         for (int i = 0; i < node->childCapacity; i++) {
             node->moves[i] = movePriors[i].first;
@@ -432,25 +412,55 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         }
     }
 
-    double explorationFactor = config_.explorationConstant;
-    // use moves and priors arrays to compute PUCT values without dereferencing child pointers
-    for (uint16_t i = 0; i < node->childCapacity; i++) {
-        // if the child is null, it means it hasn't been expanded yet. we can still compute its PUCT value using the
-        // prior and 0 visits.
-        double value;
-        if (node->children[i]) {
-            Node *child = node->children[i];
-            value = child->getPUCTValue(explorationFactor, node->visits, node->priors[i]);
-        } else {
-            // unexpanded child - use prior and 0 visits for PUCT calculation
-            double exploitation = 0.0; // no visits yet, so exploitation is 0
-            double exploration =
-                explorationFactor * node->priors[i] * std::sqrt(static_cast<double>(node->visits)) / (1.0);
-            value = exploitation + exploration;
-        }
-        if (value > bestValue) {
-            bestValue = value;
+    // base case
+    if (node->nextPriorIdx == 0 && node->children[0] == nullptr) {
+        return 0;
+    }
+
+    const int cap = (int)node->childCapacity;
+    const double explorationFactor = config_.explorationConstant;
+
+    // nextPriorIdx is the last expanded child index and priors are in order from highest to lowest
+    int lastExpanded = std::min((int)node->nextPriorIdx, cap - 1);
+    assert(lastExpanded >= 0);
+
+    // --- 1) Best among expanded children ---
+    int bestIndex = -1;
+    double bestValue = -std::numeric_limits<double>::infinity();
+    for (uint16_t i = 0; i <= lastExpanded; i++) {
+        assert(node->children[i] != nullptr && "Expanded index must have a child node");
+
+        Node *child = node->children[i];
+        // Full PUCT score uses child's stats (N,W/Q) + this action's prior
+        double score = child->getPUCTValue(explorationFactor, node->visits, node->priors[i]);
+
+        if (score > bestValue) {
+            bestValue = score;
             bestIndex = i;
+        }
+    }
+
+    // --- 2) Compare against frontier candidate (unexpanded) ---
+    const int frontier = lastExpanded + 1;
+    if (frontier < cap) {
+        // Must be unexpanded per invariant
+        assert(node->children[frontier] == nullptr);
+        assert(node->visits > 0);
+
+        // For an unexpanded action: N_a=0, Q=0 (no child stats yet)
+        // exploitation = 0.0 since Q=0
+        const double prior = node->priors[frontier];
+        if (prior <= 0.0f && bestIndex != -1) {
+            return bestIndex;
+        }
+        const double sqrtN = std::sqrt((double)node->visits);
+        const double frontierScore = explorationFactor * node->priors[frontier] * sqrtN; // /(1+0)
+
+        if (frontierScore > bestValue) {
+            // Select the frontier; caller should expand it right after.
+            bestIndex = frontier;
+            bestValue = frontierScore;
+            node->nextPriorIdx = frontier; // Move the frontier forward
         }
     }
 
@@ -458,6 +468,8 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     // this could happen if there is symmetry
     // and that one node represents more than 1 move but still only decrements the unproven count by 1
     if (bestIndex == -1) {
+        // std::cerr << "WARNING: All child nodes are proven losses. Selecting the first unproven move as a last
+        // resort.\n";
         assert(node->unprovenCount >= 1);
         assert(node->childCount == node->childCapacity);
         assert(node->children[0] != nullptr);
@@ -703,14 +715,14 @@ void MCTS::printBestMoves(int topN) const {
                              : m.solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS"
                                                                            : "-";
 
-        std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << m.wins
-                  << std::setw(10) << m.moveEval << std::setw(10) << std::fixed << std::setprecision(3) << m.prior
-                  << std::setw(10) << std::fixed << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed
+        std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << m.wins << std::setw(10)
+                  << m.moveEval << std::setw(10) << std::fixed << std::setprecision(3) << m.prior << std::setw(10)
+                  << std::fixed << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed
                   << std::setprecision(3) << m.ucb1 << std::setw(10) << std::fixed << std::setprecision(3) << m.puct
                   << std::setw(10) << status << "\n";
     }
 
-    std::cout << std::string(74, '=') << "\n\n";
+    std::cout << std::string(86, '=') << "\n\n";
 }
 
 MCTS::Node *MCTS::findChildNode(MCTS::Node *parent, int x, int y) const {

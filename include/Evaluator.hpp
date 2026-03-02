@@ -2,7 +2,6 @@
 #define EVALUATOR_HPP
 
 #include "PenteGame.hpp"
-#include <unordered_map>
 #include <utility>
 #include <vector>
 

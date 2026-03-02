@@ -2,8 +2,10 @@
 #define PENTEGAME_HPP
 
 #include "BitBoard.hpp"
+#include "GameUtils.hpp"
 #include "Zobrist.hpp"
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -23,13 +25,12 @@ class PenteGame {
         bool keryoRules = false;     // Keryo: true (3-stone captures)
         bool capturesEnabled = true; // Gomoku: false
         bool tournamentRule = true;  // 3rd move restriction
-        int dilationDistance = 1;    // Legal move dilation radius (1 or 2)
-        uint32_t seed = 0;          // 0 = non-deterministic, non-zero = deterministic
+        uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
-        static Config gomoku() { return Config{10, false, false, true, 1}; }
-        static Config keryoPente() { return Config{15, true, true, true, 2}; }
+        static Config gomoku() { return Config{10, false, false, true}; }
+        static Config keryoPente() { return Config{15, true, true, true}; }
     };
 
     enum Player : uint8_t { NONE = 0, BLACK = 1, WHITE = 2 };
@@ -70,56 +71,64 @@ class PenteGame {
     int countConsecutive(const BitBoard &stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> legalMovesVector;
-    std::array<size_t, BOARD_SIZE * BOARD_SIZE> moveIndex;           // -1 = not present
+    std::array<size_t, BOARD_SIZE * BOARD_SIZE> legalMoveIndex; // -1 = not present
+    std::vector<Move> promisingMovesVector;                     // empty squares within distance 1 of any stone
+    std::array<size_t, BOARD_SIZE * BOARD_SIZE> promisingMoveIndex;
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1); // Max size_t value
 
     size_t encodePos(int x, int y) const { return static_cast<size_t>(y * BOARD_SIZE + x); }
 
-    // Add a legal move - O(1)
-    // Happens during captures. Both involve pieces being taken off the board, therefore freeing up legal moves.
+    // Add a legal move - O(1). Called when captured stones are returned to the board.
     void setLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
-        if (moveIndex[pos] != INVALID_INDEX)
-            return;
-
-        legalMovesVector.emplace_back(x, y);
-        moveIndex[pos] = legalMovesVector.size() - 1;
+        if (promisingMoveIndex[pos] == INVALID_INDEX) {
+            promisingMovesVector.emplace_back(x, y);
+            promisingMoveIndex[pos] = promisingMovesVector.size() - 1;
+        }
+        if (legalMoveIndex[pos] == INVALID_INDEX) {
+            legalMovesVector.emplace_back(x, y);
+            legalMoveIndex[pos] = legalMovesVector.size() - 1;
+        }
     }
 
-    // Remove a legal move - O(1)
-    // Happens during makeMove. involve pieces being placed on the board, therefore removing legal moves.
+    // Remove a legal move - O(1). Called when a stone is placed.
     void clearLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
-        size_t idx = moveIndex[pos];
+        size_t legalIdx = legalMoveIndex[pos];
+        size_t promisingIdx = promisingMoveIndex[pos];
 
-        if (idx == INVALID_INDEX)
-            return;
-
-        if (idx != legalMovesVector.size() - 1) { // No warning!
+        assert(legalIdx != INVALID_INDEX);
+        size_t lastLegalIdx = legalMovesVector.size() - 1;
+        if (legalIdx != lastLegalIdx) {
             Move lastMove = legalMovesVector.back();
-            legalMovesVector[idx] = lastMove;
-            moveIndex[encodePos(lastMove.x, lastMove.y)] = idx;
+            legalMovesVector[legalIdx] = lastMove;
+            legalMoveIndex[encodePos(lastMove.x, lastMove.y)] = legalIdx;
+        }
+        legalMovesVector.pop_back();
+        legalMoveIndex[pos] = INVALID_INDEX;
+
+        // Remove from promising
+        if (promisingIdx != INVALID_INDEX) {
+            size_t lastPromisingIdx = promisingMovesVector.size() - 1;
+            if (promisingIdx != lastPromisingIdx) {
+                Move lastMove = promisingMovesVector.back();
+                promisingMovesVector[promisingIdx] = lastMove;
+                promisingMoveIndex[encodePos(lastMove.x, lastMove.y)] = promisingIdx;
+            }
+            promisingMovesVector.pop_back();
+            promisingMoveIndex[pos] = INVALID_INDEX;
         }
 
-        legalMovesVector.pop_back();
-        moveIndex[pos] = INVALID_INDEX;
-
-        // Dilate legal moves around the placed stone (0 = no dilation)
-        if (config_.dilationDistance > 0) {
-            static const int dirs1[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-            static const int dirs2[24][2] = {{-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {-2, -1}, {-1, -1}, {0, -1},
-                                             {1, -1},  {2, -1},  {-2, 0}, {-1, 0}, {1, 0},  {2, 0},   {-2, 1},  {-1, 1},
-                                             {0, 1},   {1, 1},   {2, 1},  {-2, 2}, {-1, 2}, {0, 2},   {1, 2},   {2, 2}};
-
-            const auto *dirs = (config_.dilationDistance >= 2) ? dirs2 : dirs1;
-            int size = (config_.dilationDistance >= 2) ? 24 : 8;
-
-            for (int i = 0; i < size; i++) {
-                int nx = x + dirs[i][0];
-                int ny = y + dirs[i][1];
-                if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
-                    if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
-                        setLegalMove(nx, ny);
+        // Dilate: add empty distance-1 neighbors to promising
+        static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+        for (int i = 0; i < 8; i++) {
+            int nx = x + dirs[i][0], ny = y + dirs[i][1];
+            if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
+                if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
+                    size_t npos = encodePos(nx, ny);
+                    if (promisingMoveIndex[npos] == INVALID_INDEX) {
+                        promisingMovesVector.emplace_back(nx, ny);
+                        promisingMoveIndex[npos] = promisingMovesVector.size() - 1;
                     }
                 }
             }
@@ -153,8 +162,7 @@ class PenteGame {
     // bool canUndo() const { return !moveHistory.empty(); }
 
     // For MCTS
-    Move getRandomMove(const std::vector<Move> &moves) const;
-    Move getRandomLegalMove() const; // Zero-copy version for simulations
+    Move getRandomPromisingMove() const;
     PenteGame clone() const;
     void syncFrom(const PenteGame &other);
     uint64_t computeHash() const;

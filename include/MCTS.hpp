@@ -125,6 +125,9 @@ class MCTS {
         // Minimax proof status (1 byte)
         SolvedStatus solvedStatus = SolvedStatus::UNSOLVED;
 
+        // hash
+        uint64_t positionHash = 0;
+
         // Child array metadata (2 bytes each = 4 bytes)
         uint16_t childCount = 0;
         uint16_t childCapacity = 0;
@@ -141,6 +144,7 @@ class MCTS {
         PenteGame::Move *moves;
         float *priors;
         float value = 0.0f;
+        int nextPriorIdx = 0; // Index of next prior to explore for selection (used in PUCT)
 
         // Pointers (24 bytes)
         Node **children = nullptr; // Arena-allocated array of child pointers
@@ -218,7 +222,7 @@ class MCTS {
     MCTSArena arena_;
     std::unordered_map<uint64_t, Node *> nodeTranspositionTable;
     std::vector<Node *> searchPath;
-    Node *root_ = nullptr; // Raw pointer into arena
+    Node *root_ = nullptr;         // Raw pointer into arena
     std::vector<Node *> reusePath; // For subtree reuse during search
     mutable std::mt19937 rng_;
 
