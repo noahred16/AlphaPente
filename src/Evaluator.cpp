@@ -42,7 +42,7 @@ std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> UniformEvaluato
 std::vector<std::pair<PenteGame::Move, float>> UniformEvaluator::evaluatePolicy(const PenteGame &game) {
     PROFILE_SCOPE("UniformEvaluator::evaluatePolicy");
     // get moves from legalMoves
-    std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
+    const auto &legalMoves = game.getLegalMoves();
 
     if (legalMoves.empty()) {
         return {};
@@ -76,7 +76,7 @@ std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> HeuristicEvalua
 
 std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolicy(const PenteGame &game) {
     PROFILE_SCOPE("HeurEval::evaluatePolicy");
-    std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
+    const auto &legalMoves = game.getLegalMoves();
 
     if (legalMoves.empty()) {
         return {};
@@ -88,9 +88,9 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     int non_zero_scores = 0;
 
     float totalScore = 0.0f;
-    // TODO use promising moves as well as a base
+    // evaluateMove uses promising moves to skip over bad moves
     for (const auto &move : legalMoves) {
-        float score = game.evaluateMove(move);
+        float score = game.evaluateMove(move) * 100.0f; // TEMP scale up to hide bad moves
         policyScores.emplace_back(move, score);
         totalScore += score;
         if (score > 0.0f) {

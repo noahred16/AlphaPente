@@ -186,12 +186,12 @@ PenteGame::Move MCTS::getBestMove() const {
     for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
         if (child && child->solvedStatus == SolvedStatus::SOLVED_WIN) {
-            return child->move;
+            return root_->moves[i];
         }
     }
 
     // Select child with most visits (most robust), excluding proven losses
-    Node *bestChild = nullptr;
+    int bestIndex = -1;
     int maxVisits = -1;
 
     for (int i = 0; i < root_->childCapacity; i++) {
@@ -200,24 +200,24 @@ PenteGame::Move MCTS::getBestMove() const {
             continue;
         if (child->solvedStatus != SolvedStatus::SOLVED_LOSS && child->visits > maxVisits) {
             maxVisits = child->visits;
-            bestChild = child;
+            bestIndex = i;
         }
     }
 
     // Fallback: If all are losses, just pick the one with the most visits
-    if (!bestChild) {
+    if (bestIndex == -1) {
         for (int i = 0; i < root_->childCapacity; i++) {
             Node *child = root_->children[i];
             if (!child)
                 continue;
             if (child->visits > maxVisits) {
                 maxVisits = child->visits;
-                bestChild = child;
+                bestIndex = i;
             }
         }
     }
 
-    return bestChild->move;
+    return root_->moves[bestIndex];
 }
 
 // ============================================================================
@@ -555,12 +555,12 @@ void MCTS::reuseSubtree(const PenteGame::Move &move) {
         return;
     }
 
-    // Find child matching the move (sparse array - scan all slots)
+    // Find child matching the move by comparing the parent's moves[] array,
+    // not child->move, since transposition nodes may carry a move from a different parent context.
     Node *matchingChild = nullptr;
     for (int i = 0; i < root_->childCapacity; i++) {
-        Node *child = root_->children[i];
-        if (child && child->move.x == move.x && child->move.y == move.y) {
-            matchingChild = child;
+        if (root_->moves[i].x == move.x && root_->moves[i].y == move.y) {
+            matchingChild = root_->children[i]; // may be null if not yet visited
             break;
         }
     }
@@ -624,13 +624,10 @@ void MCTS::printStats() const {
               << ". Root visits: " << GameUtils::formatWithCommas(totalVisits)
               << ". Transposition table size: " << GameUtils::formatWithCommas(transpositionTableSize) << "\n";
 
-    std::cout << "Search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
-              << static_cast<int>(totalSearchTime_) % 60 << " sec\n";
-
-    // total - startSimulations_ to get sims for just this search
     int simsThisSearch = totalSimulations_ - startSimulations_;
-    std::cout << "Simulations/second: " << std::fixed << std::setprecision(0)
-              << (totalSearchTime_ > 0 ? simsThisSearch / totalSearchTime_ : 0) << "\n";
+    std::cout << "Search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
+              << static_cast<int>(totalSearchTime_) % 60 << " sec (" << std::fixed << std::setprecision(0)
+              << GameUtils::formatWithCommas(totalSearchTime_ > 0 ? simsThisSearch / totalSearchTime_ : 0) << " sims/sec)\n";
 
     // Arena memory stats
     std::cout << "Arena memory: " << std::fixed << std::setprecision(1) << (arena_.bytesUsed() / (1024.0 * 1024.0))

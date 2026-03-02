@@ -51,7 +51,7 @@ std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
 }
 
 void GameUtils::printBoard(const PenteGame &game) {
-    const std::vector<PenteGame::Move> legalMoves = game.getLegalMoves();
+    const auto &legalMoves = game.getLegalMoves();
 
     // Helper to handle skipping 'I'
     auto getColChar = [](int x) {

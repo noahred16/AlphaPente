@@ -50,7 +50,7 @@ bool PenteGame::makeMove(const char *move) {
 
     // if move is not legal, setLegalMove first.
     // legal moves
-    std::vector<Move> legalMoves = getLegalMoves();
+    const auto &legalMoves = getLegalMoves();
     auto it =
         std::find_if(legalMoves.begin(), legalMoves.end(), [x, y](const Move &m) { return m.x == x && m.y == y; });
     bool isInLegalMoves = (it != legalMoves.end());
@@ -208,7 +208,7 @@ bool PenteGame::isLegalMove(int x, int y) const {
     return legalMoveIndex[encodePos(x, y)] != INVALID_INDEX;
 }
 
-std::vector<PenteGame::Move> PenteGame::getLegalMoves() const {
+const std::vector<PenteGame::Move> &PenteGame::getLegalMoves() const {
     PROFILE_SCOPE("PenteGame::getLegalMoves");
     return legalMovesVector;
 }
@@ -368,6 +368,8 @@ float PenteGame::evaluateMove(Move move) const {
 
     int x = move.x;
     int y = move.y;
+    if (promisingMoveIndex[encodePos(x, y)] == INVALID_INDEX)
+        return 0.0f;
     int captureCount = 0;
     int blockCaptureCount = 0;
     int createOpenThreeCount = 0;
@@ -389,16 +391,6 @@ float PenteGame::evaluateMove(Move move) const {
 
     // 8 directions for capture checks
     static const int dirs[8][2] = {{0, 1}, {1, 0}, {1, 1}, {-1, 1}, {0, -1}, {-1, 0}, {-1, -1}, {1, -1}};
-
-    // Skip moves not adjacent to any existing stone
-    bool nearStone = false;
-    for (int i = 0; i < 8 && !nearStone; i++) {
-        int nx = x + dirs[i][0], ny = y + dirs[i][1];
-        if (inBounds(nx, ny) && (myStones.getBitUnchecked(nx, ny) || oppStones.getBitUnchecked(nx, ny)))
-            nearStone = true;
-    }
-    if (!nearStone)
-        return 0.0f;
 
     for (int i = 0; i < 8; i++) {
         int dx = dirs[i][0];

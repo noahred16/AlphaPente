@@ -149,7 +149,7 @@ class PenteGame {
     Player getWinner() const;
     bool isGameOver() const;
     bool isLegalMove(int x, int y) const;
-    std::vector<Move> getLegalMoves() const;
+    const std::vector<Move> &getLegalMoves() const;
     std::vector<Move> getPromisingMoves(int distance) const;
 
     // State access
