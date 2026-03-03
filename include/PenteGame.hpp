@@ -167,7 +167,7 @@ class PenteGame {
     void syncFrom(const PenteGame &other);
     uint64_t computeHash() const;
     uint64_t getHash() const;
-    uint64_t getCanonicalHash() const;
+    uint64_t getCanonicalHash(int &outSym) const;
 
     // Debug
     void print() const;

@@ -15,9 +15,8 @@ uint64_t Zobrist::computeFullHash(const BitBoard &blackStones, const BitBoard &w
     return h;
 }
 
-// uint64_t computeCanonicalHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap,
 uint64_t Zobrist::computeCanonicalHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap,
-                                       int whiteCap) const {
+                                       int whiteCap, int &outSym) const {
     PROFILE_SCOPE("Zobrist::computeCanonicalHash");
     uint64_t h[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -40,11 +39,15 @@ uint64_t Zobrist::computeCanonicalHash(const BitBoard &blackStones, const BitBoa
         h[s] ^= capPart;
     }
 
-    // Return minimum hash as canonical representative
+    // Return minimum hash as canonical representative; track which sym achieved it
     uint64_t best = h[0];
+    int bestSym = 0;
     for (int s = 1; s < 8; ++s) {
-        if (h[s] < best)
+        if (h[s] < best) {
             best = h[s];
+            bestSym = s;
+        }
     }
+    outSym = bestSym;
     return best;
 }

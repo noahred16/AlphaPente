@@ -217,7 +217,18 @@ PenteGame::Move MCTS::getBestMove() const {
         }
     }
 
-    return root_->moves[bestIndex];
+    PenteGame::Move bestMove = root_->moves[bestIndex];
+
+    // Un-rotate from canonical to physical coords if root was expanded in canonical mode
+    if (root_->canonicalSym >= 0) {
+        int rootSym = 0;
+        this->game.getCanonicalHash(rootSym);
+        int px, py;
+        Zobrist::instance().applyInverseSym(rootSym, bestMove.x, bestMove.y, px, py);
+        return PenteGame::Move(px, py);
+    }
+
+    return bestMove;
 }
 
 // ============================================================================
@@ -229,29 +240,45 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 
     while (node->evaluated && !node->isTerminal()) {
         int best = selectBestMoveIndex(node, game);
-        PenteGame::Move move = node->moves[best];
+        PenteGame::Move canonMove = node->moves[best];
+        PenteGame::Move physMove = canonMove;
 
-        // assert node->moves size is > 0
         assert(node->moves != nullptr);
 
-        assert(move.x >= 0 && move.x < PenteGame::BOARD_SIZE);
-        assert(move.y >= 0 && move.y < PenteGame::BOARD_SIZE);
+        // Un-rotate canonical moves to physical coords before making the move.
+        // Always recompute currentSym from the live game state — never use node->canonicalSym,
+        // since transposition nodes may be reached from different orientations.
+        if (node->canonicalSym >= 0) {
+            int currentSym = 0;
+            game.getCanonicalHash(currentSym);
+            const auto &zob = Zobrist::instance();
+            int px, py;
+            zob.applyInverseSym(currentSym, canonMove.x, canonMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
 
-        game.makeMove(move.x, move.y);
+        assert(physMove.x >= 0 && physMove.x < PenteGame::BOARD_SIZE);
+        assert(physMove.y >= 0 && physMove.y < PenteGame::BOARD_SIZE);
+
+        game.makeMove(physMove.x, physMove.y);
 
         Node *child = node->children[best];
 
         // if child is null, we need to create it (lazy expansion). Otherwise we continue down the tree.
         if (!child) {
-            // Check transposition table
-            uint64_t hash = game.getHash();
+            // Use canonical hash as TT key when within the depth limit
+            bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                                 game.getMoveCount() <= config_.canonicalHashDepth);
+            int childSym = -1;
+            uint64_t hash = useCanonical ? game.getCanonicalHash(childSym) : game.getHash();
+
             auto it = nodeTranspositionTable.find(hash);
             bool foundInTable = (it != nodeTranspositionTable.end());
 
             if (!foundInTable) {
                 // lazy expansion
                 child = allocateNode();
-                child->move = move;
+                child->move = canonMove;
                 child->player = (node->player == PenteGame::BLACK) ? PenteGame::WHITE : PenteGame::BLACK;
                 nodeTranspositionTable[hash] = child;
             } else {
@@ -286,6 +313,14 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
 
         int childCapacity = static_cast<int>(game.getLegalMoves().size());
 
+        // Determine whether to store moves in canonical coordinates
+        bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                             game.getMoveCount() <= config_.canonicalHashDepth);
+        int canonSym = -1;
+        if (useCanonical) {
+            game.getCanonicalHash(canonSym);
+        }
+
         // policy - vector of pairs of moves and priors, ordered by prior, filtered to legal moves.
         // std::vector<std::pair<Move, float>> policy value - static evaluation of the position
         auto [policy, value] = config_.evaluator->evaluate(game);
@@ -310,6 +345,17 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
             assert(node->moves[i].y >= 0 && node->moves[i].y < PenteGame::BOARD_SIZE);
 
             node->priors[i] = policy[i].second;
+        }
+
+        // Rotate physical moves to canonical coordinates so transpositions share the same move list
+        if (useCanonical) {
+            const auto &zob = Zobrist::instance();
+            for (int i = 0; i < policyCount; i++) {
+                int cx, cy;
+                zob.applySymToMove(canonSym, node->moves[i].x, node->moves[i].y, cx, cy);
+                node->moves[i] = PenteGame::Move(cx, cy);
+            }
+            node->canonicalSym = static_cast<int8_t>(canonSym);
         }
 
         node->value = value;
@@ -391,7 +437,7 @@ void MCTS::backpropagate(Node *node, double result) {
 int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     assert(node != nullptr && node->childCapacity > 0);
     assert(config_.searchMode == SearchMode::PUCT);
-    assert(node->positionHash == game.getHash() || node->positionHash == 0);
+    // Note: positionHash may be canonical when canonicalHashDepth > 0, so we skip the hash assert
 
     // Lazy policy load: -1.0f sentinel means priors weren't populated during expand
     if (node->priors[0] < 0.0f) {
@@ -530,6 +576,7 @@ MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
     dest->expanded = source->expanded;
     dest->evaluated = source->evaluated;
     dest->value = source->value;
+    dest->canonicalSym = source->canonicalSym;
 
     // Copy moves/priors arrays and children (all sized by childCapacity)
     if (source->childCapacity > 0 && source->children) {

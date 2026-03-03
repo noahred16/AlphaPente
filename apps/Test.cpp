@@ -22,13 +22,13 @@ int main(int argc, char *argv[]) {
     //                        "G9",  "G7", "F10", "E8", "E9",  "D8",  "J13", "H12", "G13"};
     // const char *moves[] = {"K10"};
     // const char *moves[] = {"K10", "K9"};
-    // const char *moves[] = {"K10", "K9", "K7"};
+    const char *moves[] = {"K10", "K9", "K7"};
     // const char *moves[] = {"K10", "K9", "K7", "K6"};
     // const char *moves[] = {"K10", "K9", "K8", "J8", "K7", "H9", "G10"};
-    const char *moves[] = {"K10", "L9", "F10", "L7", "M10", "L8",  "L10", "J10", "M9",  "M7",  "N6",
-                           "K11", "K9", "L12", "H9", "N8",  "L10", "K8",  "N10", "O10", "J7",  "L8",
-                           "L6",  "L9", "M6",  "K6", "M8",  "M13", "N14", "J5",  "J8",  "G10", "K7",
-                           "H7",  "K7", "M5",  "K9", "K13", "P8",  "J14", "H15", "K12", "M12"};
+    // const char *moves[] = {"K10", "L9", "F10", "L7", "M10", "L8",  "L10", "J10", "M9",  "M7",  "N6",
+    //                        "K11", "K9", "L12", "H9", "N8",  "L10", "K8",  "N10", "O10", "J7",  "L8",
+    //                        "L6",  "L9", "M6",  "K6", "M8",  "M13", "N14", "J5",  "J8",  "G10", "K7",
+    //                        "H7",  "K7", "M5",  "K9", "K13", "P8",  "J14", "H15", "K12", "M12"};
 
     for (const char *move : moves) {
         game.makeMove(move);

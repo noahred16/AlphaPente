@@ -881,7 +881,8 @@ TEST_CASE("Canonical hash symmetry") {
         game.reset();
         game.makeMove(firstMove);  // K10
         game.makeMove(move);       // Symmetric move
-        uint64_t h = game.getCanonicalHash();
+        int sym = 0;
+        uint64_t h = game.getCanonicalHash(sym);
         if (canonicalHash == 0) {
             canonicalHash = h;  // Set the first hash as the reference
         } else {
@@ -905,7 +906,8 @@ TEST_CASE("Canonical hash with asymmetric moves") {
     game1.makeMove("K7");
     game1.makeMove("K6");
     game1.makeMove("J9");
-    uint64_t hash1 = game1.getCanonicalHash();
+    int sym1 = 0;
+    uint64_t hash1 = game1.getCanonicalHash(sym1);
     PenteGame game2;
     game2.reset();
     game2.makeMove("K10");
@@ -913,6 +915,7 @@ TEST_CASE("Canonical hash with asymmetric moves") {
     game2.makeMove("K7");
     game2.makeMove("K6");
     game2.makeMove("L9");
-    uint64_t hash2 = game2.getCanonicalHash();
+    int sym2 = 0;
+    uint64_t hash2 = game2.getCanonicalHash(sym2);
     CHECK(hash1 == hash2);
 }

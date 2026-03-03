@@ -25,10 +25,22 @@ class Zobrist {
     uint64_t computeFullHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap,
                              int whiteCap) const;
     uint64_t computeCanonicalHash(const BitBoard &blackStones, const BitBoard &whiteStones, int blackCap,
-                                  int whiteCap) const;
+                                  int whiteCap, int &outSym) const;
+
+    // Apply symmetry sym to board position (x,y), writing result to (ox,oy)
+    void applySymToMove(int sym, int x, int y, int &ox, int &oy) const {
+        int cell = y * BOARD_SIZE + x;
+        int tcell = symMap[sym][cell];
+        ox = tcell % BOARD_SIZE;
+        oy = tcell / BOARD_SIZE;
+    }
+
+    // Apply the inverse of symmetry sym to board position (x,y)
+    void applyInverseSym(int sym, int x, int y, int &ox, int &oy) const { applySymToMove(inverseSym[sym], x, y, ox, oy); }
 
   private:
     int symMap[8][BOARD_CELLS];
+    int inverseSym[8]; // D4 group inverses: {0,3,2,1,4,5,6,7}
 
     // Optional micro-opt: symStoneKeys[sym][player][cell] = stoneKeys[player][ symMap[sym][cell] ]
     uint64_t symStoneKeys[8][2][BOARD_CELLS];
@@ -47,6 +59,9 @@ class Zobrist {
         }
 
         precomputeSymmetry();
+        // D4 group inverses: rot90CW (1) <-> rot270CW (3), others self-inverse
+        constexpr int inv[8] = {0, 3, 2, 1, 4, 5, 6, 7};
+        for (int i = 0; i < 8; ++i) inverseSym[i] = inv[i];
     }
 
     void precomputeSymmetry() {

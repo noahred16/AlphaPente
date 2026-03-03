@@ -109,6 +109,7 @@ class MCTS {
         Evaluator *evaluator = nullptr; // For PUCT priors and value evaluation
         HeuristicMode heuristicMode = HeuristicMode::HEURISTIC;
         uint32_t seed = 0; // 0 = non-deterministic (random_device), non-zero = deterministic seed
+        int canonicalHashDepth = 10; // 0 = disabled; use canonical hash when getMoveCount() <= this value
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
@@ -144,7 +145,8 @@ class MCTS {
         PenteGame::Move *moves;
         float *priors;
         float value = 0.0f;
-        int nextPriorIdx = 0; // Index of next prior to explore for selection (used in PUCT)
+        int nextPriorIdx = 0;      // Index of next prior to explore for selection (used in PUCT)
+        int8_t canonicalSym = -1;  // -1 = moves[] in physical coords; 0-7 = moves[] in canonical coords
 
         // Pointers (24 bytes)
         Node **children = nullptr; // Arena-allocated array of child pointers

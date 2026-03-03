@@ -341,10 +341,10 @@ uint64_t PenteGame::getHash() const {
     return hash_;
 }
 
-uint64_t PenteGame::getCanonicalHash() const {
+uint64_t PenteGame::getCanonicalHash(int &outSym) const {
     PROFILE_SCOPE("PenteGame::getCanonicalHash");
     const auto &zob = Zobrist::instance();
-    return zob.computeCanonicalHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
+    return zob.computeCanonicalHash(blackStones, whiteStones, blackCaptures, whiteCaptures, outSym);
 }
 
 PenteGame::Player PenteGame::getStoneAt(int x, int y) const {
