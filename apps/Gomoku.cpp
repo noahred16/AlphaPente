@@ -41,10 +41,10 @@ int main(int argc, char *argv[]) {
     // MCTS configuration
     MCTS::Config config;
     config.maxIterations = mctsIterations;
-    config.explorationConstant = 1.7;
+    config.explorationConstant = 1.414;
     config.searchMode = MCTS::SearchMode::PUCT;
-    UniformEvaluator uniformEvaluator;
-    config.evaluator = &uniformEvaluator;
+    HeuristicEvaluator heuristicEvaluator;
+    config.evaluator = &heuristicEvaluator;
 
     MCTS mcts(config);
     GameUtils::interactiveSearchLoop(mcts, game);

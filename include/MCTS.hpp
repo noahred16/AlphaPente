@@ -27,7 +27,9 @@ class MCTSArena {
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 24ull; // 6 GB (unsigned long long to avoid overflow)
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 32ull; // 8 GB (unsigned long long to avoid overflow)
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 40ull; // 10 GB (unsigned long long to avoid overflow)
-    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 48ull; // 12 GB (unsigned long long to avoid overflow)
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 48ull; // 12 GB (unsigned long long to avoid overflow)
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 64ull; // 16 GB (unsigned long long to avoid overflow)
+    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 128ull; // 32 GB (unsigned long long to avoid overflow)
 
     // static constexpr size_t MAX_SIZE = 16ULL * 1024 * 1024 * 1024; // 16 GB
 

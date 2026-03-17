@@ -260,6 +260,16 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
         assert(physMove.x >= 0 && physMove.x < PenteGame::BOARD_SIZE);
         assert(physMove.y >= 0 && physMove.y < PenteGame::BOARD_SIZE);
 
+        // if positionHash === 4538186673007107396, print debug info (loop over searchPath and print moves taken)
+        if (node->positionHash == 4538186673007107396) {
+            std::cout << "Debug: Reached node with hash 4538186673007107396 during selection. Search path:\n";
+            for (Node *pathNode : searchPath) {
+                // print the move using displayMove
+                std::cout << "Move: (" << GameUtils::displayMove(pathNode->move.x, pathNode->move.y) << ") by "
+                          << ((pathNode->player == PenteGame::BLACK) ? "BLACK" : "WHITE") << "\n";
+            }   
+        }
+
         game.makeMove(physMove.x, physMove.y);
 
         Node *child = node->children[best];
@@ -456,6 +466,18 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
             node->moves[i] = movePriors[i].first;
             node->priors[i] = movePriors[i].second;
         }
+
+        // evaluatePolicy returns physical moves; rotate to canonical if node uses canonical coords
+        if (node->canonicalSym >= 0) {
+            int currentSym = 0;
+            game.getCanonicalHash(currentSym);
+            const auto &zob = Zobrist::instance();
+            for (int i = 0; i < node->childCapacity; i++) {
+                int cx, cy;
+                zob.applySymToMove(currentSym, node->moves[i].x, node->moves[i].y, cx, cy);
+                node->moves[i] = PenteGame::Move(cx, cy);
+            }
+        }
     }
 
     // base case
@@ -604,9 +626,19 @@ void MCTS::reuseSubtree(const PenteGame::Move &move) {
 
     // Find child matching the move by comparing the parent's moves[] array,
     // not child->move, since transposition nodes may carry a move from a different parent context.
+    // root_->moves[] may be in canonical coords, so convert the physical move first.
+    PenteGame::Move searchMove = move;
+    if (root_->canonicalSym >= 0) {
+        int rootSym = 0;
+        this->game.getCanonicalHash(rootSym);
+        int cx, cy;
+        Zobrist::instance().applySymToMove(rootSym, move.x, move.y, cx, cy);
+        searchMove = PenteGame::Move(cx, cy);
+    }
+
     Node *matchingChild = nullptr;
     for (int i = 0; i < root_->childCapacity; i++) {
-        if (root_->moves[i].x == move.x && root_->moves[i].y == move.y) {
+        if (root_->moves[i].x == searchMove.x && root_->moves[i].y == searchMove.y) {
             matchingChild = root_->children[i]; // may be null if not yet visited
             break;
         }
@@ -719,16 +751,30 @@ void MCTS::printBestMoves(int topN) const {
 
     double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
 
+    // Precompute physical-coord translation for canonical root moves
+    int rootSym = -1;
+    if (root_->canonicalSym >= 0) {
+        this->game.getCanonicalHash(rootSym);
+    }
+
     for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
         if (!child)
             continue;
 
+        // Convert canonical move back to physical coords for display/eval
+        PenteGame::Move physMove = root_->moves[i];
+        if (rootSym >= 0) {
+            int px, py;
+            Zobrist::instance().applyInverseSym(rootSym, physMove.x, physMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+
         MoveInfo info;
-        info.moveStr = GameUtils::displayMove(root_->moves[i].x, root_->moves[i].y);
+        info.moveStr = GameUtils::displayMove(physMove.x, physMove.y);
         info.visits = child->visits;
         info.wins = child->wins;
-        info.moveEval = static_cast<int>(this->game.evaluateMove(root_->moves[i]));
+        info.moveEval = static_cast<int>(this->game.evaluateMove(physMove));
         info.prior = root_->priors[i];
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         info.ucb1 = child->getUCB1Value(explorationFactor);
@@ -774,10 +820,17 @@ MCTS::Node *MCTS::findChildNode(MCTS::Node *parent, int x, int y) const {
         return nullptr;
     }
 
+    // parent->moves[] may be in canonical coords; convert input physical coords to match.
+    int sx = x, sy = y;
+    if (parent->canonicalSym >= 0) {
+        int rootSym = 0;
+        this->game.getCanonicalHash(rootSym);
+        Zobrist::instance().applySymToMove(rootSym, x, y, sx, sy);
+    }
+
     for (int i = 0; i < parent->childCapacity; i++) {
-        Node *child = parent->children[i];
-        if (child && child->move.x == x && child->move.y == y) {
-            return child;
+        if (parent->moves[i].x == sx && parent->moves[i].y == sy) {
+            return parent->children[i];
         }
     }
 
@@ -810,8 +863,16 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         if (!child)
             continue;
 
+        // Convert canonical move back to physical coords for display
+        PenteGame::Move physMove = node->moves[i];
+        if (node->canonicalSym >= 0) {
+            int px, py;
+            Zobrist::instance().applyInverseSym(node->canonicalSym, physMove.x, physMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+
         MoveInfo info;
-        info.moveStr = GameUtils::displayMove(node->moves[i].x, node->moves[i].y);
+        info.moveStr = GameUtils::displayMove(physMove.x, physMove.y);
         info.visits = child->visits;
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         info.prior = node->priors[i];

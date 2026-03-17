@@ -462,6 +462,11 @@ float PenteGame::evaluateMove(Move move) const {
         // === CREATE FIVE THREAT (OPEN FOUR) DETECTION ===
         // An open four means the opponent must block or we win next turn
 
+        // Immediate win: placing here completes 5+ in a row
+        if (total >= 5) {
+            return 200.0f;
+        }
+
         // Pattern 1: Solid four with one open end: X X X X _ or _ X X X X
         if (total == 4) {
             int posEndX = x + dx * (posCount + 1);
@@ -514,7 +519,12 @@ float PenteGame::evaluateMove(Move move) const {
         // === BLOCK OPPONENT'S FIVE THREAT ===
         int oppPosCount = countConsecutive(oppStones, x, y, dx, dy);
         int oppNegCount = countConsecutive(oppStones, x, y, -dx, -dy);
-        // int oppTotal = 1 + oppPosCount + oppNegCount;
+        int oppTotal = 1 + oppPosCount + oppNegCount;
+
+        // Blocking an immediate opponent win (they have 4 in a row adjacent to this square)
+        if (oppTotal >= 5) {
+            return 200.0f;
+        }
 
         // Blocking solid four: O O O O P or P O O O O
         if (oppPosCount == 4) {
@@ -721,7 +731,7 @@ int PenteGame::countOpenFours(Player player) const {
                 bool afterOpen = (afterX >= 0 && afterX < BOARD_SIZE && afterY >= 0 && afterY < BOARD_SIZE &&
                                   !stones.getBit(afterX, afterY) && !oppStones.getBit(afterX, afterY));
 
-                if (beforeOpen && afterOpen) {
+                if (beforeOpen || afterOpen) {
                     openFourCount++;
                 }
             }

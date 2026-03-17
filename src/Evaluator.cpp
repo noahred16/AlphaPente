@@ -90,7 +90,7 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     float totalScore = 0.0f;
     // evaluateMove uses promising moves to skip over bad moves
     for (const auto &move : legalMoves) {
-        float score = game.evaluateMove(move) * 100.0f; // TEMP scale up to hide bad moves
+        float score = game.evaluateMove(move); // TEMP scale up to hide bad moves
         policyScores.emplace_back(move, score);
         totalScore += score;
         if (score > 0.0f) {

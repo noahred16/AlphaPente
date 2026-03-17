@@ -97,6 +97,22 @@ class PenteGame {
         size_t legalIdx = legalMoveIndex[pos];
         size_t promisingIdx = promisingMoveIndex[pos];
 
+        if (legalIdx == INVALID_INDEX) {
+            std::cerr << "Warning: Attempting to clear legal move that is not marked as legal: (" << GameUtils::displayMove(x, y)
+                      << ") from " << GameUtils::displayMove(7, 7) << "\n";
+            // game utils print
+            std::cout << "Current legal moves:\n";
+            for (const auto &move : getLegalMoves()) {
+                std::cout << "(" << GameUtils::displayMove(move.x, move.y) << ") ";
+            }
+            std::cout << "\n";
+
+            GameUtils::printBoard(*this);
+            // curr move
+
+            // return;
+        }
+
         assert(legalIdx != INVALID_INDEX);
         size_t lastLegalIdx = legalMovesVector.size() - 1;
         if (legalIdx != lastLegalIdx) {
