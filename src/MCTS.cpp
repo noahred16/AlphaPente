@@ -274,11 +274,17 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 
         Node *child = node->children[best];
 
-        // if child is null, we need to create it (lazy expansion). Otherwise we continue down the tree.
-        if (!child) {
-            // Use canonical hash as TT key when within the depth limit
-            bool useCanonical = (config_.canonicalHashDepth > 0 &&
-                                 game.getMoveCount() <= config_.canonicalHashDepth);
+        // Use canonical hash as TT key when within the depth limit
+        bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                             game.getMoveCount() <= config_.canonicalHashDepth);
+
+        // When a canonical parent (canonicalSym >= 0) has a non-canonical child
+        // (useCanonical == false), the same canonical move slot [best] maps to different
+        // physical states depending on which physical orientation reached this parent.
+        // children[best] may point to a node from a different orientation — always TT-lookup.
+        bool needsTTLookup = (!child) || (node->canonicalSym >= 0 && !useCanonical);
+
+        if (needsTTLookup) {
             int childSym = -1;
             uint64_t hash = useCanonical ? game.getCanonicalHash(childSym) : game.getHash();
 
@@ -296,8 +302,9 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
             }
 
             child->positionHash = hash;
+            bool wasNull = (node->children[best] == nullptr);
             node->children[best] = child;
-            node->childCount++;
+            if (wasNull) node->childCount++;
         }
 
         assert(child != nullptr);
