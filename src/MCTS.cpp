@@ -529,11 +529,6 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
     return bestIndex;
 }
 
-double MCTS::evaluateTerminalState(const PenteGame &game, int depth) const {
-    PROFILE_SCOPE("MCTS::evaluateTerminalState");
-    return 1.0; // Placeholder: always return win for testing
-}
-
 // ============================================================================
 // Tree Management
 // ============================================================================
@@ -549,54 +544,6 @@ void MCTS::clearTree() {
     root_ = nullptr;
     reusePath.clear();
     nodeTranspositionTable.clear();
-}
-
-MCTS::Node *MCTS::copySubtree(Node *source, MCTSArena &destArena) {
-    if (!source)
-        return nullptr;
-
-    // Allocate new node in destination arena
-    Node *dest = destArena.allocate<Node>();
-    if (!dest) {
-        std::cerr << "FATAL: Destination arena out of memory during subtree copy!\n";
-        throw std::bad_alloc();
-    }
-
-    // Copy scalar fields
-    dest->move = source->move;
-    dest->player = source->player;
-    dest->solvedStatus = source->solvedStatus;
-    dest->childCount = source->childCount;
-    dest->childCapacity = source->childCapacity;
-    dest->unprovenCount = source->unprovenCount;
-    dest->visits = source->visits;
-    dest->wins = source->wins;
-    dest->totalValue = source->totalValue;
-    dest->children = nullptr;
-    dest->moves = nullptr;
-    dest->priors = nullptr;
-    dest->expanded = source->expanded;
-    dest->evaluated = source->evaluated;
-    dest->value = source->value;
-    dest->canonicalSym = source->canonicalSym;
-
-    // Copy moves/priors arrays and children (all sized by childCapacity)
-    if (source->childCapacity > 0 && source->children) {
-        dest->children = destArena.allocate<Node *>(source->childCapacity);
-        dest->moves = destArena.allocate<PenteGame::Move>(source->childCapacity);
-        dest->priors = destArena.allocate<float>(source->childCapacity);
-        if (!dest->children || !dest->moves || !dest->priors) {
-            std::cerr << "FATAL: Destination arena out of memory for children!\n";
-            throw std::bad_alloc();
-        }
-        std::memcpy(dest->moves, source->moves, sizeof(PenteGame::Move) * source->childCapacity);
-        std::memcpy(dest->priors, source->priors, sizeof(float) * source->childCapacity);
-        for (int i = 0; i < source->childCapacity; i++) {
-            dest->children[i] = copySubtree(source->children[i], destArena);
-        }
-    }
-
-    return dest;
 }
 
 void MCTS::reuseSubtree(const PenteGame::Move &move) {
@@ -641,12 +588,6 @@ bool MCTS::undoSubtree() {
     root_ = reusePath.back();
     reusePath.pop_back();
     return true;
-}
-
-void MCTS::pruneTree(Node *keepNode) {
-    // With arena allocation, we can't selectively free nodes
-    // Just clear everything for now
-    clearTree();
 }
 
 // ============================================================================

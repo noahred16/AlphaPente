@@ -208,15 +208,10 @@ class MCTS {
     // Helper methods
     int selectBestMoveIndex(Node *node, const PenteGame &game) const;
     void updateChildrenPriors(Node *node, const PenteGame &game);
-    double evaluateTerminalState(const PenteGame &game, int depth = 0) const;
 
     // Arena allocation helpers
     Node *allocateNode();
     void initNodeChildren(Node *node, int capacity);
-
-    // Tree reuse helpers (copies subtree to fresh arena)
-    Node *copySubtree(Node *source, MCTSArena &destArena);
-    void pruneTree(Node *keepNode);
 
     // Print helpers
     Node *findChildNode(Node *parent, int x, int y) const;
