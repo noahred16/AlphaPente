@@ -29,7 +29,7 @@ class PenteGame {
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
-        static Config gomoku() { return Config{10, false, false, true}; }
+        static Config gomoku() { return Config{10, false, false, false}; }
         static Config keryoPente() { return Config{15, true, true, true}; }
     };
 

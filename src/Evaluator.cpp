@@ -48,6 +48,27 @@ std::vector<std::pair<PenteGame::Move, float>> UniformEvaluator::evaluatePolicy(
         return {};
     }
 
+    // tournament rule consideration
+    if (game.getMoveCount() == 2 && game.getConfig().tournamentRule) {
+        std::vector<std::pair<PenteGame::Move, float>> policyScores;
+        policyScores.reserve(legalMoves.size());
+
+        float totalScore = 0.0f;
+        for (const auto &move : legalMoves) {
+            float score = (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) ? 0.0f : 1.0f;
+            policyScores.emplace_back(move, score);
+            totalScore += score;
+        }
+
+        // Normalize to probabilities
+        for (auto &[move, score] : policyScores) {
+            assert(totalScore > 0.0f);
+            score /= totalScore;
+        }
+
+        return policyScores;
+    }
+
     float uniformProb = 1.0f / legalMoves.size();
 
     std::vector<std::pair<PenteGame::Move, float>> result;
@@ -90,7 +111,13 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     float totalScore = 0.0f;
     // evaluateMove uses promising moves to skip over bad moves
     for (const auto &move : legalMoves) {
-        float score = game.evaluateMove(move); // TEMP scale up to hide bad moves
+        float score;
+        // if tournament rule and game move num is 3 and move is in the restricted area score is 0, otherwise evaluate normally.
+        if (game.getMoveCount() == 2 && game.getConfig().tournamentRule && std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) {
+            score = 0.0f;
+        } else {
+            score = game.evaluateMove(move);
+        }
         policyScores.emplace_back(move, score);
         totalScore += score;
         if (score > 0.0f) {
