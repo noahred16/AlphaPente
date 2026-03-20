@@ -103,6 +103,7 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
     this->game = game;
     auto startTime = std::chrono::high_resolution_clock::now();
 
+    std::vector<Node *> searchPath;
     searchPath.reserve(400); // 19x19=361 max moves in a game + a few for caps. 400 to be safe
 
     // Reset statistics and arena
@@ -136,7 +137,7 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
         localGame.syncFrom(game);
 
         // Selection: traverse tree to find node to expand
-        Node *node = select(root_, localGame);
+        Node *node = select(root_, localGame, searchPath);
 
         // Expansion: add a new child node if not terminal
         PenteGame::Player winner = localGame.getWinner();
@@ -147,11 +148,11 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
             if (winner == opponent) {
                 node->solvedStatus = SolvedStatus::SOLVED_WIN;
                 node->unprovenCount = 0;
-                backpropagate(node, 1.0);
+                backpropagate(node, 1.0, searchPath);
             } else {
                 node->solvedStatus = SolvedStatus::SOLVED_LOSS;
                 node->unprovenCount = 0;
-                backpropagate(node, -1.0);
+                backpropagate(node, -1.0, searchPath);
             }
             totalSimulations_++;
             continue;
@@ -162,7 +163,7 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
         double result = simulate(node, localGame);
 
         // Backpropagation: update statistics
-        backpropagate(node, result);
+        backpropagate(node, result, searchPath);
 
         totalSimulations_++;
     }
@@ -235,7 +236,7 @@ PenteGame::Move MCTS::getBestMove() const {
 // MCTS Phases
 // ============================================================================
 
-MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
+MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searchPath) {
     PROFILE_SCOPE("MCTS::select");
 
     while (node->evaluated && !node->isTerminal()) {
@@ -259,16 +260,6 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game) {
 
         assert(physMove.x >= 0 && physMove.x < PenteGame::BOARD_SIZE);
         assert(physMove.y >= 0 && physMove.y < PenteGame::BOARD_SIZE);
-
-        // if positionHash === 4538186673007107396, print debug info (loop over searchPath and print moves taken)
-        if (node->positionHash == 4538186673007107396) {
-            std::cout << "Debug: Reached node with hash 4538186673007107396 during selection. Search path:\n";
-            for (Node *pathNode : searchPath) {
-                // print the move using displayMove
-                std::cout << "Move: (" << GameUtils::displayMove(pathNode->move.x, pathNode->move.y) << ") by "
-                          << ((pathNode->player == PenteGame::BLACK) ? "BLACK" : "WHITE") << "\n";
-            }   
-        }
 
         game.makeMove(physMove.x, physMove.y);
 
@@ -396,7 +387,7 @@ double MCTS::simulate(Node *node, PenteGame &game) {
     return node->value;
 }
 
-void MCTS::backpropagate(Node *node, double result) {
+void MCTS::backpropagate(Node *node, double result, std::vector<Node *> &searchPath) {
     PROFILE_SCOPE("MCTS::backpropagate");
     double currentResult = result;
 

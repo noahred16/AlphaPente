@@ -30,12 +30,16 @@ class MCTSArena {
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 48ull; // 12 GB (unsigned long long to avoid overflow)
     // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 64ull; // 16 GB (unsigned long long to avoid overflow)
     static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 128ull; // 32 GB (unsigned long long to avoid overflow)
+    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 256ull; // 64 GB (unsigned long long to avoid overflow)
 
     // static constexpr size_t MAX_SIZE = 16ULL * 1024 * 1024 * 1024; // 16 GB
 
     explicit MCTSArena(size_t size = DEFAULT_SIZE) : size_(size), offset_(0), memory_(nullptr) {
         memory_ = static_cast<char *>(std::aligned_alloc(64, size_)); // 64-byte alignment for cache lines
         if (!memory_) {
+            std::fprintf(stderr, "FATAL: Failed to allocate arena of %.1f GB. "
+                "Not enough system memory (check `free -h`).\n",
+                size_ / (1024.0 * 1024.0 * 1024.0));
             throw std::bad_alloc();
         }
     }
@@ -197,10 +201,10 @@ class MCTS {
 
   private:
     // MCTS phases
-    Node *select(Node *node, PenteGame &game);
+    Node *select(Node *node, PenteGame &game, std::vector<Node *> &searchPath);
     Node *expand(Node *node, PenteGame &game);
     double simulate(Node *node, PenteGame &game);
-    void backpropagate(Node *node, double result);
+    void backpropagate(Node *node, double result, std::vector<Node *> &searchPath);
 
     // Helper methods
     int selectBestMoveIndex(Node *node, const PenteGame &game) const;
@@ -225,15 +229,16 @@ class MCTS {
     Config config_;
     MCTSArena arena_;
     std::unordered_map<uint64_t, Node *> nodeTranspositionTable;
-    std::vector<Node *> searchPath;
     Node *root_ = nullptr;         // Raw pointer into arena
     std::vector<Node *> reusePath; // For subtree reuse during search
     mutable std::mt19937 rng_;
+
 
     // Statistics
     int startSimulations_ = 0;
     int totalSimulations_ = 0;
     double totalSearchTime_ = 0.0;
 };
+
 
 #endif // MCTS_HPP

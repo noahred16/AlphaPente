@@ -106,7 +106,7 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
 
     // TODO, we can use kmax from promising moves size OR maybe wq just use policy score count where size > 1 or
     // something.
-    int k = std::min(10, non_zero_scores);
+    int k = non_zero_scores;
 
     // Sort from largest to smallest
     // (order doesnt matter, puct still loops)
