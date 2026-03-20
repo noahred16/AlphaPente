@@ -13,24 +13,6 @@
 // Node Implementation
 // ============================================================================
 
-double MCTS::Node::getUCB1Value(double explorationFactor) const {
-    // Prioritize solved nodes
-    if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
-        return std::numeric_limits<double>::infinity();
-    }
-    if (this->solvedStatus == SolvedStatus::SOLVED_LOSS) {
-        return -std::numeric_limits<double>::infinity();
-    }
-
-    if (this->visits == 0) {
-        return std::numeric_limits<double>::infinity();
-    }
-
-    double exploitation = this->totalValue / (this->visits);
-    double exploration = explorationFactor / std::sqrt(static_cast<double>(this->visits));
-
-    return exploitation + exploration;
-}
 
 double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits, float prior) const {
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
@@ -739,15 +721,12 @@ void MCTS::printBestMoves(int topN) const {
         int moveEval;
         float prior;
         double avgVal;
-        double ucb1;
         double puct;
         SolvedStatus solvedStatus;
     };
 
     std::vector<MoveInfo> moves;
     moves.reserve(root_->childCapacity);
-
-    double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(root_->visits)));
 
     // Precompute physical-coord translation for canonical root moves
     int rootSym = -1;
@@ -775,7 +754,6 @@ void MCTS::printBestMoves(int topN) const {
         info.moveEval = static_cast<int>(this->game.evaluateMove(physMove));
         info.prior = root_->priors[i];
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        info.ucb1 = child->getUCB1Value(explorationFactor);
         info.puct = child->getPUCTValue(config_.explorationConstant, root_->visits, root_->priors[i]);
         info.solvedStatus = child->solvedStatus;
         moves.push_back(info);
@@ -793,7 +771,7 @@ void MCTS::printBestMoves(int topN) const {
     std::cout << "\n=== Top " << std::min(topN, movesConsidered) << " Moves of " << movesConsidered
               << " Considered ===\n";
     std::cout << std::setw(6) << "Move" << std::setw(10) << "Visits" << std::setw(10) << "Wins" << std::setw(10)
-              << "MoveEval" << std::setw(10) << "Prior" << std::setw(10) << "Avg Val" << std::setw(10) << "UCB1"
+              << "MoveEval" << std::setw(10) << "Prior" << std::setw(10) << "Avg Val" 
               << std::setw(10) << "PUCT" << std::setw(10) << "Status\n";
     std::cout << std::string(86, '-') << "\n";
 
@@ -806,7 +784,7 @@ void MCTS::printBestMoves(int topN) const {
         std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << m.wins << std::setw(10)
                   << m.moveEval << std::setw(10) << std::fixed << std::setprecision(3) << m.prior << std::setw(10)
                   << std::fixed << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed
-                  << std::setprecision(3) << m.ucb1 << std::setw(10) << std::fixed << std::setprecision(3) << m.puct
+                  << std::setw(10) << std::fixed << std::setprecision(3) << m.puct
                   << std::setw(10) << status << "\n";
     }
 
@@ -846,15 +824,12 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         int visits;
         double avgVal;
         float prior;
-        double ucb1;
         double puct;
         SolvedStatus solvedStatus;
     };
 
     std::vector<MoveInfo> moves;
     moves.reserve(node->childCapacity);
-
-    double explorationFactor = config_.explorationConstant * std::sqrt(std::log(static_cast<double>(node->visits)));
 
     for (int i = 0; i < node->childCapacity; i++) {
         Node *child = node->children[i];
@@ -874,7 +849,6 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         info.visits = child->visits;
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         info.prior = node->priors[i];
-        info.ucb1 = child->getUCB1Value(explorationFactor);
         info.puct = child->getPUCTValue(config_.explorationConstant, node->visits, node->priors[i]);
         info.solvedStatus = child->solvedStatus;
         moves.push_back(info);
@@ -891,7 +865,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
     int movesConsidered = static_cast<int>(moves.size());
     std::cout << "\n=== Top " << std::min(topN, movesConsidered) << " Moves ===\n";
     std::cout << std::setw(6) << "Move" << std::setw(10) << "Visits" << std::setw(10) << "Avg Val" << std::setw(10)
-              << "Prior" << std::setw(10) << "UCB1" << std::setw(10) << "PUCT" << std::setw(10) << "Status\n";
+              << "Prior" << std::setw(10) << "PUCT" << std::setw(10) << "Status\n";
     std::cout << std::string(66, '-') << "\n";
 
     for (int i = 0; i < std::min(topN, movesConsidered); i++) {
@@ -902,7 +876,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
 
         std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << std::fixed
                   << std::setprecision(3) << m.avgVal << std::setw(10) << std::fixed << std::setprecision(3) << m.prior
-                  << std::setw(10) << std::fixed << std::setprecision(3) << m.ucb1 << std::setw(10) << std::fixed
+                  << std::setw(10) << std::fixed << std::setw(10) << std::fixed
                   << std::setprecision(3) << m.puct << std::setw(10) << status << "\n";
     }
 

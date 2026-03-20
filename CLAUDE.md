@@ -27,7 +27,7 @@ make           # rebuild after changes
 - `Config::keryoPente()` - 15 captures, 3-stone captures
 
 **MCTS** - Monte Carlo Tree Search:
-- UCB1 and PUCT selection policies
+- PUCT selection policies
 - Arena allocator for O(1) tree destruction
 - Minimax backpropagation for solved positions
 

@@ -101,17 +101,17 @@ class MCTS {
         SOLVED_WIN,   // Proven win for the player who made the move
         SOLVED_LOSS   // Proven loss for the player who made the move
     };
-    enum class SearchMode { UCB1, PUCT };
+    enum class SearchMode { PUCT };
     enum class HeuristicMode { UNIFORM, HEURISTIC, NEURAL_NET };
 
     // Configuration parameters
     struct Config {
-        double explorationConstant;                 // UCB1 exploration parameter
+        double explorationConstant;                 // PUCT exploration parameter
         int maxIterations = 10000;                  // Number of MCTS iterations
         int maxSimulationDepth = 200;               // Max playout depth
         size_t arenaSize = MCTSArena::DEFAULT_SIZE; // Arena size in bytes
 
-        SearchMode searchMode = SearchMode::UCB1;
+        SearchMode searchMode = SearchMode::PUCT;
         Evaluator *evaluator = nullptr; // For PUCT priors and value evaluation
         HeuristicMode heuristicMode = HeuristicMode::HEURISTIC;
         uint32_t seed = 0; // 0 = non-deterministic (random_device), non-zero = deterministic seed
@@ -163,7 +163,6 @@ class MCTS {
 
         bool isFullyExpanded() const { return expanded; }                          // HMM
         bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; } // HMM
-        double getUCB1Value(double explorationFactor) const;
         double getPUCTValue(double explorationFactor, int parentVisits, float prior) const;
     };
 
