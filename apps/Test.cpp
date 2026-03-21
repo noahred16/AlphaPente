@@ -2,6 +2,8 @@
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
+#include "Profiler.hpp"
+#include <chrono>
 #include <iostream>
 
 int main(int argc, char *argv[]) {
@@ -65,8 +67,13 @@ int main(int argc, char *argv[]) {
     config.evaluator = &heuristicEvaluator;
 
     std::cout << "TEST: Running MCTS search..." << std::endl;
+    auto t0 = std::chrono::high_resolution_clock::now();
+
     MCTS mcts(config);
     mcts.search(game);
+
+    double totalTime = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t0).count();
+
     mcts.printStats();
     mcts.printBestMoves(10);
     // mcts.printBranch("K10", 10);
@@ -81,6 +88,9 @@ int main(int argc, char *argv[]) {
         mcts.printStats();
         mcts.printBestMoves(10);
     }
+
+    std::cout << "Total time: " << totalTime << "s\n";
+    Profiler::instance().printReport();
 
     return 0;
 }

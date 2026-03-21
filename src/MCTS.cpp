@@ -14,7 +14,7 @@
 // ============================================================================
 
 
-double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits, float prior) const {
+double MCTS::Node::getPUCTValue(double explorationFactor, double sqrtParentVisits, float prior) const {
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
     }
@@ -23,8 +23,7 @@ double MCTS::Node::getPUCTValue(double explorationFactor, int parentVisits, floa
     }
 
     double exploitation = (this->visits == 0) ? 0.0 : this->totalValue / this->visits;
-    double exploration =
-        explorationFactor * prior * std::sqrt(static_cast<double>(parentVisits)) / (1.0 + this->visits);
+    double exploration = explorationFactor * prior * sqrtParentVisits / (1.0 + this->visits);
 
     return exploitation + exploration;
 }
@@ -60,6 +59,7 @@ MCTS::Node *MCTS::allocateNode() {
 }
 
 void MCTS::initNodeChildren(Node *node, int capacity) {
+    PROFILE_SCOPE("MCTS::initNodeChildren");
     if (capacity <= 0) {
         node->children = nullptr;
         node->childCapacity = 0;
@@ -109,9 +109,9 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
         searchPath.push_back(root_);
 
         if (root_->solvedStatus != SolvedStatus::UNSOLVED) {
-            std::cout << "Root node solved status: "
-                      << (root_->solvedStatus == SolvedStatus::SOLVED_WIN ? "WIN" : "LOSS") << " after " << i
-                      << " iterations.\n";
+            // std::cout << "Root node solved status: "
+            //           << (root_->solvedStatus == SolvedStatus::SOLVED_WIN ? "WIN" : "LOSS") << " after " << i
+            //           << " iterations.\n";
             break;
         }
 
@@ -297,69 +297,62 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
 
     assert(node->expanded == false);
     assert(node->evaluated == false);
+    assert(node->childCount == 0);
 
-    // if this is the first node being expanded, we need to allocate all children nodes and set priors
-    if (node->childCount == 0) {
+    // this being the first node being expanded, we need to allocate all children nodes and set priors
 
-        int childCapacity = static_cast<int>(game.getLegalMoves().size());
+    int childCapacity = static_cast<int>(game.getLegalMoves().size());
 
-        // Determine whether to store moves in canonical coordinates
-        bool useCanonical = (config_.canonicalHashDepth > 0 &&
-                             game.getMoveCount() <= config_.canonicalHashDepth);
-        int canonSym = -1;
-        if (useCanonical) {
-            game.getCanonicalHash(canonSym);
-        }
-
-        // policy - vector of pairs of moves and priors, ordered by prior, filtered to legal moves.
-        // std::vector<std::pair<Move, float>> policy value - static evaluation of the position
-        auto [policy, value] = config_.evaluator->evaluate(game);
-        initNodeChildren(node, childCapacity);
-
-        // Arena-allocate moves and priors arrays, then populate from policy
-        node->moves = arena_.allocate<PenteGame::Move>(childCapacity);
-        assert(node->moves != nullptr);
-        node->priors = arena_.allocate<float>(childCapacity);
-        // Mark all priors as unset (-1.0f sentinel). Policy loop overwrites the ones we have data for.
-        std::fill(node->priors, node->priors + childCapacity, -1.0f);
-        // We allocate the full size, even if the policy returns empty. In selection we can do a lazy policy calc.
-        int policyCount = static_cast<int>(policy.size());
-
-        // assert(policyCount == childCapacity);
-
-        for (int i = 0; i < policyCount; i++) {
-            node->moves[i] = policy[i].first;
-
-            // assert moves are legal, between 0 and board size
-            assert(node->moves[i].x >= 0 && node->moves[i].x < PenteGame::BOARD_SIZE);
-            assert(node->moves[i].y >= 0 && node->moves[i].y < PenteGame::BOARD_SIZE);
-
-            node->priors[i] = policy[i].second;
-        }
-
-        // Rotate physical moves to canonical coordinates so transpositions share the same move list
-        if (useCanonical) {
-            const auto &zob = Zobrist::instance();
-            for (int i = 0; i < policyCount; i++) {
-                int cx, cy;
-                zob.applySymToMove(canonSym, node->moves[i].x, node->moves[i].y, cx, cy);
-                node->moves[i] = PenteGame::Move(cx, cy);
-            }
-            node->canonicalSym = static_cast<int8_t>(canonSym);
-        }
-
-        node->value = value;
-        node->expanded = true;
-        node->evaluated = true;
-        node->unprovenCount = childCapacity;
-
-    } else {
-        // this should never happen right?
-        std::cout << "This should never happen: expanding a node that already has children allocated.\n";
-        std::cerr << "Error: Attempting to expand a node that already has children allocated. This indicates a logic "
-                     "error in the MCTS implementation.\n";
-        exit(1);
+    // Determine whether to store moves in canonical coordinates
+    bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                            game.getMoveCount() <= config_.canonicalHashDepth);
+    int canonSym = -1;
+    if (useCanonical) {
+        game.getCanonicalHash(canonSym);
     }
+
+    // policy - vector of pairs of moves and priors, ordered by prior, filtered to legal moves.
+    // std::vector<std::pair<Move, float>> policy value - static evaluation of the position
+    auto [policy, value] = config_.evaluator->evaluate(game);
+    initNodeChildren(node, childCapacity);
+
+    // Arena-allocate moves and priors arrays, then populate from policy
+    node->moves = arena_.allocate<PenteGame::Move>(childCapacity);
+    assert(node->moves != nullptr);
+    node->priors = arena_.allocate<float>(childCapacity);
+    // Mark all priors as unset (-1.0f sentinel). Policy loop overwrites the ones we have data for.
+    std::fill(node->priors, node->priors + childCapacity, -1.0f);
+    // We allocate the full size, even if the policy returns empty. In selection we can do a lazy policy calc.
+    int policyCount = static_cast<int>(policy.size());
+
+    // assert(policyCount == childCapacity); // lazy loading sets policy to 0
+
+    for (int i = 0; i < policyCount; i++) {
+        node->moves[i] = policy[i].first;
+
+        // assert moves are legal, between 0 and board size
+        assert(node->moves[i].x >= 0 && node->moves[i].x < PenteGame::BOARD_SIZE);
+        assert(node->moves[i].y >= 0 && node->moves[i].y < PenteGame::BOARD_SIZE);
+
+        node->priors[i] = policy[i].second;
+    }
+
+    // Rotate physical moves to canonical coordinates so transpositions share the same move list
+    if (useCanonical) {
+        const auto &zob = Zobrist::instance();
+        for (int i = 0; i < policyCount; i++) {
+            int cx, cy;
+            zob.applySymToMove(canonSym, node->moves[i].x, node->moves[i].y, cx, cy);
+            node->moves[i] = PenteGame::Move(cx, cy);
+        }
+        node->canonicalSym = static_cast<int8_t>(canonSym);
+    }
+
+    node->value = value;
+    node->expanded = true;
+    node->evaluated = true;
+    node->unprovenCount = childCapacity;
+
 
     return node;
 }
@@ -425,6 +418,7 @@ void MCTS::backpropagate(Node *node, double result, std::vector<Node *> &searchP
 
 // oh shoot, if a node can have multiple parents then its move index might be wrong?
 int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
+    PROFILE_SCOPE("MCTS::selectBestMoveIndex");
     assert(node != nullptr && node->childCapacity > 0);
     assert(config_.searchMode == SearchMode::PUCT);
     // Note: positionHash may be canonical when canonicalHashDepth > 0, so we skip the hash assert
@@ -451,6 +445,7 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         if (node->canonicalSym >= 0) {
             int currentSym = 0;
             game.getCanonicalHash(currentSym);
+            // assert(currentSym == node->canonicalSym); not true since transposition nodes can be reached from different orientations
             const auto &zob = Zobrist::instance();
             for (int i = 0; i < node->childCapacity; i++) {
                 int cx, cy;
@@ -467,6 +462,7 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
 
     const int cap = (int)node->childCapacity;
     const double explorationFactor = config_.explorationConstant;
+    const double sqrtN = std::sqrt((double)node->visits);
 
     // nextPriorIdx is the last expanded child index and priors are in order from highest to lowest
     int lastExpanded = std::min((int)node->nextPriorIdx, cap - 1);
@@ -480,7 +476,7 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
 
         Node *child = node->children[i];
         // Full PUCT score uses child's stats (N,W/Q) + this action's prior
-        double score = child->getPUCTValue(explorationFactor, node->visits, node->priors[i]);
+        double score = child->getPUCTValue(explorationFactor, sqrtN, node->priors[i]);
 
         if (score > bestValue) {
             bestValue = score;
@@ -501,7 +497,6 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         if (prior <= 0.0f && bestIndex != -1) {
             return bestIndex;
         }
-        const double sqrtN = std::sqrt((double)node->visits);
         const double frontierScore = explorationFactor * node->priors[frontier] * sqrtN; // /(1+0)
 
         if (frontierScore > bestValue) {
@@ -695,7 +690,7 @@ void MCTS::printBestMoves(int topN) const {
         info.moveEval = static_cast<int>(this->game.evaluateMove(physMove));
         info.prior = root_->priors[i];
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        info.puct = child->getPUCTValue(config_.explorationConstant, root_->visits, root_->priors[i]);
+        info.puct = child->getPUCTValue(config_.explorationConstant, std::sqrt((double)root_->visits), root_->priors[i]);
         info.solvedStatus = child->solvedStatus;
         moves.push_back(info);
     }
@@ -790,7 +785,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         info.visits = child->visits;
         info.avgVal = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         info.prior = node->priors[i];
-        info.puct = child->getPUCTValue(config_.explorationConstant, node->visits, node->priors[i]);
+        info.puct = child->getPUCTValue(config_.explorationConstant, std::sqrt((double)node->visits), node->priors[i]);
         info.solvedStatus = child->solvedStatus;
         moves.push_back(info);
     }

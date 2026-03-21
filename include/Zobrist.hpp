@@ -4,6 +4,7 @@
 #include "BitBoard.hpp"
 #include <cstdint>
 #include <random>
+#include "Profiler.hpp"
 
 class Zobrist {
   public:
@@ -29,6 +30,7 @@ class Zobrist {
 
     // Apply symmetry sym to board position (x,y), writing result to (ox,oy)
     void applySymToMove(int sym, int x, int y, int &ox, int &oy) const {
+        PROFILE_SCOPE("Zobrist::applySymToMove");
         int cell = y * BOARD_SIZE + x;
         int tcell = symMap[sym][cell];
         ox = tcell % BOARD_SIZE;

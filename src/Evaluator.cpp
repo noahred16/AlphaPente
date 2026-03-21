@@ -41,6 +41,11 @@ std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> UniformEvaluato
 
 std::vector<std::pair<PenteGame::Move, float>> UniformEvaluator::evaluatePolicy(const PenteGame &game) {
     PROFILE_SCOPE("UniformEvaluator::evaluatePolicy");
+    // deprecated...
+    std::cout << "WARNING: UniformEvaluator::evaluatePolicy called. This should be overridden by lazy policy loading in selection.\n";
+    std::cerr << "Error: UniformEvaluator::evaluatePolicy should not be called directly. This indicates a logic error in the MCTS implementation where lazy policy loading in selection is not working as intended.\n";
+    exit(1);
+
     // get moves from legalMoves
     const auto &legalMoves = game.getLegalMoves();
 
@@ -113,8 +118,14 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     for (const auto &move : legalMoves) {
         float score;
         // if tournament rule and game move num is 3 and move is in the restricted area score is 0, otherwise evaluate normally.
-        if (game.getMoveCount() == 2 && game.getConfig().tournamentRule && std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) {
-            score = 0.0f;
+        if (game.getMoveCount() == 2 && game.getConfig().tournamentRule) {
+            if (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) {
+                score = 0.0f;
+            } else if (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 3 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 3) {
+                score = 1.0f; // for this case, only consider moves in the 7x7 area around the center as good
+            } else {
+                score = 0.0f;
+            }
         } else {
             score = game.evaluateMove(move);
         }

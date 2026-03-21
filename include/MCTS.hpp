@@ -163,7 +163,7 @@ class MCTS {
 
         bool isFullyExpanded() const { return expanded; }                          // HMM
         bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; } // HMM
-        double getPUCTValue(double explorationFactor, int parentVisits, float prior) const;
+        double getPUCTValue(double explorationFactor, double sqrtParentVisits, float prior) const;
     };
 
     // Constructor
