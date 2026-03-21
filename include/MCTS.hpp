@@ -206,7 +206,7 @@ class MCTS {
     void backpropagate(Node *node, double result, std::vector<Node *> &searchPath);
 
     // Helper methods
-    int selectBestMoveIndex(Node *node, const PenteGame &game) const;
+    int selectBestMoveIndex(Node *node, const PenteGame &game, int currentSym) const;
     void updateChildrenPriors(Node *node, const PenteGame &game);
 
     // Arena allocation helpers

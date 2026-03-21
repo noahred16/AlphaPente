@@ -15,6 +15,7 @@
 
 
 double MCTS::Node::getPUCTValue(double explorationFactor, double sqrtParentVisits, float prior) const {
+    PROFILE_SCOPE("MCTS::Node::getPUCTValue");
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
     }
@@ -222,18 +223,22 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searc
     PROFILE_SCOPE("MCTS::select");
 
     while (node->evaluated && !node->isTerminal()) {
-        int best = selectBestMoveIndex(node, game);
+        // Always recompute currentSym from the live game state — never use node->canonicalSym,
+        // since transposition nodes may be reached from different orientations.
+        // Compute once here and pass to selectBestMoveIndex to avoid a second getCanonicalHash call.
+        int currentSym = -1;
+        if (node->canonicalSym >= 0) {
+            game.getCanonicalHash(currentSym);
+        }
+
+        int best = selectBestMoveIndex(node, game, currentSym);
         PenteGame::Move canonMove = node->moves[best];
         PenteGame::Move physMove = canonMove;
 
         assert(node->moves != nullptr);
 
         // Un-rotate canonical moves to physical coords before making the move.
-        // Always recompute currentSym from the live game state — never use node->canonicalSym,
-        // since transposition nodes may be reached from different orientations.
-        if (node->canonicalSym >= 0) {
-            int currentSym = 0;
-            game.getCanonicalHash(currentSym);
+        if (currentSym >= 0) {
             const auto &zob = Zobrist::instance();
             int px, py;
             zob.applyInverseSym(currentSym, canonMove.x, canonMove.y, px, py);
@@ -242,6 +247,18 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searc
 
         assert(physMove.x >= 0 && physMove.x < PenteGame::BOARD_SIZE);
         assert(physMove.y >= 0 && physMove.y < PenteGame::BOARD_SIZE);
+
+#ifndef NDEBUG
+        // Sanity check: the physical move decoded from canonical coords must be legal.
+        // If applyInverseSym produces an out-of-sync coord (e.g. due to a broken symmetry
+        // transform or a canonical depth boundary bug), this catches it before the move is made.
+        {
+            const auto &legalMoves = game.getLegalMoves();
+            bool isLegal = std::any_of(legalMoves.begin(), legalMoves.end(),
+                [&](const PenteGame::Move &m){ return m.x == physMove.x && m.y == physMove.y; });
+            assert(isLegal && "physMove decoded from canonical moves[] is not a legal move — sym mismatch?");
+        }
+#endif
 
         game.makeMove(physMove.x, physMove.y);
 
@@ -281,6 +298,20 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searc
         }
 
         assert(child != nullptr);
+
+#ifndef NDEBUG
+        // Sanity check: a child's stored hash must match the actual game state after making physMove.
+        // A mismatch means the TT keyed this child to a different position than the one we just reached,
+        // which would cause stats to bleed between unrelated positions.
+        if (child->positionHash != 0) {
+            int verifySym = -1;
+            bool verifyCanonical = (config_.canonicalHashDepth > 0 &&
+                                    game.getMoveCount() <= config_.canonicalHashDepth);
+            uint64_t expectedHash = verifyCanonical ? game.getCanonicalHash(verifySym) : game.getHash();
+            assert(child->positionHash == expectedHash &&
+                   "Child positionHash doesn't match current game state — TT entry maps to wrong position");
+        }
+#endif
 
         node = child;
         searchPath.push_back(node);
@@ -416,8 +447,7 @@ void MCTS::backpropagate(Node *node, double result, std::vector<Node *> &searchP
 // Helper Methods
 // ============================================================================
 
-// oh shoot, if a node can have multiple parents then its move index might be wrong?
-int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
+int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game, int currentSym) const {
     PROFILE_SCOPE("MCTS::selectBestMoveIndex");
     assert(node != nullptr && node->childCapacity > 0);
     assert(config_.searchMode == SearchMode::PUCT);
@@ -425,6 +455,7 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
 
     // Lazy policy load: -1.0f sentinel means priors weren't populated during expand
     if (node->priors[0] < 0.0f) {
+        PROFILE_SCOPE("MCTS::selectBestMoveIndex::LazyPolicyLoad");
         std::vector<std::pair<PenteGame::Move, float>> movePriors = config_.evaluator->evaluatePolicy(game);
 
         int priorsSize = static_cast<int>(movePriors.size());
@@ -442,9 +473,8 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
         }
 
         // evaluatePolicy returns physical moves; rotate to canonical if node uses canonical coords
-        if (node->canonicalSym >= 0) {
-            int currentSym = 0;
-            game.getCanonicalHash(currentSym);
+        // currentSym was already computed by the caller (select), so no need to call getCanonicalHash again.
+        if (currentSym >= 0) {
             // assert(currentSym == node->canonicalSym); not true since transposition nodes can be reached from different orientations
             const auto &zob = Zobrist::instance();
             for (int i = 0; i < node->childCapacity; i++) {
@@ -453,6 +483,8 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game) const {
                 node->moves[i] = PenteGame::Move(cx, cy);
             }
         }
+    } else {
+        PROFILE_SCOPE("MCTS::selectBestMoveIndex::PolicyAlreadySet");
     }
 
     // base case
