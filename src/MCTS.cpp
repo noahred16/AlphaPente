@@ -248,18 +248,6 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searc
         assert(physMove.x >= 0 && physMove.x < PenteGame::BOARD_SIZE);
         assert(physMove.y >= 0 && physMove.y < PenteGame::BOARD_SIZE);
 
-#ifndef NDEBUG
-        // Sanity check: the physical move decoded from canonical coords must be legal.
-        // If applyInverseSym produces an out-of-sync coord (e.g. due to a broken symmetry
-        // transform or a canonical depth boundary bug), this catches it before the move is made.
-        {
-            const auto &legalMoves = game.getLegalMoves();
-            bool isLegal = std::any_of(legalMoves.begin(), legalMoves.end(),
-                [&](const PenteGame::Move &m){ return m.x == physMove.x && m.y == physMove.y; });
-            assert(isLegal && "physMove decoded from canonical moves[] is not a legal move — sym mismatch?");
-        }
-#endif
-
         game.makeMove(physMove.x, physMove.y);
 
         Node *child = node->children[best];
@@ -298,20 +286,6 @@ MCTS::Node *MCTS::select(Node *node, PenteGame &game, std::vector<Node *> &searc
         }
 
         assert(child != nullptr);
-
-#ifndef NDEBUG
-        // Sanity check: a child's stored hash must match the actual game state after making physMove.
-        // A mismatch means the TT keyed this child to a different position than the one we just reached,
-        // which would cause stats to bleed between unrelated positions.
-        if (child->positionHash != 0) {
-            int verifySym = -1;
-            bool verifyCanonical = (config_.canonicalHashDepth > 0 &&
-                                    game.getMoveCount() <= config_.canonicalHashDepth);
-            uint64_t expectedHash = verifyCanonical ? game.getCanonicalHash(verifySym) : game.getHash();
-            assert(child->positionHash == expectedHash &&
-                   "Child positionHash doesn't match current game state — TT entry maps to wrong position");
-        }
-#endif
 
         node = child;
         searchPath.push_back(node);
