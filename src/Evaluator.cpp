@@ -118,6 +118,7 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
     for (const auto &move : legalMoves) {
         float score;
         // if tournament rule and game move num is 3 and move is in the restricted area score is 0, otherwise evaluate normally.
+        // TODO selection needs to account for tournament rule
         if (game.getMoveCount() == 2 && game.getConfig().tournamentRule) {
             if (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) {
                 score = 0.0f;
@@ -127,7 +128,8 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
                 score = 0.0f;
             }
         } else {
-            score = game.evaluateMove(move);
+            // score = game.evaluateMove(move);
+            score = 1.0f;
         }
         policyScores.emplace_back(move, score);
         totalScore += score;
@@ -170,5 +172,5 @@ float HeuristicEvaluator::evaluateValue(const PenteGame &game) {
     if (value != 0.0f) {
         return value;
     }
-    return rollout(game);
+    return 0;
 }
