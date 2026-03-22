@@ -70,8 +70,6 @@ class PenteGame {
     int checkAndCapture(int x, int y);
     int countConsecutive(const BitBoard &stones, int x, int y, int dx, int dy) const;
 
-    std::vector<Move> legalMovesVector;
-    std::array<size_t, BOARD_SIZE * BOARD_SIZE> legalMoveIndex; // -1 = not present
     std::vector<Move> promisingMovesVector;                     // empty squares within distance 1 of any stone
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> promisingMoveIndex;
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1); // Max size_t value
@@ -85,43 +83,12 @@ class PenteGame {
             promisingMovesVector.emplace_back(x, y);
             promisingMoveIndex[pos] = promisingMovesVector.size() - 1;
         }
-        if (legalMoveIndex[pos] == INVALID_INDEX) {
-            legalMovesVector.emplace_back(x, y);
-            legalMoveIndex[pos] = legalMovesVector.size() - 1;
-        }
     }
 
     // Remove a legal move - O(1). Called when a stone is placed.
     void clearLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
-        size_t legalIdx = legalMoveIndex[pos];
         size_t promisingIdx = promisingMoveIndex[pos];
-
-        if (legalIdx == INVALID_INDEX) {
-            std::cerr << "Warning: Attempting to clear legal move that is not marked as legal: (" << GameUtils::displayMove(x, y)
-                      << ") from " << GameUtils::displayMove(7, 7) << "\n";
-            // game utils print
-            std::cout << "Current legal moves:\n";
-            for (const auto &move : getLegalMoves()) {
-                std::cout << "(" << GameUtils::displayMove(move.x, move.y) << ") ";
-            }
-            std::cout << "\n";
-
-            GameUtils::printBoard(*this);
-            // curr move
-
-            // return;
-        }
-
-        assert(legalIdx != INVALID_INDEX);
-        size_t lastLegalIdx = legalMovesVector.size() - 1;
-        if (legalIdx != lastLegalIdx) {
-            Move lastMove = legalMovesVector.back();
-            legalMovesVector[legalIdx] = lastMove;
-            legalMoveIndex[encodePos(lastMove.x, lastMove.y)] = legalIdx;
-        }
-        legalMovesVector.pop_back();
-        legalMoveIndex[pos] = INVALID_INDEX;
 
         // Remove from promising
         if (promisingIdx != INVALID_INDEX) {
@@ -137,6 +104,7 @@ class PenteGame {
 
         // Dilate: add empty distance-1 neighbors to promising
         static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+        // TODO Dilate more aggressively, and fix known bug
         for (int i = 0; i < 8; i++) {
             int nx = x + dirs[i][0], ny = y + dirs[i][1];
             if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {

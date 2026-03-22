@@ -15,17 +15,6 @@ void PenteGame::reset() {
     blackStones.clear();
     whiteStones.clear();
 
-    // add all positions as legal moves
-    legalMovesVector.clear();
-    legalMovesVector.reserve(361);
-    legalMoveIndex.fill(INVALID_INDEX);
-    for (int y = 0; y < BOARD_SIZE; y++) {
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            legalMovesVector.emplace_back(x, y);
-            legalMoveIndex[encodePos(x, y)] = legalMovesVector.size() - 1;
-        }
-    }
-
     // promising starts with only the center (the only valid first move)
     promisingMovesVector.clear();
     promisingMovesVector.reserve(361);
@@ -205,12 +194,16 @@ bool PenteGame::isLegalMove(int x, int y) const {
         return x == BOARD_SIZE / 2 && y == BOARD_SIZE / 2;
     }
 
-    return legalMoveIndex[encodePos(x, y)] != INVALID_INDEX;
+    return true;
+    // TODO implement proper valid move check
+    // return promisingMovesVector[encodePos(x, y)] != INVALID_INDEX;
 }
 
 const std::vector<PenteGame::Move> &PenteGame::getLegalMoves() const {
     PROFILE_SCOPE("PenteGame::getLegalMoves");
-    return legalMovesVector;
+    // assumption that we can treat promising moves as legal moves. 
+    // done to reduce search space.
+    return promisingMovesVector;
 }
 
 PenteGame::Player PenteGame::getWinner() const {
@@ -313,8 +306,6 @@ void PenteGame::syncFrom(const PenteGame &other) {
     config_ = other.config_;
     blackStones = other.blackStones;
     whiteStones = other.whiteStones;
-    legalMovesVector = other.legalMovesVector;
-    legalMoveIndex = other.legalMoveIndex;
     promisingMovesVector = other.promisingMovesVector;
     promisingMoveIndex = other.promisingMoveIndex;
     currentPlayer = other.currentPlayer;

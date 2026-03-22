@@ -306,6 +306,8 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
 
     // this being the first node being expanded, we need to allocate all children nodes and set priors
 
+    // Cap branching factor to the number of promising moves (cells near existing stones).
+    // All legal moves are still valid candidates for the evaluator, but PUCT only considers this many.
     int childCapacity = static_cast<int>(game.getLegalMoves().size());
 
     // Determine whether to store moves in canonical coordinates
@@ -434,14 +436,11 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game, int currentSym)
 
         int priorsSize = static_cast<int>(movePriors.size());
         int childCapSize = static_cast<int>(node->childCapacity);
-        if (priorsSize != childCapSize) {
-            std::cerr << "FATAL ERROR: Policy size does not match node's child capacity during lazy policy load.\n";
-            std::cerr << "Policy size: " << priorsSize << ", Child capacity: " << childCapSize << "\n";
-            GameUtils::printGameState(game);
-        }
-        assert(priorsSize == childCapSize);
+        // Policy may return more moves than childCapacity (e.g. all legal vs capped promising).
+        // Take only the first childCapacity moves; evaluatePolicy sorts best-first so these are top-K.
+        int count = std::min(priorsSize, childCapSize);
 
-        for (int i = 0; i < node->childCapacity; i++) {
+        for (int i = 0; i < count; i++) {
             node->moves[i] = movePriors[i].first;
             node->priors[i] = movePriors[i].second;
         }
