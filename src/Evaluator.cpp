@@ -172,5 +172,6 @@ float HeuristicEvaluator::evaluateValue(const PenteGame &game) {
     if (value != 0.0f) {
         return value;
     }
-    return 0;
+    // return 0;
+    return rollout(game);
 }

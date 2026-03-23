@@ -103,9 +103,15 @@ class PenteGame {
         }
 
         // Dilate: add empty distance-1 neighbors to promising
-        static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-        // TODO Dilate more aggressively, and fix known bug
-        for (int i = 0; i < 8; i++) {
+        // static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+        // TODO Dilate more aggressively, and fix known bug. should be same as before but go out 2 for wasd plus diagnonals
+        static const int dirs[16][2] = {{-2, -2},       {-2, 0},       {-2, 2},       
+                                                {-1, -1} , {-1, 0},       {-1, 1},       
+                                        {0, -2}, {0, -1},               {0, 1}, {0, 2}, 
+                                                {1, -1}, {1, 0},        {1, 1},        
+                                        {2, -2},       {2, 0},       {2, 2}};
+        // for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             int nx = x + dirs[i][0], ny = y + dirs[i][1];
             if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
                 if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
