@@ -919,3 +919,156 @@ TEST_CASE("Canonical hash with asymmetric moves") {
     uint64_t hash2 = game2.getCanonicalHash(sym2);
     CHECK(hash1 == hash2);
 }
+
+
+/*
+TWO SCENARIOS LEADING TO DIFFERENT NUMBER OF PROMISING MOVES!!
+   A B C D E F G H J K L M N O P Q R S T 
+19 · · · · · · · · · · · · · · · · · · · 19
+18 · · · · · · · · · · · · · · · · · · · 18
+17 · · · · · · · · · · · · · · · · · · · 17
+16 · · · · · · · · · · · · · · · · · · · 16
+15 · · · · · · · · · · · · · · · · · · · 15
+14 · · · · · · · · · · · · · · · · · · · 14
+13 · · · · · · · · · · · · · · · · · · · 13
+12 · · · · · · · · · · · · · · · · · · · 12
+11 · · · · · · · ·       · · · · · · · · 11
+10 · · · · · ·       ○   · · · · · · · · 10
+ 9 · · · · · ·   ●   ●   · · · · · · · · 9
+ 8 · · · · · ·     ● ○   · · · · · · · · 8
+ 7 · · · · · · ·     ○   · · · · · · · · 7
+ 6 · · · · · · · ·       · · · · · · · · 6
+ 5 · · · · · · · · · · · · · · · · · · · 5
+ 4 · · · · · · · · · · · · · · · · · · · 4
+ 3 · · · · · · · · · · · · · · · · · · · 3
+ 2 · · · · · · · · · · · · · · · · · · · 2
+ 1 · · · · · · · · · · · · · · · · · · · 1
+   A B C D E F G H J K L M N O P Q R S T 
+0/10 Black ○, 0/10 White ●, Current player: Black
+
+
+   A B C D E F G H J K L M N O P Q R S T 
+19 · · · · · · · · · · · · · · · · · · · 19
+18 · · · · · · · · · · · · · · · · · · · 18
+17 · · · · · · · · · · · · · · · · · · · 17
+16 · · · · · · · · · · · · · · · · · · · 16
+15 · · · · · · · · · · · · · · · · · · · 15
+14 · · · · · · · · · · · · · · · · · · · 14
+13 · · · · · · · · · · · · · · · · · · · 13
+12 · · · · · · · · · · · · · · · · · · · 12
+11 · · · · · ·           · · · · · · · · 11
+10 · · · · · ·   ● ● ○   · · · · · · · · 10
+ 9 · · · · · ·       ●   · · · · · · · · 9
+ 8 · · · · · · · ·   ○   · · · · · · · · 8
+ 7 · · · · · · · ·   ○   · · · · · · · · 7
+ 6 · · · · · · · ·       · · · · · · · · 6
+ 5 · · · · · · · · · · · · · · · · · · · 5
+ 4 · · · · · · · · · · · · · · · · · · · 4
+ 3 · · · · · · · · · · · · · · · · · · · 3
+ 2 · · · · · · · · · · · · · · · · · · · 2
+ 1 · · · · · · · · · · · · · · · · · · · 1
+   A B C D E F G H J K L M N O P Q R S T 
+2/10 Black ○, 0/10 White ●, Current player: Black
+*/
+TEST_CASE("Inconsistent promising move count") {
+    // case_1 = [K10, K9, K8, J8, K7, H9]
+    // case_2 = [K10, K9, K8, J10, K7, G10]
+    const char* case1[] = {"K10", "K9", "K8", "J8", "K7", "H9", "G10"};
+    const char* case2[] = {"K10", "K9", "K8", "J10", "K7", "H10", "G10"};
+    const char* correct_case[] = {"K10", "K9", "K8", "G10", "K7"};
+
+    PenteGame game1;
+    game1.reset();
+    PenteGame game2;
+    game2.reset();
+    PenteGame correctGame;
+    correctGame.reset();
+
+    for (const auto& move : case1) {
+        game1.makeMove(move);
+    }
+
+    for (const auto& move : case2) {
+        game2.makeMove(move);
+    }
+
+    for (const auto& move : correct_case) {
+        correctGame.makeMove(move);
+    }
+
+    // print board states for debugging using the utils
+    /*
+    GameUtils::printBoard(game1);
+    GameUtils::printBoard(game2);
+    GameUtils::printBoard(correctGame);
+    */
+
+    // in both cases, the number of promising moves should match. but they don't!
+    // can use get legal moves to get count. (legal moves == promising moves in current implementation)
+    auto legal1 = game1.getLegalMoves();
+    auto legal2 = game2.getLegalMoves();
+    auto legalCorrect = correctGame.getLegalMoves();
+
+    // print moves to ensure order is correct as well
+    /*
+    std::cout << "Legal moves for case 1: ";
+    for (const auto& m : legal1) {
+        std::cout << GameUtils::displayMove(m.x, m.y) << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "Legal moves for case 2: ";
+    for (const auto& m : legal2) {
+        std::cout << GameUtils::displayMove(m.x, m.y) << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "Legal moves for correct case: ";
+    for (const auto& m : legalCorrect) {
+        std::cout << GameUtils::displayMove(m.x, m.y) << " ";
+    }
+    std::cout << std::endl;
+    */
+
+    // confirm correct size
+    CHECK(legal1.size() == legalCorrect.size());
+    CHECK(legal2.size() == legalCorrect.size());
+}
+
+// TODO check opening move rule (tournament rule)
+TEST_CASE("Check tournament rule legal move") {
+    PenteGame game;
+    game.reset();
+    game.makeMove("K10");  // First move must be center
+
+    // num of legal moves for second player depends on the enum PromisingMoveConsideration moveConsideration { Chebyshev1, Chebyshev2, Chebyshev2ExcludingKnight };
+    // should be either 8, 24, or 16 just check that its one of those.
+    int legalCount = game.getLegalMoves().size();
+    bool isExpectedLegalCount = (legalCount == 8 || legalCount == 24 || legalCount == 16);
+    CHECK(isExpectedLegalCount == true);
+
+    // L9 is a common legal move after K10
+    game.makeMove("L9");
+    // check now that the total is always 
+    // GameUtils::printBoard(game);
+    // assert num of legal moves is 24
+    legalCount = game.getLegalMoves().size();
+    CHECK(legalCount == 24);
+
+    // 3rd move should be refreshed.
+    game.makeMove("N10");
+    // GameUtils::printBoard(game);
+
+    legalCount = game.getLegalMoves().size();
+    CHECK(legalCount == 32);
+    
+    game.makeMove("M7");
+    legalCount = game.getLegalMoves().size();
+    CHECK(legalCount == 40);
+}
+
+
+
+// todo check that it handles conflicts too
+
+
+
+

@@ -27,13 +27,47 @@ class PenteGame {
         bool tournamentRule = true;  // 3rd move restriction
         uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
 
+        enum class PromisingMoveConsideration { Chebyshev1, Chebyshev2, Chebyshev2ExcludingKnight };
+        // PromisingMoveConsideration moveConsideration = PromisingMoveConsideration::Chebyshev1;
+        PromisingMoveConsideration moveConsideration = PromisingMoveConsideration::Chebyshev2ExcludingKnight;
+
         // Factory methods for presets
         static Config pente() { return Config{}; }
         static Config gomoku() { return Config{10, false, false, false}; }
         static Config keryoPente() { return Config{15, true, true, true}; }
-    };
 
-    enum Player : uint8_t { NONE = 0, BLACK = 1, WHITE = 2 };
+        // 3 types of move considerations (Chebyshev_d = 1, d = 2, or d = 2 but excluding knight movement type distances up 2 right 1 and 2 right 1)
+        
+
+        // Centralized logic for offsets
+        struct Offset { int dx, dy; };
+        static const std::vector<Offset>& getPromisingOffsets(PromisingMoveConsideration type) {
+            static const std::vector<Offset> ch1 = {
+                {-1,-1}, {0,-1}, {1,-1}, {-1,0}, {1,0}, {-1,1}, {0,1}, {1,1}
+            };
+            static const std::vector<Offset> ch2 = {
+                {-2,-2}, {-1,-2}, {0,-2}, {1,-2}, {2,-2},
+                {-2,-1}, {-1,-1}, {0,-1}, {1,-1}, {2,-1},
+                {-2, 0}, {-1, 0},          {1, 0}, {2, 0},
+                {-2, 1}, {-1, 1}, {0, 1}, {1, 1}, {2, 1},
+                {-2, 2}, {-1, 2}, {0, 2}, {1, 2}, {2, 2}
+            };
+            static const std::vector<Offset> ch2NoKnight = {
+                {-2,-2},          {-2, 0},          {-2, 2},
+                        {-1,-1}, {-1, 0}, {-1, 1},
+                { 0,-2}, { 0,-1},          { 0, 1}, { 0, 2},
+                        { 1,-1}, { 1, 0}, { 1, 1},
+                { 2,-2},          { 2, 0},          { 2, 2}
+            };
+
+            switch(type) {
+                case PromisingMoveConsideration::Chebyshev1: return ch1;
+                case PromisingMoveConsideration::Chebyshev2: return ch2;
+                case PromisingMoveConsideration::Chebyshev2ExcludingKnight: return ch2NoKnight;
+                default: return ch1;
+            }
+        }
+    };
 
     struct Move {
         uint8_t x, y; // 2 bytes total, sufficient for 19x19
@@ -42,12 +76,7 @@ class PenteGame {
         Move(int x_, int y_) : x(static_cast<uint8_t>(x_)), y(static_cast<uint8_t>(y_)) {}
     };
 
-    // struct MoveInfo {
-    //     Move move;
-    //     uint16_t captureMask; // 16 bits: 8 directions * 2 bits each
-    //     Player player;
-    //     uint8_t totalCapturedStones; // Helpful for quick score updates
-    // };
+    enum Player : uint8_t { NONE = 0, BLACK = 1, WHITE = 2 };
 
   private:
     Config config_;
@@ -71,10 +100,49 @@ class PenteGame {
     int countConsecutive(const BitBoard &stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> promisingMovesVector;                     // empty squares within distance 1 of any stone
+    mutable std::vector<Move> tournamentRulePerimeterBuffer;    // filtered perimeter for move 3 rule
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> promisingMoveIndex;
+    const Config::Offset* offsetData_;                         // raw pointer into static offset array, cached at construction
+    int offsetCount_;                                          // number of offsets (compile-time constant per config)
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1); // Max size_t value
 
+    // how does the order work in the vector? 
     size_t encodePos(int x, int y) const { return static_cast<size_t>(y * BOARD_SIZE + x); }
+
+    // Hard-code tournament perimeter for move 3 (first move is always center),
+    // then filter out occupied perimeter squares for the current position.
+    const std::vector<Move> &getTournamentRulePerimeter() const {
+        static const std::vector<Move> allPerimeterMoves = [] {
+            std::vector<Move> out;
+            int center = BOARD_SIZE / 2;
+            int dist = 3;
+
+            // Generate the boundary of the 7x7 square (distance 3 from center)
+            for (int i = -dist; i <= dist; ++i) {
+                // Top and bottom rows
+                out.emplace_back(center + i, center - dist);
+                out.emplace_back(center + i, center + dist);
+                // Left and right columns (skip corners already added)
+                if (i > -dist && i < dist) {
+                    out.emplace_back(center - dist, center + i);
+                    out.emplace_back(center + dist, center + i);
+                }
+            }
+            return out;
+        }();
+
+        tournamentRulePerimeterBuffer.clear();
+        tournamentRulePerimeterBuffer.reserve(allPerimeterMoves.size());
+
+        for (const Move &move : allPerimeterMoves) {
+            if (!blackStones.getBitUnchecked(move.x, move.y) &&
+                !whiteStones.getBitUnchecked(move.x, move.y)) {
+                tournamentRulePerimeterBuffer.push_back(move);
+            }
+        }
+
+        return tournamentRulePerimeterBuffer;
+    }
 
     // Add a legal move - O(1). Called when captured stones are returned to the board.
     void setLegalMove(int x, int y) {
@@ -87,6 +155,7 @@ class PenteGame {
 
     // Remove a legal move - O(1). Called when a stone is placed.
     void clearLegalMove(int x, int y) {
+        PROFILE_SCOPE("PenteGame::clearLegalMove");
         size_t pos = encodePos(x, y);
         size_t promisingIdx = promisingMoveIndex[pos];
 
@@ -103,16 +172,9 @@ class PenteGame {
         }
 
         // Dilate: add empty distance-1 neighbors to promising
-        // static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-        // TODO Dilate more aggressively, and fix known bug. should be same as before but go out 2 for wasd plus diagnonals
-        static const int dirs[16][2] = {{-2, -2},       {-2, 0},       {-2, 2},       
-                                                {-1, -1} , {-1, 0},       {-1, 1},       
-                                        {0, -2}, {0, -1},               {0, 1}, {0, 2}, 
-                                                {1, -1}, {1, 0},        {1, 1},        
-                                        {2, -2},       {2, 0},       {2, 2}};
-        // for (int i = 0; i < 8; i++) {
-        for (int i = 0; i < 16; i++) {
-            int nx = x + dirs[i][0], ny = y + dirs[i][1];
+        for (int i = 0; i < offsetCount_; i++) { const auto& offset = offsetData_[i];
+            int nx = x + offset.dx, ny = y + offset.dy;
+            // int nx = x + dirs[i][0], ny = y + dirs[i][1];
             if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
                 if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
                     size_t npos = encodePos(nx, ny);
@@ -124,6 +186,45 @@ class PenteGame {
             }
         }
     }
+
+    void recalculatePromisingMoves() {
+        PROFILE_SCOPE("PenteGame::recalculatePromisingMoves");
+        // 1. Reset state without reallocating vector capacity
+        promisingMovesVector.clear();
+        promisingMoveIndex.fill(INVALID_INDEX);
+
+        // 2. Combine both bitboards to get all occupied squares
+        BitBoard occupied = blackStones | whiteStones;
+
+        // 3. Use the optimized bit-scanner to iterate only over stones
+        occupied.forEachSetBit([&](int cell) {
+            // Convert the flat bit index back to coordinates
+            int x = cell % BOARD_SIZE;
+            int y = cell / BOARD_SIZE;
+
+            // Apply dilation for this stone
+            for (int i = 0; i < offsetCount_; i++) { const auto& off = offsetData_[i];
+                int nx = x + off.dx;
+                int ny = y + off.dy;
+
+                // Bounds check
+                if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
+                    // If the neighbor is empty
+                    if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
+                        size_t npos = encodePos(nx, ny);
+                        
+                        // If not already added to the promising list
+                        if (promisingMoveIndex[npos] == INVALID_INDEX) {
+                            promisingMovesVector.emplace_back(nx, ny);
+                            promisingMoveIndex[npos] = promisingMovesVector.size() - 1;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    void patchPromisingMovesAfterCaptures(const BitBoard &capturedBits);
 
   public:
     PenteGame(const Config &config = Config::pente());

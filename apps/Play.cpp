@@ -12,9 +12,12 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--verbose" || std::string(argv[i]) == "-v") VERBOSE = true;
     }
-    std::cout << "Playing Pente: No-Canon (Black) vs Canon-10 (White)..." << std::endl;
+    std::cout << "Playing Pente: No-Canon (Black) vs Canon-10 (White)... verbose=" << (VERBOSE ? "ON" : "OFF") << "\n\n";
 
-    PenteGame game(PenteGame::Config::pente());
+    PenteGame::Config penteConfig = PenteGame::Config::pente();
+    penteConfig.moveConsideration = PenteGame::Config::PromisingMoveConsideration::Chebyshev2;
+
+    PenteGame game(penteConfig);
     game.reset();
 
     const int warmupIterations = 1000000;
