@@ -50,8 +50,6 @@ MCTS::Node *MCTS::allocateNode() {
     assert(reinterpret_cast<std::uintptr_t>(node) % alignof(Node) == 0);
 
     if (!node) {
-        std::cerr << "FATAL: Arena out of memory! Used: " << arena_.bytesUsed() << " / " << arena_.totalSize()
-                  << " bytes\n";
         throw std::bad_alloc();
     }
     // Zero-initialize the node (placement new with default constructor)
@@ -69,7 +67,6 @@ void MCTS::initNodeChildren(Node *node, int capacity) {
 
     node->children = arena_.allocate<Node *>(capacity);
     if (!node->children) {
-        std::cerr << "FATAL: Arena out of memory for children array!\n";
         throw std::bad_alloc();
     }
     std::memset(node->children, 0, sizeof(Node *) * capacity);
@@ -140,7 +137,15 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
             totalSimulations_++;
             continue;
         }
-        node = expand(node, localGame);
+        try {
+            node = expand(node, localGame);
+        } catch (const std::bad_alloc &) {
+            std::cerr << "\nOut of memory after " << totalSimulations_ << " simulations ("
+                      << arena_.utilizationPercent() << "% of "
+                      << arena_.totalSize() / (1024.0 * 1024.0) << " MB arena used).\n"
+                      << "Returning best move found so far.\n";
+            break;
+        }
 
         // Simulation: play out the game randomly, only if not already solved
         double result = simulate(node, localGame);
