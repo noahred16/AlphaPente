@@ -100,6 +100,8 @@ int PenteGame::checkAndCapture(int x, int y) {
 
     static const int dirs[8][2] = {{0, 1}, {1, 0}, {1, 1}, {-1, 1}, {0, -1}, {-1, 0}, {-1, -1}, {1, -1}};
 
+    BitBoard capturedBits;
+
     // Hoist config check outside loop for better branch prediction
     if (config_.keryoRules) {
         // Keryo path: check 3-stone captures first, then fall back to 2-stone
@@ -126,9 +128,9 @@ int PenteGame::checkAndCapture(int x, int y) {
                     hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
                     hash_ ^= zob.stoneKeys[oppIdx][y3 * BOARD_SIZE + x3];
 
-                    setLegalMove(x1, y1);
-                    setLegalMove(x2, y2);
-                    setLegalMove(x3, y3);
+                    capturedBits.setBitUnchecked(x1, y1);
+                    capturedBits.setBitUnchecked(x2, y2);
+                    capturedBits.setBitUnchecked(x3, y3);
 
                     totalCapturedStones += 3;
                     continue;
@@ -145,8 +147,8 @@ int PenteGame::checkAndCapture(int x, int y) {
                     hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
                     hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
 
-                    setLegalMove(x1, y1);
-                    setLegalMove(x2, y2);
+                    capturedBits.setBitUnchecked(x1, y1);
+                    capturedBits.setBitUnchecked(x2, y2);
 
                     totalCapturedStones += 2;
                 }
@@ -172,8 +174,8 @@ int PenteGame::checkAndCapture(int x, int y) {
                     hash_ ^= zob.stoneKeys[oppIdx][y1 * BOARD_SIZE + x1];
                     hash_ ^= zob.stoneKeys[oppIdx][y2 * BOARD_SIZE + x2];
 
-                    setLegalMove(x1, y1);
-                    setLegalMove(x2, y2);
+                    capturedBits.setBitUnchecked(x1, y1);
+                    capturedBits.setBitUnchecked(x2, y2);
 
                     totalCapturedStones += 2;
                 }
@@ -181,7 +183,63 @@ int PenteGame::checkAndCapture(int x, int y) {
         }
     }
 
+    if (totalCapturedStones > 0) {
+        patchPromisingMovesAfterCaptures(capturedBits);
+    }
+
     return totalCapturedStones;
+}
+
+void PenteGame::patchPromisingMovesAfterCaptures(const BitBoard &capturedBits) {
+    PROFILE_SCOPE("PenteGame::patchPromisingMovesAfterCaptures");
+    // Build the set of cells to re-evaluate: captured positions + their dilation neighborhoods
+    BitBoard toCheck;
+    capturedBits.forEachSetBit([&](int cell) {
+        int cx = cell % BOARD_SIZE, cy = cell / BOARD_SIZE;
+        toCheck.setBitUnchecked(cx, cy);
+        for (int i = 0; i < config_.numOffsets; i++) {
+            int nx = cx + dirs[i][0], ny = cy + dirs[i][1];
+            if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE)
+                toCheck.setBitUnchecked(nx, ny);
+        }
+    });
+
+    toCheck.forEachSetBit([&](int cell) {
+        int x = cell % BOARD_SIZE, y = cell / BOARD_SIZE;
+
+        // Occupied cells are never promising
+        if (blackStones.getBitUnchecked(x, y) || whiteStones.getBitUnchecked(x, y)) return;
+
+        // Check if this empty cell has at least one occupied neighbor within dilation distance
+        bool hasNeighbor = false;
+        for (int i = 0; i < config_.numOffsets; i++) {
+            int nx = x + dirs[i][0], ny = y + dirs[i][1];
+            if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
+                if (blackStones.getBitUnchecked(nx, ny) || whiteStones.getBitUnchecked(nx, ny)) {
+                    hasNeighbor = true;
+                    break;
+                }
+            }
+        }
+
+        size_t pos = encodePos(x, y);
+        bool inPromising = promisingMoveIndex[pos] != INVALID_INDEX;
+
+        if (hasNeighbor && !inPromising) {
+            promisingMovesVector.emplace_back(x, y);
+            promisingMoveIndex[pos] = promisingMovesVector.size() - 1;
+        } else if (!hasNeighbor && inPromising) {
+            size_t idx = promisingMoveIndex[pos];
+            size_t lastIdx = promisingMovesVector.size() - 1;
+            if (idx != lastIdx) {
+                Move last = promisingMovesVector.back();
+                promisingMovesVector[idx] = last;
+                promisingMoveIndex[encodePos(last.x, last.y)] = idx;
+            }
+            promisingMovesVector.pop_back();
+            promisingMoveIndex[pos] = INVALID_INDEX;
+        }
+    });
 }
 
 bool PenteGame::isLegalMove(int x, int y) const {
@@ -201,6 +259,9 @@ bool PenteGame::isLegalMove(int x, int y) const {
 
 const std::vector<PenteGame::Move> &PenteGame::getLegalMoves() const {
     PROFILE_SCOPE("PenteGame::getLegalMoves");
+    if (config_.tournamentRule && moveCount == 2 && blackStones.getBit(9, 9)) {
+        return getTournamentRulePerimeter();
+    }
     // assumption that we can treat promising moves as legal moves. 
     // done to reduce search space.
     return promisingMovesVector;

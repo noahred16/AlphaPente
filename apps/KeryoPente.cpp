@@ -4,21 +4,25 @@
 #include "PenteGame.hpp"
 #include <cstring>
 #include <iostream>
+#include <unistd.h>
 
-// How to run: ./keryopente "1. K10 K9 2. K6 L11 3. M8 J11" 100000
+// How to run: ./keryopente "1. K10 K9 2. K6 L11 3. M8 J11" 100000 [-o <numOffsets>]
 // Keryo-Pente: captures enabled, 3-stone captures, 15 captures to win
 int main(int argc, char *argv[]) {
     std::cout << "Playing Keryo-Pente (3-stone captures, 15 to win)..." << std::endl;
 
-    const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
-
+    int numOffsets = 16;
     bool nonInteractive = false;
-    for (int i = 1; i < argc; i++) {
-        if (std::strcmp(argv[i], "-n") == 0) nonInteractive = true;
+    int opt;
+    while ((opt = getopt(argc, argv, "no:")) != -1) {
+        if (opt == 'o') numOffsets = std::atoi(optarg);
+        else if (opt == 'n') nonInteractive = true;
     }
 
-    const char *gameDataStr = argc >= 2 ? argv[1] : hardCodedGame;
-    int mctsIterations = argc >= 3 ? std::atoi(argv[2]) : 100000;
+    const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
+
+    const char *gameDataStr = optind < argc ? argv[optind] : hardCodedGame;
+    int mctsIterations = optind + 1 < argc ? std::atoi(argv[optind + 1]) : 100000;
 
     // Parse the game data string using GameUtils
     std::vector<std::string> moves = GameUtils::parseGameString(gameDataStr);
@@ -34,7 +38,10 @@ int main(int argc, char *argv[]) {
     std::cout << std::endl;
 
     // Game time - use Keryo-Pente config
-    PenteGame game(PenteGame::Config::keryoPente());
+    PenteGame::Config keryoConfig = PenteGame::Config::keryoPente();
+    keryoConfig.numOffsets = numOffsets;
+    std::cout << "Num offsets: " << numOffsets << std::endl;
+    PenteGame game(keryoConfig);
     game.reset();
 
     // Replay the moves
