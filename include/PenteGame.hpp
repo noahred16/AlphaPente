@@ -26,6 +26,7 @@ class PenteGame {
         bool capturesEnabled = true; // Gomoku: false
         bool tournamentRule = true;  // 3rd move restriction
         uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
+        int numOffsets = 16;
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
@@ -42,13 +43,6 @@ class PenteGame {
         Move(int x_, int y_) : x(static_cast<uint8_t>(x_)), y(static_cast<uint8_t>(y_)) {}
     };
 
-    // struct MoveInfo {
-    //     Move move;
-    //     uint16_t captureMask; // 16 bits: 8 directions * 2 bits each
-    //     Player player;
-    //     uint8_t totalCapturedStones; // Helpful for quick score updates
-    // };
-
   private:
     Config config_;
     BitBoard blackStones;
@@ -57,6 +51,15 @@ class PenteGame {
     int blackCaptures;
     int whiteCaptures;
     int moveCount;
+
+    static constexpr int dirs[24][2] = {
+        // First 8: ch1
+        {-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1},
+        // Next 8: in ch2NoKnight but not in ch1
+        {-2, -2}, {-2, 0}, {-2, 2}, {0, -2}, {0, 2}, {2, -2}, {2, 0}, {2, 2},
+        // Last 8: in ch2 but not in ch2NoKnight (the knight-move offsets)
+        {-2, -1}, {-2, 1}, {-1, -2}, {-1, 2}, {1, -2}, {1, 2}, {2, -1}, {2, 1}
+    };
 
     // Move history stack for undo support
     // std::vector<MoveInfo> moveHistory;
@@ -71,6 +74,7 @@ class PenteGame {
     int countConsecutive(const BitBoard &stones, int x, int y, int dx, int dy) const;
 
     std::vector<Move> promisingMovesVector;                     // empty squares within distance 1 of any stone
+    mutable std::vector<Move> tournamentRulePerimeterBuffer;    // filtered perimeter for move 3 rule
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> promisingMoveIndex;
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1); // Max size_t value
 
@@ -102,16 +106,8 @@ class PenteGame {
             promisingMoveIndex[pos] = INVALID_INDEX;
         }
 
-        // Dilate: add empty distance-1 neighbors to promising
-        // static const int dirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-        // TODO Dilate more aggressively, and fix known bug. should be same as before but go out 2 for wasd plus diagnonals
-        static const int dirs[16][2] = {{-2, -2},       {-2, 0},       {-2, 2},       
-                                                {-1, -1} , {-1, 0},       {-1, 1},       
-                                        {0, -2}, {0, -1},               {0, 1}, {0, 2}, 
-                                                {1, -1}, {1, 0},        {1, 1},        
-                                        {2, -2},       {2, 0},       {2, 2}};
-        // for (int i = 0; i < 8; i++) {
-        for (int i = 0; i < 16; i++) {
+        // Handle offsets
+        for (int i = 0; i < config_.numOffsets; i++) {
             int nx = x + dirs[i][0], ny = y + dirs[i][1];
             if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
                 if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
