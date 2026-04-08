@@ -4,6 +4,7 @@
 #include "PenteGame.hpp"
 #include "Profiler.hpp"
 #include <chrono>
+#include <ctime>
 #include <iostream>
 
 int main(int argc, char *argv[]) {
@@ -70,11 +71,14 @@ int main(int argc, char *argv[]) {
     auto t0 = std::chrono::high_resolution_clock::now();
 
     MCTS mcts(config);
+    std::clock_t cpuStart = std::clock();
     mcts.search(game);
+    std::clock_t cpuEnd = std::clock();
 
     double totalTime = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t0).count();
+    double cpuTime = static_cast<double>(cpuEnd - cpuStart) / CLOCKS_PER_SEC;
 
-    mcts.printStats();
+    mcts.printStats(totalTime, cpuTime);
     mcts.printBestMoves(10);
     // mcts.printBranch("K10", 10);
 
@@ -84,8 +88,12 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < rounds; i++) {
         std::cout << "\n=== Round " << (i + 1) << " ===\n";
         mcts.setConfig(config);
+        auto rWallStart = std::chrono::high_resolution_clock::now();
+        std::clock_t rCpuStart = std::clock();
         mcts.search(game);
-        mcts.printStats();
+        double rWall = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - rWallStart).count();
+        double rCpu = static_cast<double>(std::clock() - rCpuStart) / CLOCKS_PER_SEC;
+        mcts.printStats(rWall, rCpu);
         mcts.printBestMoves(10);
     }
 

@@ -2,6 +2,7 @@
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
+#include <cstring>
 #include <iostream>
 
 // How to run: ./pente "1. K10 L9 2. K12 M10" 100000
@@ -10,6 +11,11 @@ int main(int argc, char *argv[]) {
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
                                 "K11 M9 10. F9 E8 11. K14 K13 12. H13 G14 13. N9 M7 14. N6 K7 15. N10";
+
+    bool nonInteractive = false;
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "-n") == 0) nonInteractive = true;
+    }
 
     const char *gameDataStr = argc >= 2 ? argv[1] : hardCodedGame;
     int mctsIterations = argc >= 3 ? std::atoi(argv[2]) : 100000;
@@ -51,7 +57,10 @@ int main(int argc, char *argv[]) {
     config.evaluator = &heuristicEvaluator;
 
     MCTS mcts(config);
-    GameUtils::interactiveSearchLoop(mcts, game);
+    if (nonInteractive)
+        GameUtils::runSearchAndReport(mcts, game);
+    else
+        GameUtils::interactiveSearchLoop(mcts, game);
 
     return 0;
 }

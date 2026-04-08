@@ -614,7 +614,7 @@ int MCTS::getTreeSize() const {
     return countNodes(root_, visited);
 }
 
-void MCTS::printStats() const {
+void MCTS::printStats(double wallTime, double cpuTime) const {
     std::cout << "\n=== MCTS Statistics ===\n";
     int treeSize = getTreeSize();
     int totalVisits = getTotalVisits();
@@ -625,9 +625,18 @@ void MCTS::printStats() const {
               << ". Transposition table size: " << GameUtils::formatWithCommas(transpositionTableSize) << "\n";
 
     int simsThisSearch = totalSimulations_ - startSimulations_;
-    std::cout << "Search time: " << static_cast<int>(totalSearchTime_ / 60) << " min "
-              << static_cast<int>(totalSearchTime_) % 60 << " sec (" << std::fixed << std::setprecision(0)
-              << GameUtils::formatWithCommas(totalSearchTime_ > 0 ? simsThisSearch / totalSearchTime_ : 0) << " sims/sec)\n";
+    auto formatSims = [&](double time) {
+        return time > 0 ? GameUtils::formatWithCommas(static_cast<long long>(simsThisSearch / time)) : std::string("0");
+    };
+    std::cout << "Simulations: " << GameUtils::formatWithCommas(simsThisSearch) << "\n";
+    std::cout << "Wall time: " << static_cast<int>(wallTime) / 60 << "m " << static_cast<int>(wallTime) % 60 << "s"
+              << "  |  CPU time: " << static_cast<int>(cpuTime) / 60 << "m " << static_cast<int>(cpuTime) % 60 << "s"
+              << "  (Efficiency: " << std::fixed << std::setprecision(2) << (wallTime > 0 ? cpuTime / wallTime : 0.0) << "x)\n";
+    std::cout << "Throughput (Wall): " << formatSims(wallTime) << " sims/sec"
+              << "  |  Throughput (CPU): " << formatSims(cpuTime) << " sims/sec\n";
+    if (wallTime > 0 && cpuTime > 0 && (cpuTime / wallTime) < 0.8) {
+        std::cout << ">> WARNING: CPU utilization is low. System may be throttled or resource-starved.\n";
+    }
 
     // Arena memory stats
     std::cout << "Arena memory: " << std::fixed << std::setprecision(1) << (arena_.bytesUsed() / (1024.0 * 1024.0))

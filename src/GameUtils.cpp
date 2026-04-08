@@ -3,6 +3,7 @@
 #include "PenteGame.hpp"
 #include "Profiler.hpp"
 #include <chrono>
+#include <ctime>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -36,14 +37,14 @@ std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
     char *gameDataCopy = strdup(gameStr);
     char *token = std::strtok(gameDataCopy, " \t\n\r");
 
-    int tokenIndex = 0;
     while (token != nullptr) {
-        // Skip move numbers (every 3rd token: "1.", "2.", etc.)
-        if (tokenIndex % 3 != 0) {
+        // Skip move numbers (e.g. "1.", "2.") and dash separators (e.g. "-")
+        bool isMoveNumber = std::isdigit((unsigned char)token[0]) && token[strlen(token) - 1] == '.';
+        bool isDash = std::strcmp(token, "-") == 0;
+        if (!isMoveNumber && !isDash) {
             moves.push_back(std::string(token));
         }
         token = std::strtok(nullptr, " \t\n\r");
-        tokenIndex++;
     }
     free(gameDataCopy);
 
@@ -121,14 +122,18 @@ std::string GameUtils::formatWithCommas(int value) {
 }
 
 void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
-    auto start = std::chrono::high_resolution_clock::now();
+    auto wallStart = std::chrono::high_resolution_clock::now();
+    std::clock_t cpuStart = std::clock();
+
     mcts.search(game);
-    auto end = std::chrono::high_resolution_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
-    int minutes = elapsed.count() / 60;
-    int seconds = elapsed.count() % 60;
-    std::cout << "Search took: " << minutes << " min " << seconds << " sec." << std::endl;
-    mcts.printStats();
+
+    std::clock_t cpuEnd = std::clock();
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+    double cpuElapsed = static_cast<double>(cpuEnd - cpuStart) / CLOCKS_PER_SEC;
+
+    mcts.printStats(wallElapsed, cpuElapsed);
     mcts.printBestMoves(15);
     PenteGame::Move bestMove = mcts.getBestMove();
     std::string bestMoveStr = displayMove(bestMove.x, bestMove.y);

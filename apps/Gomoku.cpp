@@ -2,6 +2,7 @@
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
+#include <cstring>
 #include <iostream>
 
 // How to run: ./gomoku "1. K10 K9 2. K6 L11 3. M8 J11" 100000
@@ -10,6 +11,11 @@ int main(int argc, char *argv[]) {
     std::cout << "Playing Gomoku (5-in-a-row, no captures)..." << std::endl;
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
+
+    bool nonInteractive = false;
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "-n") == 0) nonInteractive = true;
+    }
 
     const char *gameDataStr = argc >= 2 ? argv[1] : hardCodedGame;
     int mctsIterations = argc >= 3 ? std::atoi(argv[2]) : 100000;
@@ -47,7 +53,10 @@ int main(int argc, char *argv[]) {
     config.evaluator = &heuristicEvaluator;
 
     MCTS mcts(config);
-    GameUtils::interactiveSearchLoop(mcts, game);
+    if (nonInteractive)
+        GameUtils::runSearchAndReport(mcts, game);
+    else
+        GameUtils::interactiveSearchLoop(mcts, game);
 
     return 0;
 }
