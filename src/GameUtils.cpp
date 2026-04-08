@@ -38,8 +38,8 @@ std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
     char *token = std::strtok(gameDataCopy, " \t\n\r");
 
     while (token != nullptr) {
-        // Skip move numbers (e.g. "1.", "2.") and dash separators (e.g. "-")
-        bool isMoveNumber = std::isdigit((unsigned char)token[0]) && token[strlen(token) - 1] == '.';
+        // Skip move numbers (e.g. "1.", "2.", "1", "2") and dash separators (e.g. "-")
+        bool isMoveNumber = std::isdigit((unsigned char)token[0]);
         bool isDash = std::strcmp(token, "-") == 0;
         if (!isMoveNumber && !isDash) {
             moves.push_back(std::string(token));
