@@ -121,6 +121,43 @@ class PenteGame {
         }
     }
 
+    // Hard-code tournament perimeter for move 3 (first move is always center),
+    // then filter out occupied perimeter squares for the current position.
+    const std::vector<Move> &getTournamentRulePerimeter() const {
+        static const std::vector<Move> allPerimeterMoves = [] {
+            std::vector<Move> out;
+            int center = BOARD_SIZE / 2;
+            int dist = 3;
+
+            // Generate the boundary of the 7x7 square (distance 3 from center)
+            for (int i = -dist; i <= dist; ++i) {
+                // Top and bottom rows
+                out.emplace_back(center + i, center - dist);
+                out.emplace_back(center + i, center + dist);
+                // Left and right columns (skip corners already added)
+                if (i > -dist && i < dist) {
+                    out.emplace_back(center - dist, center + i);
+                    out.emplace_back(center + dist, center + i);
+                }
+            }
+            return out;
+        }();
+
+        tournamentRulePerimeterBuffer.clear();
+        tournamentRulePerimeterBuffer.reserve(allPerimeterMoves.size());
+
+        for (const Move &move : allPerimeterMoves) {
+            if (!blackStones.getBitUnchecked(move.x, move.y) &&
+                !whiteStones.getBitUnchecked(move.x, move.y)) {
+                tournamentRulePerimeterBuffer.push_back(move);
+            }
+        }
+
+        return tournamentRulePerimeterBuffer;
+    }
+
+    void patchPromisingMovesAfterCaptures(const BitBoard &capturedBits);
+
   public:
     PenteGame(const Config &config = Config::pente());
 
