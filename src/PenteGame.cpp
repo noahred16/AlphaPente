@@ -40,8 +40,9 @@ bool PenteGame::makeMove(const char *move) {
     // if move is not legal, setLegalMove first.
     // legal moves
     const auto &legalMoves = getLegalMoves();
+    int mx = x, my = y;
     auto it =
-        std::find_if(legalMoves.begin(), legalMoves.end(), [x, y](const Move &m) { return m.x == x && m.y == y; });
+        std::find_if(legalMoves.begin(), legalMoves.end(), [mx, my](const Move &m) { return m.x == mx && m.y == my; });
     bool isInLegalMoves = (it != legalMoves.end());
     if (!isInLegalMoves) {
         setLegalMove(x, y);
