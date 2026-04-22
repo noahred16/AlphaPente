@@ -1,18 +1,53 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(AlphaPente)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Debug flags
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
-# Include directories
+# ─── Compiler flags ───────────────────────────────────────────────────────────
+
+if(MSVC)
+  # Windows / Visual Studio
+  set(CMAKE_CXX_FLAGS_DEBUG   "/Od /Zi /W4 /RTC1")
+  set(CMAKE_CXX_FLAGS_RELEASE "/O2 /DNDEBUG /GL")  # /GL enables link-time codegen
+  add_link_options($<$<CONFIG:Release>:/LTCG>)      # /LTCG pairs with /GL
+
+else()
+  # GCC / Clang (macOS + Linux)
+  set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -Wall -Wextra -fno-omit-frame-pointer")
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+
+  add_compile_options(
+    $<$<CONFIG:Release>:-march=native>
+    $<$<CONFIG:Release>:-mtune=native>
+    $<$<CONFIG:Release>:-ffast-math>
+    $<$<CONFIG:Release>:-funroll-loops>
+    $<$<CONFIG:Release>:-flto>
+  )
+  add_link_options($<$<CONFIG:Release>:-flto>)
+
+  # Apple-specific: explicit libc++ to avoid ABI issues
+  if(APPLE)
+    add_compile_options(-stdlib=libc++)
+    add_link_options(-stdlib=libc++)
+  endif()
+endif()
+
+# ─── Optional: OpenMP (MCTS parallelism) ──────────────────────────────────────
+
+find_package(OpenMP)
+
+# ─── Includes ─────────────────────────────────────────────────────────────────
+
 include_directories(include)
 
-# Library: Core game logic
+# ─── Core library ─────────────────────────────────────────────────────────────
+
 add_library(pente_core
     src/BitBoard.cpp
     src/PenteGame.cpp
@@ -22,33 +57,28 @@ add_library(pente_core
     src/Zobrist.cpp
 )
 
-# Executable: Train
-add_executable(train apps/Train.cpp)
-target_link_libraries(train pente_core)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(pente_core PUBLIC OpenMP::OpenMP_CXX)
+endif()
 
-# Executable: Play
-add_executable(play apps/Play.cpp)
-target_link_libraries(play pente_core)
+# ─── Executables ──────────────────────────────────────────────────────────────
 
-# Executable: Test
-add_executable(test apps/Test.cpp)
-target_link_libraries(test pente_core)
+macro(add_pente_executable target source)
+  add_executable(${target} ${source})
+  target_link_libraries(${target} PRIVATE pente_core)
+endmacro()
 
-# Executable: Pente
-add_executable(pente apps/Pente.cpp)
-target_link_libraries(pente pente_core)
+add_pente_executable(train      apps/Train.cpp)
+add_pente_executable(play       apps/Play.cpp)
+add_pente_executable(test       apps/Test.cpp)
+add_pente_executable(pente      apps/Pente.cpp)
+add_pente_executable(gomoku     apps/Gomoku.cpp)
+add_pente_executable(keryopente apps/KeryoPente.cpp)
 
-# Executable: Gomoku
-add_executable(gomoku apps/Gomoku.cpp)
-target_link_libraries(gomoku pente_core)
+# ─── Unit tests ───────────────────────────────────────────────────────────────
 
-# Executable: Keryo-Pente
-add_executable(keryopente apps/KeryoPente.cpp)
-target_link_libraries(keryopente pente_core)
-
-# Unit Tests
 add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
 )
-target_link_libraries(unit_tests pente_core)
+target_link_libraries(unit_tests PRIVATE pente_core)
