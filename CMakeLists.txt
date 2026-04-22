@@ -20,7 +20,23 @@ add_library(pente_core
     src/GameUtils.cpp
     src/Evaluator.cpp
     src/Zobrist.cpp
+    src/NNInputEncoder.cpp
 )
+
+# Optional: LibTorch neural network support.
+# To enable, download LibTorch from https://pytorch.org and configure with:
+#   cmake .. -DCMAKE_PREFIX_PATH=/path/to/libtorch
+find_package(Torch QUIET)
+if(Torch_FOUND)
+    message(STATUS "LibTorch found — building with neural network support")
+    target_sources(pente_core PRIVATE src/NNModel.cpp src/NeuralNetEvaluator.cpp)
+    target_link_libraries(pente_core "${TORCH_LIBRARIES}")
+    target_include_directories(pente_core PRIVATE "${TORCH_INCLUDE_DIRS}")
+    target_compile_definitions(pente_core PUBLIC WITH_TORCH)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+else()
+    message(STATUS "LibTorch not found — neural network support disabled")
+endif()
 
 # Executable: Train
 add_executable(train apps/Train.cpp)
@@ -50,5 +66,6 @@ target_link_libraries(keryopente pente_core)
 add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
+    tests/NNInputEncoderTests.cpp
 )
 target_link_libraries(unit_tests pente_core)

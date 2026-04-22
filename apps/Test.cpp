@@ -1,6 +1,7 @@
 #include "BitBoard.hpp"
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
+#include "NeuralNetEvaluator.hpp"
 #include "PenteGame.hpp"
 #include "Profiler.hpp"
 #include <chrono>
@@ -58,14 +59,19 @@ int main(int argc, char *argv[]) {
 
     MCTS::Config config;
     // config.maxIterations = 100000;
-    config.maxIterations = 50000;
-    // config.maxIterations = 10000;
-    // config.explorationConstant = 1.414;
+    config.maxIterations = 1000; // NN forward pass is slower than heuristic
     config.explorationConstant = 1.7;
     config.searchMode = MCTS::SearchMode::PUCT;
     config.seed = 42;
+#ifdef WITH_TORCH
+    NeuralNetEvaluator nnEvaluator;
+    config.evaluator = &nnEvaluator;
+    std::cout << "Using NeuralNetEvaluator (random weights)\n";
+#else
     HeuristicEvaluator heuristicEvaluator;
     config.evaluator = &heuristicEvaluator;
+    std::cout << "Using HeuristicEvaluator (LibTorch not found)\n";
+#endif
 
     std::cout << "TEST: Running MCTS search..." << std::endl;
     auto t0 = std::chrono::high_resolution_clock::now();
