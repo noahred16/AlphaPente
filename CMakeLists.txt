@@ -52,6 +52,7 @@ add_library(pente_core
     src/BitBoard.cpp
     src/PenteGame.cpp
     src/MCTS.cpp
+    src/ParallelMCTS.cpp
     src/GameUtils.cpp
     src/Evaluator.cpp
     src/Zobrist.cpp
