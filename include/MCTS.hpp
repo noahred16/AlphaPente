@@ -1,6 +1,7 @@
 #ifndef MCTS_HPP
 #define MCTS_HPP
 
+#include "Arena.hpp"
 #include "Evaluator.hpp"
 #include "PenteGame.hpp"
 #include <cmath>
@@ -9,85 +10,6 @@
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
-
-// ============================================================================
-// Arena Allocator for O(1) Tree Destruction
-// ============================================================================
-
-class MCTSArena {
-  public:
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024; // 256 MB
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 1.5; // 384 MB
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 2; // 512 MB
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 4; // 1 GB
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 8ull; // 2 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 12ull; // 3 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 16ull; // 4 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 20ull; // 5 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 24ull; // 6 GB (unsigned long long to avoid overflow)
-      static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 32ull; // 8 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 40ull; // 10 GB (unsigned long long to avoid overflow)
-   //  static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 48ull; // 12 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 64ull; // 16 GB (unsigned long long to avoid overflow)
-//    static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 128ull; // 32 GB (unsigned long long to avoid overflow)
-    // static constexpr size_t DEFAULT_SIZE = 256 * 1024 * 1024 * 256ull; // 64 GB (unsigned long long to avoid overflow)
-
-    // static constexpr size_t MAX_SIZE = 16ULL * 1024 * 1024 * 1024; // 16 GB
-
-    explicit MCTSArena(size_t size = DEFAULT_SIZE) : size_(size), offset_(0), memory_(nullptr) {
-        memory_ = static_cast<char *>(std::aligned_alloc(64, size_)); // 64-byte alignment for cache lines
-        if (!memory_) {
-            std::fprintf(stderr, "FATAL: Failed to allocate arena of %.1f GB. "
-                "Not enough system memory (check `free -h`).\n",
-                size_ / (1024.0 * 1024.0 * 1024.0));
-            throw std::bad_alloc();
-        }
-    }
-
-    ~MCTSArena() { std::free(memory_); }
-
-    // Non-copyable, non-movable
-    MCTSArena(const MCTSArena &) = delete;
-    MCTSArena &operator=(const MCTSArena &) = delete;
-
-    // Allocate memory for type T with proper alignment
-    template <typename T> T *allocate(size_t count = 1) {
-        // Align to T's alignment requirement
-        size_t alignment = alignof(T);
-        size_t alignedOffset = (offset_ + alignment - 1) & ~(alignment - 1);
-        size_t totalBytes = sizeof(T) * count;
-
-        if (alignedOffset + totalBytes > size_) {
-            // Out of arena memory
-            return nullptr;
-        }
-
-        T *ptr = reinterpret_cast<T *>(memory_ + alignedOffset);
-        offset_ = alignedOffset + totalBytes;
-        return ptr;
-    }
-
-    // O(1) tree destruction - just reset the offset
-    void reset() { offset_ = 0; }
-
-    // Swap internals with another arena (for subtree reuse)
-    void swap(MCTSArena &other) {
-        std::swap(size_, other.size_);
-        std::swap(offset_, other.offset_);
-        std::swap(memory_, other.memory_);
-    }
-
-    // Statistics
-    size_t bytesUsed() const { return offset_; }
-    size_t bytesRemaining() const { return size_ - offset_; }
-    size_t totalSize() const { return size_; }
-    double utilizationPercent() const { return 100.0 * offset_ / size_; }
-
-  private:
-    size_t size_;
-    size_t offset_;
-    char *memory_;
-};
 
 // ============================================================================
 // MCTS Class with Arena-Allocated Nodes
@@ -109,7 +31,14 @@ class MCTS {
         double explorationConstant;                 // PUCT exploration parameter
         int maxIterations = 10000;                  // Number of MCTS iterations
         int maxSimulationDepth = 200;               // Max playout depth
-        size_t arenaSize = MCTSArena::DEFAULT_SIZE; // Arena size in bytes
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 512; // 512 MB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024; // 1 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 2ull; // 2 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 4ull; // 4 GB
+        static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 6ull; // 6 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 8ull; // 8 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 10ull; // 10 GB
+        size_t arenaSize = DEFAULT_ARENA_SIZE;
 
         SearchMode searchMode = SearchMode::PUCT;
         Evaluator *evaluator = nullptr; // For PUCT priors and value evaluation
@@ -221,7 +150,7 @@ class MCTS {
     // Member variables
     PenteGame game;
     Config config_;
-    MCTSArena arena_;
+    Arena arena_;
     std::unordered_map<uint64_t, Node *> nodeTranspositionTable;
     Node *root_ = nullptr;         // Raw pointer into arena
     std::vector<Node *> reusePath; // For subtree reuse during search
