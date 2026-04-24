@@ -160,7 +160,10 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
             request.node = leaf;
             request.gameState = workerGame;
             request.searchPath = searchPath;
-            parent->evaluationQueue_->tryPush(request);
+            if (!parent->evaluationQueue_->tryPush(request)) {
+                // Queue full — return the slot so it can be retried
+                parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+            }
         } else {
             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
         }

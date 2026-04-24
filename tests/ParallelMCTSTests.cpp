@@ -158,7 +158,7 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
 
     HeuristicEvaluator evaluator;
 
-    const int iterations = 10000;
+    const int iterations = 100000;
 
     struct Result {
         int workers;
@@ -173,7 +173,7 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
         config.numEvalThreads   = evalThreads;
         config.maxIterations    = iterations;
         config.evaluator        = &evaluator;
-        config.arenaSize        = 512 * 1024 * 1024;  // 512 MB, enough for 10k iters
+        config.arenaSize        = 2ull * 1024 * 1024 * 1024;  // 2 GB, enough for 100k iters
 
         ParallelMCTS mcts(config);
         auto start = std::chrono::high_resolution_clock::now();
