@@ -402,10 +402,13 @@ int ParallelMCTS::getTreeSize() const {
 }
 
 void ParallelMCTS::printStats(double wallTime) const {
+    int iters = totalIterations.load();
+    double itersPerSec = wallTime > 0.0 ? iters / wallTime : 0.0;
     std::cout << "=== Parallel MCTS Stats ===" << std::endl;
-    std::cout << "Total Iterations: " << totalIterations.load() << std::endl;
+    std::cout << "Total Iterations: " << iters << std::endl;
     std::cout << "Root Visits: " << getTotalVisits() << std::endl;
     std::cout << "Wall Time: " << wallTime << "s" << std::endl;
+    std::cout << "Throughput (Wall): " << static_cast<int>(itersPerSec) << " iters/sec" << std::endl;
     std::cout << "Evaluation Queue Size: " << evaluationQueue_->size() << std::endl;
 }
 
