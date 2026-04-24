@@ -97,11 +97,19 @@ void ParallelMCTS::WorkerPool::start() {
     std::lock_guard<std::mutex> lock(poolLock);
     if (running) return;
 
+    completedWorkers = 0;
     running = true;
     threads.clear();
     for (int i = 0; i < numWorkerThreads; ++i) {
         threads.emplace_back(&WorkerPool::workerThreadMain, this, i);
     }
+}
+
+bool ParallelMCTS::WorkerPool::waitForCompletion(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(completionMutex);
+    return completionCv.wait_for(lock, timeout, [this] {
+        return completedWorkers.load() == numWorkerThreads;
+    });
 }
 
 void ParallelMCTS::WorkerPool::stop() {
@@ -124,63 +132,56 @@ bool ParallelMCTS::WorkerPool::isRunning() const {
 }
 
 void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
-    // Each worker has its own game state for thread-safe move simulation
-    // All workers share the same arena and tree for collaborative building
     PenteGame workerGame;
-    std::mt19937 workerRng(parent->config_.seed + workerId);
+    int maxIterations = parent->config_.maxIterations;
 
-    int n_in_progress = 0;
-    int n_complete = 0;
-    int numIterations = parent->config_.maxIterations;
-
-    while (running && (n_in_progress < numIterations || n_complete < numIterations)) {
-        // PHASE 1: Selection and Enqueueing
-        if (n_in_progress < numIterations) {
-            // Select a node from root down the tree
+    while (running) {
+        // PHASE 1: Atomically claim an iteration slot — prevents over-selection
+        int slot = parent->totalInProgress.fetch_add(1, std::memory_order_relaxed);
+        if (slot < maxIterations) {
             std::vector<ThreadSafeNode *> searchPath;
-            
+
+            ThreadSafeNode *root = nullptr;
             {
-                std::lock_guard<std::mutex> treeLock(parent->treeLock);
-                if (parent->root_ == nullptr) {
-                    continue;  // Tree not yet initialized
+                std::lock_guard<std::mutex> lock(parent->treeLock);
+                root = parent->root_;
+                if (root == nullptr) {
+                    parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                    continue;
                 }
-
-                // Reset worker game to initial state
                 workerGame.syncFrom(parent->initialGame_);
-
-                // Traverse tree to find leaf node
-                ThreadSafeNode *leaf = parent->select(parent->root_, workerGame, searchPath);
-
-                // Push leaf node to evaluation queue
-                EvaluationRequest request;
-                request.node = leaf;
-                request.gameState = workerGame;
-                request.searchPath = searchPath;
-                parent->evaluationQueue_->tryPush(request);
             }
 
-            n_in_progress++;
+            searchPath.push_back(root);
+            ThreadSafeNode *leaf = parent->select(root, workerGame, searchPath);
+
+            EvaluationRequest request;
+            request.node = leaf;
+            request.gameState = workerGame;
+            request.searchPath = searchPath;
+            parent->evaluationQueue_->tryPush(request);
+        } else {
+            parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
         }
 
-        // PHASE 2: Backpropagation
+        // PHASE 2: Process any available backprop results — whoever grabs them, runs them
         if (!parent->backpropagationQueue_->empty()) {
             auto results = parent->backpropagationQueue_->popAll();
-            for (const auto &result : results) {
-                // TODO: Implement expand phase with policy from evaluation
-                // parent->expand(result.node, result.policy);
-
-                // TODO: Implement backpropagate phase with value
-                // parent->backpropagate(result.node, result.value, result.searchPath);
-
-                // TODO: Remove virtual loss
-                // parent->virtualLossManager_->removeVirtualLoss(result.node);
-
-                n_complete++;
+            for (auto &result : results) {
+                parent->expand(result.node, result.gameState, result.policy);
+                parent->backpropagate(result.node, result.value, result.searchPath);
+                parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
-        // Small yield to prevent busy-waiting
+        if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations)
+            break;
+
         std::this_thread::yield();
+    }
+
+    if (completedWorkers.fetch_add(1) + 1 == numWorkerThreads) {
+        completionCv.notify_one();
     }
 }
 
@@ -229,6 +230,7 @@ void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
         for (const auto &req : batch) {
             EvaluationResult result;
             result.node = req.node;
+            result.gameState = req.gameState;
             result.value = parent->config_.evaluator->evaluateValue(req.gameState);
             result.policy = parent->config_.evaluator->evaluatePolicy(req.gameState);
             result.searchPath = req.searchPath;
@@ -274,32 +276,21 @@ ParallelMCTS::~ParallelMCTS() {
 }
 
 PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
-    std::cout << "Starting Parallel MCTS search with " << config_.numWorkerThreads << " worker threads and " << config_.numEvalThreads << " eval threads..." << std::endl;
+    totalIterations = 0;
+    totalInProgress = 0;
+    prepareRoot(game);
 
-    // Store initial game state for workers
-    initialGame_ = game;
-
-    // Initialize tree with root node
-    {
-        std::lock_guard<std::mutex> lock(treeLock);
-        if (root_ == nullptr) {
-            root_ = allocateNode();
-            root_->move = {-1, -1};  // Invalid move for root
-            root_->player = PenteGame::Player::NONE;
-        }
-    }
-
-    // Start worker pool
+    evalPool_->start();
     workerPool_->start();
 
-    // TODO: Implement parallel search orchestration
-    // For now, let workers run briefly
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    bool completed = workerPool_->waitForCompletion();
+    if (!completed)
+        std::cerr << "Warning: parallel MCTS search timed out\n";
 
-    // Stop workers
     workerPool_->stop();
+    evalPool_->stop();
 
-    return PenteGame::Move{-1, -1};
+    return getBestMove();
 }
 
 void ParallelMCTS::prepareRoot(const PenteGame &game) {
@@ -334,6 +325,18 @@ const ParallelMCTS::ThreadSafeNode *ParallelMCTS::getRoot() const {
     return root_;
 }
 
+void ParallelMCTS::startWorkerThreads() {
+    workerPool_->start();
+}
+
+void ParallelMCTS::stopWorkerThreads() {
+    workerPool_->stop();
+}
+
+std::vector<ParallelMCTS::EvaluationRequest> ParallelMCTS::drainEvalQueue() {
+    return evaluationQueue_->popBatch(evaluationQueue_->size());
+}
+
 void ParallelMCTS::startEvalThreads() {
     evalPool_->start();
 }
@@ -351,17 +354,33 @@ std::vector<ParallelMCTS::EvaluationResult> ParallelMCTS::drainBackpropQueue() {
 }
 
 PenteGame::Move ParallelMCTS::getBestMove() const {
-    // TODO: Implement best move selection from root's children
-    return PenteGame::Move{-1, -1};
+    if (!root_ || root_->childCapacity == 0) return PenteGame::Move{-1, -1};
+
+    int bestIndex = -1;
+    int32_t bestVisits = -1;
+
+    for (int i = 0; i < root_->childCapacity; ++i) {
+        ThreadSafeNode *child = root_->children[i];
+        if (child == nullptr) continue;
+
+        if (child->solvedStatus == SolvedStatus::SOLVED_WIN)
+            return root_->moves[i];
+
+        int32_t visits = child->visits.load(std::memory_order_relaxed);
+        if (visits > bestVisits) {
+            bestVisits = visits;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex >= 0 ? root_->moves[bestIndex] : PenteGame::Move{-1, -1};
 }
 
 void ParallelMCTS::reset() {
     std::lock_guard<std::mutex> lock(treeLock);
-    if (arena_) {
-        arena_->reset();
-    }
+    if (arena_) arena_->reset();
     root_ = nullptr;
-    nodeTranspositionTable.clear();
+    nodeCount = 0;
     totalIterations = 0;
 }
 
@@ -395,7 +414,7 @@ const ParallelMCTS::Config &ParallelMCTS::getConfig() const {
 }
 
 // ============================================================================
-// Private Methods (Placeholder implementations)
+// Private Methods
 // ============================================================================
 
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGame &game, std::vector<ThreadSafeNode *> &searchPath) {
@@ -404,19 +423,23 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
         // Select best child index using PUCT
         int bestIndex = selectBestMoveIndex(node, game);
 
-        // Get the move
         PenteGame::Move move = node->moves[bestIndex];
-
-        // Make move on game state
         game.makeMove(move.x, move.y);
 
-        // Get child node
+        // Double-checked locking: fast path avoids lock when child already exists
         ThreadSafeNode *child = node->children[bestIndex];
+        if (child == nullptr) {
+            std::lock_guard<std::mutex> lock(node->nodeSubtreeLock);
+            child = node->children[bestIndex];  // re-read under lock
+            if (child == nullptr) {
+                child = allocateNode();
+                child->move = move;
+                child->player = game.getCurrentPlayer();
+                node->children[bestIndex] = child;
+            }
+        }
 
-        // Add virtual loss to discourage other workers from exploring this path
         virtualLossManager_->addVirtualLoss(child);
-
-        // Move to child
         node = child;
         searchPath.push_back(node);
     }
@@ -424,14 +447,54 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
     return node;
 }
 
-ParallelMCTS::ThreadSafeNode *ParallelMCTS::expand(ThreadSafeNode *node, PenteGame &game) {
-    // TODO: Implement node expansion with policy
-    return node;
+void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
+                          const std::vector<std::pair<PenteGame::Move, float>> &policy) {
+    if (node->expanded.load(std::memory_order_acquire)) return;
+
+    std::lock_guard<std::mutex> lock(node->nodeSubtreeLock);
+    if (node->expanded.load(std::memory_order_relaxed)) return;  // double-check
+
+    int capacity = static_cast<int>(policy.size());
+    initNodeChildren(node, capacity);
+
+    {
+        std::lock_guard<std::mutex> arenaLock(arenaMutex_);
+        node->moves  = arena_->allocate<PenteGame::Move>(capacity);
+        node->priors = arena_->allocate<float>(capacity);
+    }
+
+    for (int i = 0; i < capacity; ++i) {
+        node->moves[i]  = policy[i].first;
+        node->priors[i] = policy[i].second;
+    }
+
+    node->childCount = static_cast<uint16_t>(capacity);
+    node->value = game.isGameOver() ? (game.getWinner() == game.getCurrentPlayer() ? 1.0f : -1.0f) : 0.0f;
+    node->evaluated.store(true, std::memory_order_relaxed);
+    node->expanded.store(true, std::memory_order_release);
 }
 
-void ParallelMCTS::backpropagate(ThreadSafeNode *node, float result,
-                                const std::vector<ThreadSafeNode *> &searchPath) {
-    // TODO: Implement value backpropagation up the tree
+void ParallelMCTS::backpropagate(ThreadSafeNode *node, float value,
+                                 std::vector<ThreadSafeNode *> &searchPath) {
+    float currentValue = value;
+
+    while (!searchPath.empty()) {
+        ThreadSafeNode *current = searchPath.back();
+        searchPath.pop_back();
+
+        current->visits.fetch_add(1, std::memory_order_relaxed);
+
+        // Atomic double add for totalValue (fetch_add not available for double pre-C++20)
+        double expected = current->totalValue.load(std::memory_order_relaxed);
+        while (!current->totalValue.compare_exchange_weak(
+                   expected, expected + currentValue, std::memory_order_relaxed));
+
+        // Remove virtual loss if one was applied (root has none)
+        if (current->virtualLosses.load(std::memory_order_relaxed) > 0)
+            virtualLossManager_->removeVirtualLoss(current);
+
+        currentValue = -currentValue;  // flip for parent's perspective
+    }
 }
 
 int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &game) const {
@@ -479,13 +542,12 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     return bestIndex;
 }
 
-void ParallelMCTS::updateChildrenPriors(ThreadSafeNode *node, const PenteGame &game) {
-    // TODO: Implement prior update from evaluator
-}
-
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::allocateNode() {
-    auto *node = arena_->allocate<ThreadSafeNode>();
-    if (node) nodeCount.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(arenaMutex_);
+    void *mem = arena_->allocate<ThreadSafeNode>();
+    if (!mem) return nullptr;
+    auto *node = new (mem) ThreadSafeNode();  // placement new: properly constructs mutex and atomics
+    nodeCount.fetch_add(1, std::memory_order_relaxed);
     return node;
 }
 

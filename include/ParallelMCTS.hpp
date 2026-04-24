@@ -14,8 +14,6 @@
 #include <mutex>
 #include <random>
 #include <thread>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 // ============================================================================
@@ -31,7 +29,6 @@ class ParallelMCTS {
         SOLVED_LOSS
     };
     enum class SearchMode { PUCT };
-    enum class HeuristicMode { UNIFORM, HEURISTIC, NEURAL_NET };
 
     // Configuration parameters
     struct Config {
@@ -43,9 +40,7 @@ class ParallelMCTS {
 
         SearchMode searchMode = SearchMode::PUCT;
         Evaluator *evaluator = nullptr;
-        HeuristicMode heuristicMode = HeuristicMode::HEURISTIC;
         uint32_t seed = 0;
-        int canonicalHashDepth = 10;
 
         // Parallel-specific config
         int numWorkerThreads = 4;        // Number of tree traversal threads
@@ -69,19 +64,15 @@ class ParallelMCTS {
         // Move metadata (immutable after creation)
         uint16_t childCount = 0;
         uint16_t childCapacity = 0;
-        uint16_t unprovenCount = 0;
 
-        // Mutable statistics (protected by nodeLock)
+        // Mutable statistics
         std::atomic<int32_t> visits{0};
-        std::atomic<int32_t> wins{0};
         std::atomic<double> totalValue{0.0};
 
         // Move arrays (immutable after creation)
         PenteGame::Move *moves = nullptr;
         float *priors = nullptr;
         float value = 0.0f;
-        int nextPriorIdx = 0;
-        int8_t canonicalSym = -1;
 
         // Child pointers (immutable after creation)
         ThreadSafeNode **children = nullptr;
@@ -108,6 +99,7 @@ class ParallelMCTS {
     // Evaluation result - after NN evaluation
     struct EvaluationResult {
         ThreadSafeNode *node;
+        PenteGame gameState;
         float value;
         std::vector<std::pair<PenteGame::Move, float>> policy;
         std::vector<ThreadSafeNode *> searchPath;
@@ -177,6 +169,10 @@ class ParallelMCTS {
         void stop();
         bool isRunning() const;
 
+        // Blocks until all workers complete naturally or timeout elapses.
+        // Returns true if completed, false if timed out.
+        bool waitForCompletion(std::chrono::milliseconds timeout = std::chrono::milliseconds(60000));
+
       private:
         void workerThreadMain(int workerId);
 
@@ -184,7 +180,10 @@ class ParallelMCTS {
         ParallelMCTS *parent;
         std::vector<std::thread> threads;
         std::atomic<bool> running{false};
+        std::atomic<int> completedWorkers{0};
+        std::condition_variable completionCv;
         mutable std::mutex poolLock;
+        std::mutex completionMutex;
     };
 
     // Evaluation thread pool
@@ -237,23 +236,27 @@ class ParallelMCTS {
     void prepareRoot(const PenteGame &game);
     const ThreadSafeNode *getRoot() const;
 
+    // Worker pool lifecycle (exposed for testing)
+    void startWorkerThreads();
+    void stopWorkerThreads();
+
     // Eval pool lifecycle (exposed for testing)
     void startEvalThreads();
     void stopEvalThreads();
 
     // Queue helpers (exposed for testing)
     void pushEvalRequest(const EvaluationRequest &request);
+    std::vector<EvaluationRequest> drainEvalQueue();
     std::vector<EvaluationResult> drainBackpropQueue();
 
   private:
     // MCTS phases
     ThreadSafeNode *select(ThreadSafeNode *node, PenteGame &game, std::vector<ThreadSafeNode *> &searchPath);
-    ThreadSafeNode *expand(ThreadSafeNode *node, PenteGame &game);
-    void backpropagate(ThreadSafeNode *node, float result, const std::vector<ThreadSafeNode *> &searchPath);
+    void expand(ThreadSafeNode *node, const PenteGame &game, const std::vector<std::pair<PenteGame::Move, float>> &policy);
+    void backpropagate(ThreadSafeNode *node, float value, std::vector<ThreadSafeNode *> &searchPath);
 
     // Helper methods
     int selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &game) const;
-    void updateChildrenPriors(ThreadSafeNode *node, const PenteGame &game);
 
     // Arena allocation
     ThreadSafeNode *allocateNode();
@@ -269,16 +272,18 @@ class ParallelMCTS {
     std::unique_ptr<EvalPool> evalPool_;
 
     ThreadSafeNode *root_ = nullptr;
-    std::unordered_map<uint64_t, ThreadSafeNode *> nodeTranspositionTable;
-    mutable std::mutex treeLock;  // Protects root and transposition table
+    mutable std::mutex treeLock;
     mutable std::mt19937 rng_;
 
     // Search state
     PenteGame initialGame_;  // Initial game state for workers
 
     // Statistics
-    std::atomic<int> totalIterations{0};
+    std::atomic<int> totalIterations{0};   // completed backprops across all workers
+    std::atomic<int> totalInProgress{0};   // selections claimed across all workers
     std::atomic<int> nodeCount{0};
+
+    mutable std::mutex arenaMutex_;  // Protects arena allocation across threads
 };
 
 #endif // PARALLEL_MCTS_HPP

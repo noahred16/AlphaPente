@@ -22,7 +22,6 @@ int main(int argc, char *argv[]) {
     config.searchMode = ParallelMCTS::SearchMode::PUCT;
     config.seed = 42;
     config.evaluator = &heuristicEvaluator;
-    config.canonicalHashDepth = 0;
     config.numWorkerThreads = 4;
     config.numEvalThreads = 1;
     config.arenaSize = GameUtils::arenaSizeFromEnv();
