@@ -27,9 +27,9 @@ else()
     $<$<CONFIG:Release>:-mtune=native>
     $<$<CONFIG:Release>:-ffast-math>
     $<$<CONFIG:Release>:-funroll-loops>
-    $<$<CONFIG:Release>:-flto>
+    $<$<CONFIG:Release>:-flto=auto>
   )
-  add_link_options($<$<CONFIG:Release>:-flto>)
+  add_link_options($<$<CONFIG:Release>:-flto=auto>)
 
   # Apple-specific: explicit libc++ to avoid ABI issues
   if(APPLE)
