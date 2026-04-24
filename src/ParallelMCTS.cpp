@@ -1,4 +1,5 @@
 #include "ParallelMCTS.hpp"
+#include <cassert>
 #include <iostream>
 #include <chrono>
 
@@ -422,7 +423,10 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
     while (node->expanded.load(std::memory_order_acquire) && !node->isTerminal()) {
         // Select best child index using PUCT
         int bestIndex = selectBestMoveIndex(node, game);
+        if (bestIndex < 0) return node;  // no children (e.g. zero-capacity terminal)
 
+        assert(bestIndex < node->childCapacity && "bestIndex out of range");
+        assert(node->moves != nullptr && "moves array must be allocated before selection");
         PenteGame::Move move = node->moves[bestIndex];
         game.makeMove(move.x, move.y);
 
@@ -433,6 +437,7 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
             child = node->children[bestIndex];  // re-read under lock
             if (child == nullptr) {
                 child = allocateNode();
+                if (!child) return node;  // arena full, treat as leaf
                 child->move = move;
                 child->player = game.getCurrentPlayer();
                 node->children[bestIndex] = child;
@@ -455,10 +460,10 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
     if (node->expanded.load(std::memory_order_relaxed)) return;  // double-check
 
     int capacity = static_cast<int>(policy.size());
-    initNodeChildren(node, capacity);
 
     {
         std::lock_guard<std::mutex> arenaLock(arenaMutex_);
+        initNodeChildren(node, capacity);
         node->moves  = arena_->allocate<PenteGame::Move>(capacity);
         node->priors = arena_->allocate<float>(capacity);
     }
@@ -468,8 +473,13 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
         node->priors[i] = policy[i].second;
     }
 
+    assert(capacity >= 0 && "policy capacity must be non-negative");
     node->childCount = static_cast<uint16_t>(capacity);
-    node->value = game.isGameOver() ? (game.getWinner() == game.getCurrentPlayer() ? 1.0f : -1.0f) : 0.0f;
+    if (game.isGameOver()) {
+        node->value = (game.getWinner() == game.getCurrentPlayer()) ? 1.0f : -1.0f;
+        node->solvedStatus = (game.getWinner() == game.getCurrentPlayer())
+                                 ? SolvedStatus::SOLVED_WIN : SolvedStatus::SOLVED_LOSS;
+    }
     node->evaluated.store(true, std::memory_order_relaxed);
     node->expanded.store(true, std::memory_order_release);
 }

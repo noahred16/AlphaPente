@@ -158,7 +158,7 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
 
     HeuristicEvaluator evaluator;
 
-    const int iterations = 1000;
+    const int iterations = 10000;
 
     struct Result {
         int workers;
@@ -193,6 +193,9 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
         runConfig(4, 1),
         runConfig(4, 2),
         runConfig(4, 4),
+        runConfig(3, 5),
+        runConfig(5, 3),
+        runConfig(6, 2),
     };
 
     std::cout << "\n--- Parallel MCTS Benchmark (" << iterations << " iterations) ---\n";
