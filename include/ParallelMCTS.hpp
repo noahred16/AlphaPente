@@ -48,7 +48,8 @@ class ParallelMCTS {
         int canonicalHashDepth = 10;
 
         // Parallel-specific config
-        int numWorkers = 4;              // Number of worker threads
+        int numWorkerThreads = 4;        // Number of tree traversal threads
+        int numEvalThreads = 1;          // Number of evaluation threads
         int evaluationBatchSize = 32;    // Batch size for neural network evaluation
         int queueCapacity = 10000;       // Max size of evaluation queue
 
@@ -108,7 +109,7 @@ class ParallelMCTS {
     struct EvaluationResult {
         ThreadSafeNode *node;
         float value;
-        std::vector<float> policy;  // Policy for each legal move
+        std::vector<std::pair<PenteGame::Move, float>> policy;
         std::vector<ThreadSafeNode *> searchPath;
     };
 
@@ -169,23 +170,37 @@ class ParallelMCTS {
     // Worker thread pool
     class WorkerPool {
       public:
-        WorkerPool(int numWorkers, ParallelMCTS *parent);
+        WorkerPool(int numWorkerThreads, ParallelMCTS *parent);
         ~WorkerPool();
 
-        // Start all worker threads
         void start();
-
-        // Stop all worker threads gracefully
         void stop();
-
-        // Check if pool is running
         bool isRunning() const;
 
       private:
-        // Worker thread main loop
         void workerThreadMain(int workerId);
 
-        int numWorkers;
+        int numWorkerThreads;
+        ParallelMCTS *parent;
+        std::vector<std::thread> threads;
+        std::atomic<bool> running{false};
+        mutable std::mutex poolLock;
+    };
+
+    // Evaluation thread pool
+    class EvalPool {
+      public:
+        EvalPool(int numEvalThreads, ParallelMCTS *parent);
+        ~EvalPool();
+
+        void start();
+        void stop();
+        bool isRunning() const;
+
+      private:
+        void evalThreadMain(int evalId);
+
+        int numEvalThreads;
         ParallelMCTS *parent;
         std::vector<std::thread> threads;
         std::atomic<bool> running{false};
@@ -218,6 +233,14 @@ class ParallelMCTS {
     void setConfig(const Config &config);
     const Config &getConfig() const;
 
+    // Eval pool lifecycle (exposed for testing)
+    void startEvalThreads();
+    void stopEvalThreads();
+
+    // Queue helpers (exposed for testing)
+    void pushEvalRequest(const EvaluationRequest &request);
+    std::vector<EvaluationResult> drainBackpropQueue();
+
   private:
     // MCTS phases
     ThreadSafeNode *select(ThreadSafeNode *node, PenteGame &game, std::vector<ThreadSafeNode *> &searchPath);
@@ -239,6 +262,7 @@ class ParallelMCTS {
     std::unique_ptr<EvaluationQueue> evaluationQueue_;
     std::unique_ptr<BackpropagationQueue> backpropagationQueue_;
     std::unique_ptr<WorkerPool> workerPool_;
+    std::unique_ptr<EvalPool> evalPool_;
 
     ThreadSafeNode *root_ = nullptr;
     std::unordered_map<uint64_t, ThreadSafeNode *> nodeTranspositionTable;

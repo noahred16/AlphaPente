@@ -41,10 +41,8 @@ std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> UniformEvaluato
 
 std::vector<std::pair<PenteGame::Move, float>> UniformEvaluator::evaluatePolicy(const PenteGame &game) {
     PROFILE_SCOPE("UniformEvaluator::evaluatePolicy");
-    // deprecated...
-    std::cout << "WARNING: UniformEvaluator::evaluatePolicy called. This should be overridden by lazy policy loading in selection.\n";
-    std::cerr << "Error: UniformEvaluator::evaluatePolicy should not be called directly. This indicates a logic error in the MCTS implementation where lazy policy loading in selection is not working as intended.\n";
-    exit(1);
+    // In single-threaded MCTS, policy is loaded lazily during selection.
+    // In parallel MCTS, evalThreadMain calls this directly to populate node priors before expansion.
 
     // get moves from legalMoves
     const auto &legalMoves = game.getLegalMoves();

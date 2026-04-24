@@ -86,8 +86,8 @@ bool ParallelMCTS::BackpropagationQueue::empty() const {
 // WorkerPool Implementation
 // ============================================================================
 
-ParallelMCTS::WorkerPool::WorkerPool(int numWorkers, ParallelMCTS *parent)
-    : numWorkers(numWorkers), parent(parent) {}
+ParallelMCTS::WorkerPool::WorkerPool(int numWorkerThreads, ParallelMCTS *parent)
+    : numWorkerThreads(numWorkerThreads), parent(parent) {}
 
 ParallelMCTS::WorkerPool::~WorkerPool() {
     stop();
@@ -99,7 +99,7 @@ void ParallelMCTS::WorkerPool::start() {
 
     running = true;
     threads.clear();
-    for (int i = 0; i < numWorkers; ++i) {
+    for (int i = 0; i < numWorkerThreads; ++i) {
         threads.emplace_back(&WorkerPool::workerThreadMain, this, i);
     }
 }
@@ -185,6 +185,64 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
 }
 
 // ============================================================================
+// EvalPool Implementation
+// ============================================================================
+
+ParallelMCTS::EvalPool::EvalPool(int numEvalThreads, ParallelMCTS *parent)
+    : numEvalThreads(numEvalThreads), parent(parent) {}
+
+ParallelMCTS::EvalPool::~EvalPool() {
+    stop();
+}
+
+void ParallelMCTS::EvalPool::start() {
+    std::lock_guard<std::mutex> lock(poolLock);
+    if (running) return;
+
+    running = true;
+    threads.clear();
+    for (int i = 0; i < numEvalThreads; ++i) {
+        threads.emplace_back(&EvalPool::evalThreadMain, this, i);
+    }
+}
+
+void ParallelMCTS::EvalPool::stop() {
+    {
+        std::lock_guard<std::mutex> lock(poolLock);
+        running = false;
+    }
+    for (auto &thread : threads) {
+        if (thread.joinable()) thread.join();
+    }
+    threads.clear();
+}
+
+bool ParallelMCTS::EvalPool::isRunning() const {
+    std::lock_guard<std::mutex> lock(poolLock);
+    return running;
+}
+
+void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
+    while (running) {
+        auto batch = parent->evaluationQueue_->popBatch(parent->config_.evaluationBatchSize);
+
+        for (const auto &req : batch) {
+            EvaluationResult result;
+            result.node = req.node;
+            result.value = parent->config_.evaluator->evaluateValue(req.gameState);
+            result.policy = parent->config_.evaluator->evaluatePolicy(req.gameState);
+            result.searchPath = req.searchPath;
+
+            parent->backpropagationQueue_->push(result);
+        }
+
+        if (batch.empty()) {
+            std::this_thread::yield();
+        }
+    }
+}
+
+// ============================================================================
 // ParallelMCTS Main Implementation
 // ============================================================================
 
@@ -197,8 +255,9 @@ ParallelMCTS::ParallelMCTS(const Config &config) : config_(config) {
     evaluationQueue_ = std::make_unique<EvaluationQueue>(config_.queueCapacity);
     backpropagationQueue_ = std::make_unique<BackpropagationQueue>();
 
-    // Initialize worker pool
-    workerPool_ = std::make_unique<WorkerPool>(config_.numWorkers, this);
+    // Initialize worker and eval pools
+    workerPool_ = std::make_unique<WorkerPool>(config_.numWorkerThreads, this);
+    evalPool_ = std::make_unique<EvalPool>(config_.numEvalThreads, this);
 
     // Seed RNG
     if (config_.seed != 0) {
@@ -210,13 +269,12 @@ ParallelMCTS::ParallelMCTS(const Config &config) : config_(config) {
 }
 
 ParallelMCTS::~ParallelMCTS() {
-    if (workerPool_) {
-        workerPool_->stop();
-    }
+    if (evalPool_) evalPool_->stop();
+    if (workerPool_) workerPool_->stop();
 }
 
 PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
-    std::cout << "Starting Parallel MCTS search with " << config_.numWorkers << " workers..." << std::endl;
+    std::cout << "Starting Parallel MCTS search with " << config_.numWorkerThreads << " worker threads and " << config_.numEvalThreads << " eval threads..." << std::endl;
 
     // Store initial game state for workers
     initialGame_ = game;
@@ -242,6 +300,22 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     workerPool_->stop();
 
     return PenteGame::Move{-1, -1};
+}
+
+void ParallelMCTS::startEvalThreads() {
+    evalPool_->start();
+}
+
+void ParallelMCTS::stopEvalThreads() {
+    evalPool_->stop();
+}
+
+void ParallelMCTS::pushEvalRequest(const EvaluationRequest &request) {
+    evaluationQueue_->tryPush(request);
+}
+
+std::vector<ParallelMCTS::EvaluationResult> ParallelMCTS::drainBackpropQueue() {
+    return backpropagationQueue_->popAll();
 }
 
 PenteGame::Move ParallelMCTS::getBestMove() const {

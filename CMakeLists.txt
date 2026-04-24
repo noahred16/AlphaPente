@@ -81,5 +81,6 @@ add_pente_executable(keryopente apps/KeryoPente.cpp)
 add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
+    tests/ParallelMCTSTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)

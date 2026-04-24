@@ -23,7 +23,8 @@ int main(int argc, char *argv[]) {
     config.seed = 42;
     config.evaluator = &heuristicEvaluator;
     config.canonicalHashDepth = 0;
-    config.numWorkers = 4;
+    config.numWorkerThreads = 4;
+    config.numEvalThreads = 1;
     config.arenaSize = GameUtils::arenaSizeFromEnv();
     
     // Search
