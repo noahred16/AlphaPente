@@ -35,9 +35,10 @@ class MCTS {
         // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024; // 1 GB
         // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 2ull; // 2 GB
         // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 4ull; // 4 GB
-        static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 6ull; // 6 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 6ull; // 6 GB
         // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 8ull; // 8 GB
-        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 10ull; // 10 GB
+        static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 10ull; // 10 GB
+        // static constexpr size_t DEFAULT_ARENA_SIZE = 1024 * 1024 * 1024 * 12ull; // 12 GB
         size_t arenaSize = DEFAULT_ARENA_SIZE;
 
         SearchMode searchMode = SearchMode::PUCT;
