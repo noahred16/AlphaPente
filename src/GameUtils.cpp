@@ -7,6 +7,71 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <csignal>
+#include <fstream>
+#include <unistd.h>
+
+namespace {
+
+struct CrashContext {
+    MCTS *mcts = nullptr;
+    std::chrono::high_resolution_clock::time_point wallStart;
+    std::clock_t cpuStart = 0;
+    bool active = false;
+} g_crashCtx;
+
+void printCrashSummary() {
+    if (!g_crashCtx.active || !g_crashCtx.mcts) return;
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - g_crashCtx.wallStart).count();
+    double cpuElapsed = static_cast<double>(std::clock() - g_crashCtx.cpuStart) / CLOCKS_PER_SEC;
+    g_crashCtx.mcts->printStats(wallElapsed, cpuElapsed);
+    g_crashCtx.mcts->printBestMoves(15);
+    PenteGame::Move best = g_crashCtx.mcts->getBestMove();
+    std::string bestStr = GameUtils::displayMove(best.x, best.y);
+    std::cout << "MCTS selected move: " << bestStr << std::endl;
+}
+
+void crashSignalHandler(int sig) {
+    const char *msg = "\n[Signal] Printing search summary before exit:\n";
+    if (write(STDERR_FILENO, msg, 48) < 0) {}  // best-effort, ignore errors in signal handler
+    printCrashSummary();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+} // namespace
+
+static size_t parseGbValue(const char *val) {
+    size_t gb = static_cast<size_t>(std::atoll(val));
+    return gb > 0 ? gb * 1024ULL * 1024 * 1024 : 0;
+}
+
+static size_t readFromDotEnv() {
+    for (const char *path : {".env", "../.env"}) {
+        std::ifstream f(path);
+        if (!f) continue;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.rfind("ARENA_SIZE_GB=", 0) == 0) {
+                size_t bytes = parseGbValue(line.c_str() + 14);
+                if (bytes > 0) return bytes;
+            }
+        }
+    }
+    return 0;
+}
+
+size_t GameUtils::arenaSizeFromEnv(size_t defaultGb) {
+    const char *val = std::getenv("ARENA_SIZE_GB");
+    if (val && std::strlen(val) > 0) {
+        size_t bytes = parseGbValue(val);
+        if (bytes > 0) return bytes;
+    }
+    size_t bytes = readFromDotEnv();
+    if (bytes > 0) return bytes;
+    return defaultGb * 1024ULL * 1024 * 1024;
+}
 
 std::pair<int, int> GameUtils::parseMove(const char *move) {
     if (strlen(move) < 2) {
@@ -125,7 +190,21 @@ void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     auto wallStart = std::chrono::high_resolution_clock::now();
     std::clock_t cpuStart = std::clock();
 
-    mcts.search(game);
+    g_crashCtx = {&mcts, wallStart, cpuStart, true};
+    signal(SIGTERM, crashSignalHandler);
+    signal(SIGABRT, crashSignalHandler);
+    signal(SIGSEGV, crashSignalHandler);
+
+    try {
+        mcts.search(game);
+    } catch (const std::exception &e) {
+        std::cerr << "\nSearch interrupted: " << e.what() << "\n";
+    }
+
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
+    signal(SIGSEGV, SIG_DFL);
+    g_crashCtx.active = false;
 
     std::clock_t cpuEnd = std::clock();
     auto wallEnd = std::chrono::high_resolution_clock::now();
