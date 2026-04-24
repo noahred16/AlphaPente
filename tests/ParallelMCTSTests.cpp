@@ -3,6 +3,8 @@
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include <chrono>
+#include <iomanip>
+#include <iostream>
 #include <thread>
 
 TEST_CASE("search returns a valid move after completing all iterations") {
@@ -148,4 +150,66 @@ TEST_CASE("EvalPool processes request and pushes result to backprop queue") {
     CHECK(results[0].value >= -1.0f);
     CHECK(results[0].value <= 1.0f);
     CHECK(!results[0].policy.empty());
+}
+
+TEST_CASE("Benchmark: parallel speedup across worker counts") {
+    PenteGame game(PenteGame::Config::pente());
+    game.reset();
+
+    HeuristicEvaluator evaluator;
+
+    const int iterations = 1000;
+
+    struct Result {
+        int workers;
+        int evalThreads;
+        double itersPerSec;
+        double wallSec;
+    };
+
+    auto runConfig = [&](int workers, int evalThreads) -> Result {
+        ParallelMCTS::Config config;
+        config.numWorkerThreads = workers;
+        config.numEvalThreads   = evalThreads;
+        config.maxIterations    = iterations;
+        config.evaluator        = &evaluator;
+        config.arenaSize        = 512 * 1024 * 1024;  // 512 MB, enough for 10k iters
+
+        ParallelMCTS mcts(config);
+        auto start = std::chrono::high_resolution_clock::now();
+        PenteGame::Move move = mcts.search(game);
+        auto end   = std::chrono::high_resolution_clock::now();
+
+        CHECK(move.x >= 0);
+        CHECK(move.x < PenteGame::BOARD_SIZE);
+
+        double wallSec = std::chrono::duration<double>(end - start).count();
+        return {workers, evalThreads, iterations / wallSec, wallSec};
+    };
+
+    std::vector<Result> results = {
+        runConfig(1, 1),
+        runConfig(2, 1),
+        runConfig(4, 1),
+        runConfig(4, 2),
+        runConfig(4, 4),
+    };
+
+    std::cout << "\n--- Parallel MCTS Benchmark (" << iterations << " iterations) ---\n";
+    std::cout << std::fixed;
+    for (auto &r : results) {
+        std::cout << std::setprecision(1)
+                  << "  " << r.workers << "w / " << r.evalThreads << "e: "
+                  << std::setw(8) << r.itersPerSec << " iters/sec"
+                  << "  (" << std::setprecision(3) << r.wallSec << "s)\n";
+    }
+
+    double baseline = results[0].itersPerSec;
+    std::cout << "\n  Speedup vs 1w/1e baseline:\n";
+    for (auto &r : results) {
+        std::cout << std::setprecision(2)
+                  << "    " << r.workers << "w / " << r.evalThreads << "e: "
+                  << r.itersPerSec / baseline << "x\n";
+    }
+    std::cout << "\n";
 }
