@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <thread>
 #include <vector>
@@ -146,6 +147,9 @@ class ParallelMCTS {
       public:
         // Push evaluation result for backpropagation
         void push(const EvaluationResult &result);
+
+        // Pop one result (non-blocking); returns nullopt if queue is empty
+        std::optional<EvaluationResult> tryPop();
 
         // Pop all pending backpropagation results
         std::vector<EvaluationResult> popAll();

@@ -78,6 +78,14 @@ std::vector<ParallelMCTS::EvaluationResult> ParallelMCTS::BackpropagationQueue::
     return results;
 }
 
+std::optional<ParallelMCTS::EvaluationResult> ParallelMCTS::BackpropagationQueue::tryPop() {
+    std::lock_guard<std::mutex> lock(queueLock);
+    if (queue.empty()) return std::nullopt;
+    EvaluationResult result = std::move(queue.front());
+    queue.pop_front();
+    return result;
+}
+
 bool ParallelMCTS::BackpropagationQueue::empty() const {
     std::lock_guard<std::mutex> lock(queueLock);
     return queue.empty();
@@ -168,14 +176,14 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
         }
 
-        // PHASE 2: Process any available backprop results — whoever grabs them, runs them
-        if (!parent->backpropagationQueue_->empty()) {
-            auto results = parent->backpropagationQueue_->popAll();
-            for (auto &result : results) {
-                parent->expand(result.node, result.gameState, result.policy);
-                parent->backpropagate(result.node, result.value, result.searchPath);
-                parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
-            }
+        // PHASE 2: Pull one backprop result and process it.
+        // Each worker grabs a single item so all workers can backprop concurrently
+        // instead of one worker draining the whole queue (convoy effect).
+        auto result = parent->backpropagationQueue_->tryPop();
+        if (result.has_value()) {
+            parent->expand(result->node, result->gameState, result->policy);
+            parent->backpropagate(result->node, result->value, result->searchPath);
+            parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
         }
 
         if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations)
