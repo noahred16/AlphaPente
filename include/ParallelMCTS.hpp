@@ -51,39 +51,37 @@ class ParallelMCTS {
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
-    // Thread-safe node for parallel tree
-    struct ThreadSafeNode {
-        // Move and player info (immutable after creation)
-        PenteGame::Move move;
-        PenteGame::Player player;
-
-        // Tree structure (immutable after creation)
-        SolvedStatus solvedStatus = SolvedStatus::UNSOLVED;
-        uint64_t positionHash = 0;
-
-        // Move metadata (immutable after creation)
-        uint16_t childCount = 0;
-        uint16_t childCapacity = 0;
-
-        // Mutable statistics
+    // Thread-safe node for parallel tree.
+    // Hot/cold layout: hot atomics on cache line 0, mutex on cache line 1,
+    // immutable cold fields on cache line 2+.  alignas(64) ensures the arena
+    // (which uses alignof(T)) places each node at a cache-line boundary so
+    // adjacent nodes' hot sections never share a cache line.
+    struct alignas(64) ThreadSafeNode {
+        // ---- Hot section (cache line 0): written on every backprop ----
         std::atomic<int32_t> visits{0};
         std::atomic<double> totalValue{0.0};
-
-        // Move arrays (immutable after creation)
-        PenteGame::Move *moves = nullptr;
-        float *priors = nullptr;
-        float value = 0.0f;
-
-        // Child pointers (immutable after creation)
-        ThreadSafeNode **children = nullptr;
+        std::atomic<int32_t> virtualLosses{0};
         std::atomic<bool> expanded{false};
         std::atomic<bool> evaluated{false};
 
-        // Virtual loss tracking
-        std::atomic<int32_t> virtualLosses{0};
+        // ---- Lock (cache line 1): contended only during node expansion ----
+        // alignas(64) inserts implicit padding between the hot atomics above
+        // (~22 bytes) and the mutex so they never share a cache line.
+        alignas(64) mutable std::mutex nodeSubtreeLock;
 
-        // Synchronization for thread-safe operations
-        mutable std::mutex nodeSubtreeLock;  // Protects expansion and child creation
+        // ---- Cold section (cache line 2+): immutable after creation ----
+        // alignas(64) inserts implicit padding after the mutex (whatever its
+        // platform size) so cold reads never invalidate hot write cache lines.
+        alignas(64) PenteGame::Move move;
+        PenteGame::Player player;
+        SolvedStatus solvedStatus = SolvedStatus::UNSOLVED;
+        uint64_t positionHash = 0;
+        uint16_t childCount = 0;
+        uint16_t childCapacity = 0;
+        PenteGame::Move *moves = nullptr;
+        float *priors = nullptr;
+        float value = 0.0f;
+        ThreadSafeNode **children = nullptr;
 
         bool isFullyExpanded() const { return expanded.load(); }
         bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; }
