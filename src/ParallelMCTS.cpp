@@ -302,6 +302,38 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     return PenteGame::Move{-1, -1};
 }
 
+void ParallelMCTS::prepareRoot(const PenteGame &game) {
+    initialGame_ = game;
+
+    std::lock_guard<std::mutex> lock(treeLock);
+
+    root_ = allocateNode();
+    root_->player = game.getCurrentPlayer();
+    root_->positionHash = game.getHash();
+
+    auto policy = config_.evaluator->evaluatePolicy(game);
+    root_->value = config_.evaluator->evaluateValue(game);
+
+    int capacity = static_cast<int>(policy.size());
+    initNodeChildren(root_, capacity);
+
+    root_->moves = arena_->allocate<PenteGame::Move>(capacity);
+    root_->priors = arena_->allocate<float>(capacity);
+
+    for (int i = 0; i < capacity; ++i) {
+        root_->moves[i] = policy[i].first;
+        root_->priors[i] = policy[i].second;
+    }
+
+    root_->childCount = static_cast<uint16_t>(capacity);
+    root_->expanded = true;
+    root_->evaluated = true;
+}
+
+const ParallelMCTS::ThreadSafeNode *ParallelMCTS::getRoot() const {
+    return root_;
+}
+
 void ParallelMCTS::startEvalThreads() {
     evalPool_->start();
 }
@@ -343,8 +375,7 @@ int ParallelMCTS::getTotalVisits() const {
 }
 
 int ParallelMCTS::getTreeSize() const {
-    // TODO: Implement tree size counting
-    return 0;
+    return nodeCount.load(std::memory_order_relaxed);
 }
 
 void ParallelMCTS::printStats(double wallTime) const {
@@ -453,9 +484,21 @@ void ParallelMCTS::updateChildrenPriors(ThreadSafeNode *node, const PenteGame &g
 }
 
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::allocateNode() {
-    return arena_->allocate<ThreadSafeNode>();
+    auto *node = arena_->allocate<ThreadSafeNode>();
+    if (node) nodeCount.fetch_add(1, std::memory_order_relaxed);
+    return node;
 }
 
 void ParallelMCTS::initNodeChildren(ThreadSafeNode *node, int capacity) {
-    // TODO: Implement child array initialization
+    if (capacity <= 0) {
+        node->children = nullptr;
+        node->childCapacity = 0;
+        return;
+    }
+
+    node->children = arena_->allocate<ThreadSafeNode *>(capacity);
+    if (!node->children) throw std::bad_alloc();
+    std::memset(node->children, 0, sizeof(ThreadSafeNode *) * capacity);
+    node->childCapacity = static_cast<uint16_t>(capacity);
+    node->childCount = 0;
 }

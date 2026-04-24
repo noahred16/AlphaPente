@@ -233,6 +233,10 @@ class ParallelMCTS {
     void setConfig(const Config &config);
     const Config &getConfig() const;
 
+    // Tree initialization
+    void prepareRoot(const PenteGame &game);
+    const ThreadSafeNode *getRoot() const;
+
     // Eval pool lifecycle (exposed for testing)
     void startEvalThreads();
     void stopEvalThreads();
@@ -274,6 +278,7 @@ class ParallelMCTS {
 
     // Statistics
     std::atomic<int> totalIterations{0};
+    std::atomic<int> nodeCount{0};
 };
 
 #endif // PARALLEL_MCTS_HPP
