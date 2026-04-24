@@ -199,3 +199,5 @@ cython_debug/
 *.db
 
 templates/
+
+.claude/worktrees
