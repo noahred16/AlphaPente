@@ -58,6 +58,7 @@ int main(int argc, char *argv[]) {
     // config.explorationConstant = 1.7;
     config.searchMode = MCTS::SearchMode::PUCT;
     config.seed = 42; // TODO: temporary, remove after debugging
+    config.arenaSize = GameUtils::arenaSizeFromEnv();
     // UniformEvaluator uniformEvaluator;
     // config.evaluator = &uniformEvaluator;
     HeuristicEvaluator heuristicEvaluator;

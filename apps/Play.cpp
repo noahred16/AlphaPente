@@ -22,6 +22,7 @@ int main(int argc, char *argv[]) {
     const int targetVisits = 100000;
 
     HeuristicEvaluator heuristicEvaluator;
+    size_t arenaSize = GameUtils::arenaSizeFromEnv();
 
     // Black: no canonical hashing (canonicalHashDepth = 0)
     MCTS::Config blackConfig;
@@ -31,6 +32,7 @@ int main(int argc, char *argv[]) {
     blackConfig.seed = 42;
     blackConfig.evaluator = &heuristicEvaluator;
     blackConfig.canonicalHashDepth = 0;
+    blackConfig.arenaSize = arenaSize;
     MCTS blackMcts(blackConfig);
 
     // White: canonical hashing enabled (default depth = 10)
@@ -41,6 +43,7 @@ int main(int argc, char *argv[]) {
     whiteConfig.seed = 42;
     whiteConfig.evaluator = &heuristicEvaluator;
     whiteConfig.canonicalHashDepth = 10;
+    whiteConfig.arenaSize = arenaSize;
     MCTS whiteMcts(whiteConfig);
 
     double blackTotalTime = 0.0;

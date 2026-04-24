@@ -24,6 +24,7 @@ int main(int argc, char *argv[]) {
     config.evaluator = &heuristicEvaluator;
     config.canonicalHashDepth = 0;
     config.numWorkers = 4;
+    config.arenaSize = GameUtils::arenaSizeFromEnv();
     
     // Search
     ParallelMCTS parallelMcts(config);

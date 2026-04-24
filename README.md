@@ -137,6 +137,7 @@ AlphaPente/
 
 ### Initial Setup
 ```bash
+cp .env.example .env   # configure arena memory (edit ARENA_SIZE_GB as needed)
 cd build
 cmake ..
 make
