@@ -219,6 +219,7 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
     PenteGame workerGame;
     int maxIterations = parent->config_.maxIterations;
 
+    try {
     while (running) {
         // PHASE 1: Atomically claim an iteration slot — prevents over-selection
         int slot = parent->totalInProgress.fetch_add(1, std::memory_order_relaxed);
@@ -268,6 +269,11 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
             break;
 
         std::this_thread::yield();
+    }
+    } catch (const std::exception &e) {
+        std::cerr << "Worker " << workerId << " caught exception: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "Worker " << workerId << " caught unknown exception\n";
     }
 
     ParallelMCTS::tl_slab = nullptr;  // unregister before signaling completion
@@ -378,7 +384,12 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     if (config_.numEvalThreads > 0) evalPool_->start();
     workerPool_->start();
 
-    bool completed = workerPool_->waitForCompletion();
+    // Scale timeout with iteration count: assume at least 20k iters/sec floor,
+    // with a 60s minimum. For 9M iterations this gives ~450s vs the 136s actually
+    // needed at typical throughput — avoids the 60s hardcoded cutoff.
+    auto timeoutMs = std::chrono::milliseconds(
+        std::max(60000LL, static_cast<long long>(config_.maxIterations) / 20LL));
+    bool completed = workerPool_->waitForCompletion(timeoutMs);
     if (!completed)
         std::cerr << "Warning: parallel MCTS search timed out\n";
 
@@ -504,6 +515,13 @@ void ParallelMCTS::printStats(double wallTime) const {
     std::cout << "Wall Time: " << wallTime << "s" << std::endl;
     std::cout << "Throughput (Wall): " << static_cast<int>(itersPerSec) << " iters/sec" << std::endl;
     std::cout << "Evaluation Queue Size: " << evaluationQueue_->size() << std::endl;
+    if (arena_) {
+        double usedMB  = arena_->bytesUsed()  / (1024.0 * 1024.0);
+        double totalGB = arena_->totalSize()  / (1024.0 * 1024.0 * 1024.0);
+        std::cout << "Arena: " << std::fixed << std::setprecision(1)
+                  << usedMB << " MB / " << totalGB << " GB ("
+                  << std::setprecision(1) << arena_->utilizationPercent() << "%)\n";
+    }
 }
 
 void ParallelMCTS::printBestMoves(int n) const {
@@ -620,20 +638,29 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
     int capacity = static_cast<int>(policy.size());
 
     initNodeChildren(node, capacity);
-    if (capacity > 0) {
+    // initNodeChildren may zero childCapacity if the arena was exhausted;
+    // use the actual post-allocation capacity for all subsequent work.
+    int actualCap = static_cast<int>(node->childCapacity);
+    if (actualCap > 0) {
         node->moves  = static_cast<PenteGame::Move *>(
-            allocateFromSlab(sizeof(PenteGame::Move) * capacity, alignof(PenteGame::Move)));
+            allocateFromSlab(sizeof(PenteGame::Move) * actualCap, alignof(PenteGame::Move)));
         node->priors = static_cast<float *>(
-            allocateFromSlab(sizeof(float) * capacity, alignof(float)));
+            allocateFromSlab(sizeof(float) * actualCap, alignof(float)));
+
+        if (node->moves && node->priors) {
+            for (int i = 0; i < actualCap; ++i) {
+                node->moves[i]  = policy[i].first;
+                node->priors[i] = policy[i].second;
+            }
+        } else {
+            // moves/priors allocation failed — collapse to unexpandable leaf
+            node->children     = nullptr;
+            node->childCapacity = 0;
+            actualCap = 0;
+        }
     }
 
-    for (int i = 0; i < capacity; ++i) {
-        node->moves[i]  = policy[i].first;
-        node->priors[i] = policy[i].second;
-    }
-
-    assert(capacity >= 0 && "policy capacity must be non-negative");
-    node->childCount = static_cast<uint16_t>(capacity);
+    node->childCount = static_cast<uint16_t>(actualCap);
     if (game.isGameOver()) {
         node->value = (game.getWinner() == game.getCurrentPlayer()) ? 1.0f : -1.0f;
         node->solvedStatus = (game.getWinner() == game.getCurrentPlayer())
@@ -722,7 +749,11 @@ void ParallelMCTS::initNodeChildren(ThreadSafeNode *node, int capacity) {
 
     auto *children = static_cast<ThreadSafeNode **>(
         allocateFromSlab(sizeof(ThreadSafeNode *) * capacity, alignof(ThreadSafeNode *)));
-    if (!children) throw std::bad_alloc();
+    if (!children) {
+        node->children = nullptr;
+        node->childCapacity = 0;
+        return;
+    }
     std::memset(children, 0, sizeof(ThreadSafeNode *) * capacity);
     node->children    = children;
     node->childCapacity = static_cast<uint16_t>(capacity);

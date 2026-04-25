@@ -66,9 +66,9 @@ int main(int argc, char *argv[]) {
         ParallelMCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
-        config.numWorkerThreads = 5;
+        config.numWorkerThreads = 6;
         config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
-        config.arenaSize = GameUtils::arenaSizeFromEnv(1);  // 1 GB default; override with ARENA_SIZE_GB
+        config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = &heuristicEvaluator;
 
         auto wallStart = std::chrono::high_resolution_clock::now();
