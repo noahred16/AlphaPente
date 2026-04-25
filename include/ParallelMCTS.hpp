@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -264,6 +265,34 @@ class ParallelMCTS {
     ThreadSafeNode *allocateNode();
     void initNodeChildren(ThreadSafeNode *node, int capacity);
 
+    // Per-thread slab allocator — eliminates the global arenaMutex_ on the hot path.
+    //
+    // Each worker thread owns one SlabView: a bump-pointer window into a pre-carved
+    // region of the master arena.  Allocations within a slab need no lock.  When a
+    // slab is exhausted, refillSlab() acquires arenaMutex_ once to carve a fresh
+    // 16 MB chunk from the arena remainder, then releases the lock immediately.
+    struct SlabView {
+        char *current = nullptr;
+        char *end     = nullptr;
+
+        void *allocateBytes(size_t bytes, size_t alignment) {
+            if (!current) return nullptr;
+            uintptr_t cur     = reinterpret_cast<uintptr_t>(current);
+            uintptr_t aligned = (cur + alignment - 1) & ~(alignment - 1);
+            if (aligned + bytes > reinterpret_cast<uintptr_t>(end)) return nullptr;
+            current = reinterpret_cast<char *>(aligned + bytes);
+            return reinterpret_cast<void *>(aligned);
+        }
+    };
+
+    // Set by each worker thread at entry; nullptr on the main thread unless
+    // search() registers slab[0] before calling prepareRoot().
+    static thread_local SlabView *tl_slab;
+
+    void  setupSlabs();
+    void  refillSlab(SlabView &slab);
+    void *allocateFromSlab(size_t bytes, size_t alignment);
+
     // Member variables
     Config config_;
     std::unique_ptr<Arena> arena_;
@@ -285,7 +314,14 @@ class ParallelMCTS {
     std::atomic<int> totalInProgress{0};   // selections claimed across all workers
     std::atomic<int> nodeCount{0};
 
-    mutable std::mutex arenaMutex_;  // Protects arena allocation across threads
+    mutable std::mutex arenaMutex_;  // Guards arena_ for slab refills and fallback allocation
+
+    // One slab per worker thread + one for the main thread (index 0).
+    // Populated by setupSlabs() at the start of search(); cleared by reset().
+    std::vector<SlabView> workerSlabs_;
+
+    // Size of each on-demand refill chunk when a slab runs out.
+    static constexpr size_t kSlabRefillBytes = 16 * 1024 * 1024;  // 16 MB
 };
 
 #endif // PARALLEL_MCTS_HPP

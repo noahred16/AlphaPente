@@ -40,6 +40,14 @@ class Arena {
         return ptr;
     }
 
+    void *allocateBytes(size_t bytes, size_t alignment) {
+        size_t alignedOffset = (offset_ + alignment - 1) & ~(alignment - 1);
+        if (alignedOffset + bytes > size_) return nullptr;
+        void *ptr = memory_ + alignedOffset;
+        offset_ = alignedOffset + bytes;
+        return ptr;
+    }
+
     void reset() { offset_ = 0; }
 
     void swap(Arena &other) {

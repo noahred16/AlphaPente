@@ -3,6 +3,8 @@
 #include <iostream>
 #include <chrono>
 
+thread_local ParallelMCTS::SlabView *ParallelMCTS::tl_slab = nullptr;
+
 // ============================================================================
 // VirtualLossManager Implementation
 // ============================================================================
@@ -92,6 +94,57 @@ bool ParallelMCTS::BackpropagationQueue::empty() const {
 }
 
 // ============================================================================
+// Per-Thread Slab Allocator
+// ============================================================================
+
+void ParallelMCTS::setupSlabs() {
+    if (!workerSlabs_.empty()) return;
+
+    int numSlabs = config_.numWorkerThreads + 1;  // +1 for main thread (index 0)
+    // Divide the arena into (numSlabs + 1) equal shares: numSlabs initial slabs +
+    // one share left as the fallback/refill pool at the tail of the arena.
+    size_t slabBytes = (arena_->totalSize() / static_cast<size_t>(numSlabs + 1)) & ~size_t(63);
+    if (slabBytes == 0) throw std::bad_alloc();
+
+    workerSlabs_.resize(numSlabs);
+    for (int i = 0; i < numSlabs; ++i) {
+        void *mem = arena_->allocateBytes(slabBytes, 64);
+        if (!mem) throw std::bad_alloc();
+        char *ptr          = reinterpret_cast<char *>(mem);
+        workerSlabs_[i].current = ptr;
+        workerSlabs_[i].end     = ptr + slabBytes;
+    }
+    // The remaining ~1/(numSlabs+1) of the arena is the fallback pool consumed by
+    // refillSlab() and direct-fallback allocations, accessed only under arenaMutex_.
+}
+
+void ParallelMCTS::refillSlab(SlabView &slab) {
+    std::lock_guard<std::mutex> lock(arenaMutex_);
+    void *chunk = arena_->allocateBytes(kSlabRefillBytes, 64);
+    if (chunk) {
+        char *ptr   = reinterpret_cast<char *>(chunk);
+        slab.current = ptr;
+        slab.end     = ptr + kSlabRefillBytes;
+    }
+    // If chunk is nullptr the arena is fully exhausted; slab stays empty and the
+    // caller falls through to the direct-fallback path (which will also return nullptr).
+}
+
+void *ParallelMCTS::allocateFromSlab(size_t bytes, size_t alignment) {
+    if (tl_slab) {
+        void *ptr = tl_slab->allocateBytes(bytes, alignment);
+        if (ptr) return ptr;
+        // Hot-path slab exhausted — carve a fresh chunk from the fallback pool.
+        refillSlab(*tl_slab);
+        ptr = tl_slab->allocateBytes(bytes, alignment);
+        if (ptr) return ptr;
+    }
+    // No slab registered (main thread without search() setup, or arena fully exhausted).
+    std::lock_guard<std::mutex> lock(arenaMutex_);
+    return arena_->allocateBytes(bytes, alignment);
+}
+
+// ============================================================================
 // WorkerPool Implementation
 // ============================================================================
 
@@ -141,6 +194,13 @@ bool ParallelMCTS::WorkerPool::isRunning() const {
 }
 
 void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
+    // Register this thread's slab (index 0 is reserved for the main thread).
+    // Guard against tests that start workers without calling search() first.
+    int slabIndex = workerId + 1;
+    if (slabIndex < static_cast<int>(parent->workerSlabs_.size())) {
+        ParallelMCTS::tl_slab = &parent->workerSlabs_[slabIndex];
+    }
+
     PenteGame workerGame;
     int maxIterations = parent->config_.maxIterations;
 
@@ -191,6 +251,8 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
 
         std::this_thread::yield();
     }
+
+    ParallelMCTS::tl_slab = nullptr;  // unregister before signaling completion
 
     if (completedWorkers.fetch_add(1) + 1 == numWorkerThreads) {
         completionCv.notify_one();
@@ -290,7 +352,10 @@ ParallelMCTS::~ParallelMCTS() {
 PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     totalIterations = 0;
     totalInProgress = 0;
+    setupSlabs();
+    tl_slab = &workerSlabs_[0];  // main thread uses slab 0 during prepareRoot
     prepareRoot(game);
+    tl_slab = nullptr;
 
     evalPool_->start();
     workerPool_->start();
@@ -320,8 +385,10 @@ void ParallelMCTS::prepareRoot(const PenteGame &game) {
     int capacity = static_cast<int>(policy.size());
     initNodeChildren(root_, capacity);
 
-    root_->moves = arena_->allocate<PenteGame::Move>(capacity);
-    root_->priors = arena_->allocate<float>(capacity);
+    root_->moves  = static_cast<PenteGame::Move *>(
+        allocateFromSlab(sizeof(PenteGame::Move) * capacity, alignof(PenteGame::Move)));
+    root_->priors = static_cast<float *>(
+        allocateFromSlab(sizeof(float) * capacity, alignof(float)));
 
     for (int i = 0; i < capacity; ++i) {
         root_->moves[i] = policy[i].first;
@@ -391,6 +458,7 @@ PenteGame::Move ParallelMCTS::getBestMove() const {
 void ParallelMCTS::reset() {
     std::lock_guard<std::mutex> lock(treeLock);
     if (arena_) arena_->reset();
+    workerSlabs_.clear();  // slabs are views into arena_; cleared with it
     root_ = nullptr;
     nodeCount = 0;
     totalIterations = 0;
@@ -475,11 +543,12 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
 
     int capacity = static_cast<int>(policy.size());
 
-    {
-        std::lock_guard<std::mutex> arenaLock(arenaMutex_);
-        initNodeChildren(node, capacity);
-        node->moves  = arena_->allocate<PenteGame::Move>(capacity);
-        node->priors = arena_->allocate<float>(capacity);
+    initNodeChildren(node, capacity);
+    if (capacity > 0) {
+        node->moves  = static_cast<PenteGame::Move *>(
+            allocateFromSlab(sizeof(PenteGame::Move) * capacity, alignof(PenteGame::Move)));
+        node->priors = static_cast<float *>(
+            allocateFromSlab(sizeof(float) * capacity, alignof(float)));
     }
 
     for (int i = 0; i < capacity; ++i) {
@@ -567,10 +636,9 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
 }
 
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::allocateNode() {
-    std::lock_guard<std::mutex> lock(arenaMutex_);
-    void *mem = arena_->allocate<ThreadSafeNode>();
+    void *mem = allocateFromSlab(sizeof(ThreadSafeNode), alignof(ThreadSafeNode));
     if (!mem) return nullptr;
-    auto *node = new (mem) ThreadSafeNode();  // placement new: properly constructs mutex and atomics
+    auto *node = new (mem) ThreadSafeNode();
     nodeCount.fetch_add(1, std::memory_order_relaxed);
     return node;
 }
@@ -582,9 +650,11 @@ void ParallelMCTS::initNodeChildren(ThreadSafeNode *node, int capacity) {
         return;
     }
 
-    node->children = arena_->allocate<ThreadSafeNode *>(capacity);
-    if (!node->children) throw std::bad_alloc();
-    std::memset(node->children, 0, sizeof(ThreadSafeNode *) * capacity);
+    auto *children = static_cast<ThreadSafeNode **>(
+        allocateFromSlab(sizeof(ThreadSafeNode *) * capacity, alignof(ThreadSafeNode *)));
+    if (!children) throw std::bad_alloc();
+    std::memset(children, 0, sizeof(ThreadSafeNode *) * capacity);
+    node->children    = children;
     node->childCapacity = static_cast<uint16_t>(capacity);
-    node->childCount = 0;
+    node->childCount  = 0;
 }
