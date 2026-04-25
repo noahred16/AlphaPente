@@ -230,6 +230,7 @@ class ParallelMCTS {
     int getTotalVisits() const;
     int getTreeSize() const;
     void printStats(double wallTime) const;
+    void printBestMoves(int n) const;
 
     // Configuration access
     void setConfig(const Config &config);

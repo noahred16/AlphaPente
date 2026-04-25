@@ -67,7 +67,7 @@ int main(int argc, char *argv[]) {
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
         config.numWorkerThreads = 5;
-        config.numEvalThreads = 3;
+        config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
         config.arenaSize = GameUtils::arenaSizeFromEnv(1);  // 1 GB default; override with ARENA_SIZE_GB
         config.evaluator = &heuristicEvaluator;
 
@@ -78,6 +78,7 @@ int main(int argc, char *argv[]) {
         double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
 
         mcts.printStats(wallElapsed);
+        mcts.printBestMoves(15);
         std::cout << "MCTS selected move: " << GameUtils::displayMove(bestMove.x, bestMove.y) << std::endl;
     } else {
         MCTS::Config config;

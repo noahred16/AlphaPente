@@ -1,5 +1,7 @@
 #include "ParallelMCTS.hpp"
+#include <algorithm>
 #include <cassert>
+#include <iomanip>
 #include <iostream>
 #include <chrono>
 
@@ -201,6 +203,19 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
         ParallelMCTS::tl_slab = &parent->workerSlabs_[slabIndex];
     }
 
+    // Cache root and initial game state once — both are written in prepareRoot()
+    // before any worker starts and are never modified during search, so reading
+    // them here without a lock is safe (happens-before via thread start).
+    ThreadSafeNode *const root     = parent->root_;
+    const PenteGame        rootGame = parent->initialGame_;
+
+    if (!root) {
+        // Should never happen, but guard defensively.
+        if (completedWorkers.fetch_add(1) + 1 == numWorkerThreads)
+            completionCv.notify_one();
+        return;
+    }
+
     PenteGame workerGame;
     int maxIterations = parent->config_.maxIterations;
 
@@ -210,40 +225,43 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
         if (slot < maxIterations) {
             std::vector<ThreadSafeNode *> searchPath;
 
-            ThreadSafeNode *root = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(parent->treeLock);
-                root = parent->root_;
-                if (root == nullptr) {
-                    parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
-                    continue;
-                }
-                workerGame.syncFrom(parent->initialGame_);
-            }
-
+            workerGame.syncFrom(rootGame);
             searchPath.push_back(root);
             ThreadSafeNode *leaf = parent->select(root, workerGame, searchPath);
 
-            EvaluationRequest request;
-            request.node = leaf;
-            request.gameState = workerGame;
-            request.searchPath = searchPath;
-            if (!parent->evaluationQueue_->tryPush(request)) {
-                // Queue full — return the slot so it can be retried
-                parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+            if (parent->config_.numEvalThreads == 0) {
+                // Inline mode: evaluate, expand, and backprop in this worker.
+                // No queue round-trip — eliminates pipeline overhead when the
+                // evaluator is cheap (CPU heuristic).
+                float value  = parent->config_.evaluator->evaluateValue(workerGame);
+                auto  policy = parent->config_.evaluator->evaluatePolicy(workerGame);
+                parent->expand(leaf, workerGame, policy);
+                parent->backpropagate(leaf, value, searchPath);
+                parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                // Queue mode: hand off to eval thread; backprop happens in Phase 2.
+                EvaluationRequest request;
+                request.node       = leaf;
+                request.gameState  = workerGame;
+                request.searchPath = searchPath;
+                if (!parent->evaluationQueue_->tryPush(request)) {
+                    // Queue full — return the slot so it can be retried
+                    parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                }
             }
         } else {
             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
         }
 
-        // PHASE 2: Pull one backprop result and process it.
-        // Each worker grabs a single item so all workers can backprop concurrently
-        // instead of one worker draining the whole queue (convoy effect).
-        auto result = parent->backpropagationQueue_->tryPop();
-        if (result.has_value()) {
-            parent->expand(result->node, result->gameState, result->policy);
-            parent->backpropagate(result->node, result->value, result->searchPath);
-            parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+        // PHASE 2 (queue mode only): pull one backprop result per loop iteration
+        // so all workers share the backprop work rather than one worker draining all.
+        if (parent->config_.numEvalThreads > 0) {
+            auto result = parent->backpropagationQueue_->tryPop();
+            if (result.has_value()) {
+                parent->expand(result->node, result->gameState, result->policy);
+                parent->backpropagate(result->node, result->value, result->searchPath);
+                parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations)
@@ -357,7 +375,7 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     prepareRoot(game);
     tl_slab = nullptr;
 
-    evalPool_->start();
+    if (config_.numEvalThreads > 0) evalPool_->start();
     workerPool_->start();
 
     bool completed = workerPool_->waitForCompletion();
@@ -365,7 +383,7 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         std::cerr << "Warning: parallel MCTS search timed out\n";
 
     workerPool_->stop();
-    evalPool_->stop();
+    if (config_.numEvalThreads > 0) evalPool_->stop();
 
     return getBestMove();
 }
@@ -488,6 +506,64 @@ void ParallelMCTS::printStats(double wallTime) const {
     std::cout << "Evaluation Queue Size: " << evaluationQueue_->size() << std::endl;
 }
 
+void ParallelMCTS::printBestMoves(int n) const {
+    if (!root_ || root_->childCapacity == 0) return;
+
+    // Collect and sort children by visit count descending
+    struct Entry {
+        int index;
+        int32_t visits;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(root_->childCapacity);
+    for (int i = 0; i < root_->childCapacity; ++i) {
+        const ThreadSafeNode *child = root_->children[i];
+        if (!child) continue;
+        entries.push_back({i, child->visits.load(std::memory_order_relaxed)});
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const Entry &a, const Entry &b) { return a.visits > b.visits; });
+
+    int show = std::min(n, static_cast<int>(entries.size()));
+
+    // Move label: skip 'I' to match board notation
+    auto moveLabel = [](int x, int y) -> std::string {
+        char col = static_cast<char>('A' + x);
+        if (col >= 'I') col++;
+        return std::string(1, col) + std::to_string(y + 1);
+    };
+
+    std::cout << "\n=== Top " << show << " Moves of " << entries.size() << " Considered ===\n";
+    std::cout << std::setw(6)  << "Move"
+              << std::setw(10) << "Visits"
+              << std::setw(10) << "Prior"
+              << std::setw(10) << "Avg Val"
+              << std::setw(10) << "Status"
+              << "\n";
+    std::cout << std::string(46, '-') << "\n";
+
+    std::cout << std::fixed;
+    for (int k = 0; k < show; ++k) {
+        int i = entries[k].index;
+        const ThreadSafeNode *child = root_->children[i];
+        int32_t visits = child->visits.load(std::memory_order_relaxed);
+        double  avgVal = visits > 0
+            ? child->totalValue.load(std::memory_order_relaxed) / visits
+            : 0.0;
+        const char *status =
+            child->solvedStatus == SolvedStatus::SOLVED_WIN  ? "WIN"  :
+            child->solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
+
+        std::cout << std::setw(6)  << moveLabel(root_->moves[i].x, root_->moves[i].y)
+                  << std::setw(10) << visits
+                  << std::setw(10) << std::setprecision(3) << root_->priors[i]
+                  << std::setw(10) << std::setprecision(3) << avgVal
+                  << std::setw(10) << status
+                  << "\n";
+    }
+    std::cout << std::string(46, '=') << "\n";
+}
+
 void ParallelMCTS::setConfig(const Config &config) {
     config_ = config;
 }
@@ -600,35 +676,29 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     int bestIndex = -1;
     double bestValue = -std::numeric_limits<double>::infinity();
 
-    // Evaluate expanded children using PUCT with virtual loss
+    // Score all children (visited and unvisited) in one pass.
+    // Unvisited (null) children contribute exploitation=0 so their exploration
+    // term drives selection until they are visited — correct AlphaZero PUCT.
     for (int i = 0; i < cap; ++i) {
-        if (node->children[i] == nullptr) continue;
-
         ThreadSafeNode *child = node->children[i];
-        int32_t effectiveVisits = virtualLossManager_->getEffectiveVisits(child);
 
-        // Exploitation term: average value
-        double exploitation = (effectiveVisits == 0) ? 0.0 : 
-            static_cast<double>(child->totalValue.load(std::memory_order_relaxed)) / effectiveVisits;
+        int32_t effectiveVisits;
+        double  exploitation;
+        if (child == nullptr) {
+            effectiveVisits = 0;
+            exploitation    = 0.0;
+        } else {
+            effectiveVisits = virtualLossManager_->getEffectiveVisits(child);
+            exploitation    = (effectiveVisits == 0) ? 0.0 :
+                static_cast<double>(child->totalValue.load(std::memory_order_relaxed)) / effectiveVisits;
+        }
 
-        // Exploration term: prior * sqrt(parent_visits) / (1 + effective_visits)
         double exploration = explorationFactor * node->priors[i] * sqrtParentVisits / (1.0 + effectiveVisits);
-
-        double score = exploitation + exploration;
+        double score       = exploitation + exploration;
 
         if (score > bestValue) {
             bestValue = score;
             bestIndex = i;
-        }
-    }
-
-    // If no expanded children, select first unexpanded child
-    if (bestIndex == -1) {
-        for (int i = 0; i < cap; ++i) {
-            if (node->children[i] == nullptr) {
-                bestIndex = i;
-                break;
-            }
         }
     }
 

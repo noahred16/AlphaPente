@@ -68,7 +68,7 @@ TEST_CASE("Worker thread selects leaf, applies virtual loss, pushes to eval queu
 
     ParallelMCTS::Config config;
     config.numWorkerThreads = 1;
-    config.numEvalThreads = 0;
+    config.numEvalThreads = 1;  // queue mode: worker pushes to eval queue
     config.maxIterations = 1;
     config.evaluator = &evaluator;
 
@@ -188,12 +188,15 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
     };
 
     std::vector<Result> results = {
+        // Inline eval (numEvalThreads=0): workers evaluate, expand, backprop directly
+        runConfig(1, 0),
+        runConfig(2, 0),
+        runConfig(4, 0),
+        runConfig(6, 0),
+        // Queue eval (numEvalThreads>0): producer/consumer pipeline for NN/GPU
         runConfig(1, 1),
         runConfig(2, 1),
-        runConfig(4, 1),
         runConfig(4, 2),
-        runConfig(4, 4),
-        runConfig(3, 5),
         runConfig(5, 3),
         runConfig(6, 2),
     };
