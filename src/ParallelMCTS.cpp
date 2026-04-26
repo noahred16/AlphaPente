@@ -234,7 +234,18 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                 // Inline mode: evaluate, expand, and backprop in this worker.
                 // No queue round-trip — eliminates pipeline overhead when the
                 // evaluator is cheap (CPU heuristic).
-                float value  = parent->config_.evaluator->evaluateValue(workerGame);
+
+                // If the game is already over, the previous mover won.
+                // Use +1.0f directly rather than calling the evaluator, which reads
+                // board features (e.g. open fours that no longer matter) and returns
+                // the wrong sign for terminal positions.
+                float value;
+                if (workerGame.isGameOver()) {
+                    value = 1.0f;
+                } else {
+                    value = parent->config_.evaluator->evaluateValue(workerGame);
+                }
+
                 auto  policy = parent->config_.evaluator->evaluatePolicy(workerGame);
                 parent->expand(leaf, workerGame, policy);
                 parent->backpropagate(leaf, value, searchPath);
@@ -662,9 +673,12 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
 
     node->childCount = static_cast<uint16_t>(actualCap);
     if (game.isGameOver()) {
-        node->value = (game.getWinner() == game.getCurrentPlayer()) ? 1.0f : -1.0f;
-        node->solvedStatus = (game.getWinner() == game.getCurrentPlayer())
-                                 ? SolvedStatus::SOLVED_WIN : SolvedStatus::SOLVED_LOSS;
+        // After a winning move, currentPlayer has already toggled to the NEXT player.
+        // The winner is always the previous mover (opponent of currentPlayer).
+        // Convention matches single-threaded MCTS: SOLVED_WIN means the last mover won,
+        // which is a win from the parent's perspective (the parent made this winning move).
+        node->value = 1.0f;
+        node->solvedStatus = SolvedStatus::SOLVED_WIN;
     }
     node->evaluated.store(true, std::memory_order_relaxed);
     node->expanded.store(true, std::memory_order_release);
@@ -716,8 +730,14 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
             exploitation    = 0.0;
         } else {
             effectiveVisits = virtualLossManager_->getEffectiveVisits(child);
-            exploitation    = (effectiveVisits == 0) ? 0.0 :
-                static_cast<double>(child->totalValue.load(std::memory_order_relaxed)) / effectiveVisits;
+            if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+                exploitation = std::numeric_limits<double>::infinity();
+            } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+                exploitation = -std::numeric_limits<double>::infinity();
+            } else {
+                exploitation = (effectiveVisits == 0) ? 0.0 :
+                    static_cast<double>(child->totalValue.load(std::memory_order_relaxed)) / effectiveVisits;
+            }
         }
 
         double exploration = explorationFactor * node->priors[i] * sqrtParentVisits / (1.0 + effectiveVisits);

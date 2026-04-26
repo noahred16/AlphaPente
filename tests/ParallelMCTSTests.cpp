@@ -195,11 +195,11 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
         runConfig(6, 0),
         runConfig(8, 0),
         // Queue eval (numEvalThreads>0): producer/consumer pipeline for NN/GPU
-        runConfig(1, 1),
-        runConfig(2, 1),
-        runConfig(4, 2),
-        runConfig(5, 3),
-        runConfig(6, 2),
+        // runConfig(1, 1),
+        // runConfig(2, 1),
+        // runConfig(4, 2),
+        // runConfig(5, 3),
+        // runConfig(6, 2),
     };
 
     std::cout << "\n--- Parallel MCTS Benchmark (" << iterations << " iterations) ---\n";
