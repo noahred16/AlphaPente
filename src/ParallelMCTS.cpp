@@ -526,12 +526,28 @@ void ParallelMCTS::printStats(double wallTime) const {
     std::cout << "Wall Time: " << wallTime << "s" << std::endl;
     std::cout << "Throughput (Wall): " << static_cast<int>(itersPerSec) << " iters/sec" << std::endl;
     std::cout << "Evaluation Queue Size: " << evaluationQueue_->size() << std::endl;
+    int nodes = nodeCount.load();
+    std::cout << "Nodes Created: " << nodes << "\n";
     if (arena_) {
-        double usedMB  = arena_->bytesUsed()  / (1024.0 * 1024.0);
-        double totalGB = arena_->totalSize()  / (1024.0 * 1024.0 * 1024.0);
+        double totalGB = arena_->totalSize() / (1024.0 * 1024.0 * 1024.0);
+
+        // Sum actual bytes consumed by node allocations within each slab.
+        // arena_->bytesUsed() only reflects the watermark from upfront slab setup
+        // (all slabs are pre-carved at search() time), so it doesn't reflect real usage.
+        size_t slabConsumed = 0;
+        for (const auto &slab : workerSlabs_) slabConsumed += slab.consumed;
+        // Fallback pool: arena bytes that went to on-demand refill chunks (not initial slabs).
+        size_t numSlabs    = workerSlabs_.size();
+        size_t slabBytes   = numSlabs > 0 ? (arena_->totalSize() / (numSlabs + 1)) & ~size_t(63) : 0;
+        size_t slabReserve = numSlabs * slabBytes;
+        size_t fallbackUsed = arena_->bytesUsed() > slabReserve ? arena_->bytesUsed() - slabReserve : 0;
+        double actualMB  = (slabConsumed + fallbackUsed) / (1024.0 * 1024.0);
+        double capacityMB = totalGB * 1024.0;
         std::cout << "Arena: " << std::fixed << std::setprecision(1)
-                  << usedMB << " MB / " << totalGB << " GB ("
-                  << std::setprecision(1) << arena_->utilizationPercent() << "%)\n";
+                  << actualMB << " MB used / " << totalGB << " GB capacity ("
+                  << std::setprecision(1) << (100.0 * actualMB / capacityMB) << "%)\n";
+        if (nodes > 0)
+            std::cout << "Avg bytes/node: " << static_cast<size_t>((slabConsumed + fallbackUsed) / nodes) << "\n";
     }
 }
 

@@ -273,8 +273,9 @@ class ParallelMCTS {
     // slab is exhausted, refillSlab() acquires arenaMutex_ once to carve a fresh
     // 16 MB chunk from the arena remainder, then releases the lock immediately.
     struct SlabView {
-        char *current = nullptr;
-        char *end     = nullptr;
+        char *current  = nullptr;
+        char *end      = nullptr;
+        size_t consumed = 0;  // cumulative bytes handed to callers across all refills
 
         void *allocateBytes(size_t bytes, size_t alignment) {
             if (!current) return nullptr;
@@ -282,6 +283,7 @@ class ParallelMCTS {
             uintptr_t aligned = (cur + alignment - 1) & ~(alignment - 1);
             if (aligned + bytes > reinterpret_cast<uintptr_t>(end)) return nullptr;
             current = reinterpret_cast<char *>(aligned + bytes);
+            consumed += aligned + bytes - cur;
             return reinterpret_cast<void *>(aligned);
         }
     };
