@@ -10,6 +10,7 @@
 // Forward declarations
 class PenteGame;
 class MCTS;
+class ParallelMCTS;
 
 class GameUtils {
   public:
@@ -27,9 +28,13 @@ class GameUtils {
     // Number formatting
     static std::string formatWithCommas(int value);
 
-    // Search utilities
+    // Search utilities - overloaded per engine type
     static void runSearchAndReport(MCTS &mcts, const PenteGame &game);
-    static void interactiveSearchLoop(MCTS &mcts, PenteGame game);
+    static void runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game);
+
+    // Interactive search loop - shared template; explicit instantiations for MCTS and ParallelMCTS
+    template <typename MCTSType>
+    static void interactiveSearchLoop(MCTSType &mcts, PenteGame game);
 
     // Read ARENA_SIZE_GB from env var or .env file; falls back to defaultGb if unset or invalid.
     static size_t arenaSizeFromEnv(size_t defaultGb = 8);

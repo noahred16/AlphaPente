@@ -508,6 +508,17 @@ void ParallelMCTS::clearTree() {
     reset();
 }
 
+void ParallelMCTS::reuseSubtree(const PenteGame::Move &) {
+    // Parallel MCTS doesn't walk the tree to find a subtree; just reset so the
+    // next search() call starts fresh from the updated game state.
+    reset();
+}
+
+bool ParallelMCTS::undoSubtree() {
+    reset();
+    return true;
+}
+
 int ParallelMCTS::getTotalVisits() const {
     if (!root_) return 0;
     return root_->visits.load(std::memory_order_relaxed);
@@ -517,7 +528,7 @@ int ParallelMCTS::getTreeSize() const {
     return nodeCount.load(std::memory_order_relaxed);
 }
 
-void ParallelMCTS::printStats(double wallTime) const {
+void ParallelMCTS::printStats(double wallTime, double /*cpuTime*/) const {
     int iters = totalIterations.load();
     double itersPerSec = wallTime > 0.0 ? iters / wallTime : 0.0;
     std::cout << "=== Parallel MCTS Stats ===" << std::endl;

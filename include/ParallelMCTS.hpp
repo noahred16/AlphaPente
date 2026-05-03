@@ -225,11 +225,13 @@ class ParallelMCTS {
     // Tree management
     void reset();
     void clearTree();
+    void reuseSubtree(const PenteGame::Move &move);
+    bool undoSubtree();
 
     // Statistics and debugging
     int getTotalVisits() const;
     int getTreeSize() const;
-    void printStats(double wallTime) const;
+    void printStats(double wallTime, double cpuTime = 0.0) const;
     void printBestMoves(int n) const;
 
     // Configuration access

@@ -3,28 +3,22 @@
 #include "MCTS.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
-#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
 
-// How to run: ./pente "1. K10 L9 2. K12 M10" 100000 [-o <numOffsets>] [-n] [-p]
+// How to run: ./pente "1. K10 L9 2. K12 M10" 100000 [-o <numOffsets>] [-n] [-s]
 int main(int argc, char *argv[]) {
     std::cout << "Playing Pente..." << std::endl;
 
     int numOffsets = 16;
     bool nonInteractive = false;
-    bool useParallel = false;
+    bool useSerial = false;
     int opt;
-    while ((opt = getopt(argc, argv, "no:p")) != -1) {
+    while ((opt = getopt(argc, argv, "no:s")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
-        else if (opt == 'p') useParallel = true;
-    }
-
-    if (useParallel && !nonInteractive) {
-        std::cerr << "Error: -p (parallel) requires -n (non-interactive) mode\n";
-        return 1;
+        else if (opt == 's') useSerial = true;
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -62,25 +56,7 @@ int main(int argc, char *argv[]) {
 
     HeuristicEvaluator heuristicEvaluator;
 
-    if (useParallel) {
-        ParallelMCTS::Config config;
-        config.maxIterations = mctsIterations;
-        config.explorationConstant = 1.414;
-        config.numWorkerThreads = 6;
-        config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
-        config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
-        config.evaluator = &heuristicEvaluator;
-
-        auto wallStart = std::chrono::high_resolution_clock::now();
-        ParallelMCTS mcts(config);
-        PenteGame::Move bestMove = mcts.search(game);
-        auto wallEnd = std::chrono::high_resolution_clock::now();
-        double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
-
-        mcts.printStats(wallElapsed);
-        mcts.printBestMoves(15);
-        std::cout << "MCTS selected move: " << GameUtils::displayMove(bestMove.x, bestMove.y) << std::endl;
-    } else {
+    if (useSerial) {
         MCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
@@ -90,6 +66,20 @@ int main(int argc, char *argv[]) {
         config.evaluator = &heuristicEvaluator;
 
         MCTS mcts(config);
+        if (nonInteractive)
+            GameUtils::runSearchAndReport(mcts, game);
+        else
+            GameUtils::interactiveSearchLoop(mcts, game);
+    } else {
+        ParallelMCTS::Config config;
+        config.maxIterations = mctsIterations;
+        config.explorationConstant = 1.414;
+        config.numWorkerThreads = 6;
+        config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
+        config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
+        config.evaluator = &heuristicEvaluator;
+
+        ParallelMCTS mcts(config);
         if (nonInteractive)
             GameUtils::runSearchAndReport(mcts, game);
         else

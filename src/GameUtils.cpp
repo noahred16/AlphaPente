@@ -1,5 +1,6 @@
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
+#include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include "Profiler.hpp"
 #include <chrono>
@@ -186,6 +187,18 @@ std::string GameUtils::formatWithCommas(int value) {
     return result;
 }
 
+void GameUtils::runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game) {
+    auto wallStart = std::chrono::high_resolution_clock::now();
+    PenteGame::Move bestMove = mcts.search(game);
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+
+    mcts.printStats(wallElapsed);
+    mcts.printBestMoves(15);
+    std::cout << "MCTS selected move: " << displayMove(bestMove.x, bestMove.y) << std::endl;
+    std::cout << '\a' << std::flush;
+}
+
 void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     auto wallStart = std::chrono::high_resolution_clock::now();
     std::clock_t cpuStart = std::clock();
@@ -220,7 +233,8 @@ void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     std::cout << '\a' << std::flush;
 }
 
-void GameUtils::interactiveSearchLoop(MCTS &mcts, PenteGame game) {
+template <typename MCTSType>
+void GameUtils::interactiveSearchLoop(MCTSType &mcts, PenteGame game) {
     runSearchAndReport(mcts, game);
 
     Profiler::instance().printReport();
@@ -281,9 +295,13 @@ void GameUtils::interactiveSearchLoop(MCTS &mcts, PenteGame game) {
 
         std::cout << "RUNNING SEARCH with " << formatWithCommas(iterationsToAdd) << " iterations..." << std::endl;
 
-        MCTS::Config config = mcts.getConfig();
+        auto config = mcts.getConfig();
         config.maxIterations = iterationsToAdd;
         mcts.setConfig(config);
         runSearchAndReport(mcts, game);
     }
 }
+
+// Explicit instantiations so the template body can live in the .cpp file.
+template void GameUtils::interactiveSearchLoop<MCTS>(MCTS &, PenteGame);
+template void GameUtils::interactiveSearchLoop<ParallelMCTS>(ParallelMCTS &, PenteGame);
