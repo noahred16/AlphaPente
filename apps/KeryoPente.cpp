@@ -1,22 +1,25 @@
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
 #include "MCTS.hpp"
+#include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
 
-// How to run: ./keryopente "1. K10 K9 2. K6 L11 3. M8 J11" 100000 [-o <numOffsets>]
+// How to run: ./keryopente "1. K10 K9 2. K6 L11 3. M8 J11" 100000 [-o <numOffsets>] [-n] [-s]
 // Keryo-Pente: captures enabled, 3-stone captures, 15 captures to win
 int main(int argc, char *argv[]) {
     std::cout << "Playing Keryo-Pente (3-stone captures, 15 to win)..." << std::endl;
 
     int numOffsets = 16;
     bool nonInteractive = false;
+    bool useSerial = false;
     int opt;
-    while ((opt = getopt(argc, argv, "no:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:s")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
+        else if (opt == 's') useSerial = true;
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
@@ -51,22 +54,36 @@ int main(int argc, char *argv[]) {
 
     GameUtils::printGameState(game);
 
-    // MCTS configuration
-    MCTS::Config config;
-    config.maxIterations = mctsIterations;
-    config.explorationConstant = 1.414;
-    config.searchMode = MCTS::SearchMode::PUCT;
-    config.arenaSize = GameUtils::arenaSizeFromEnv();
-    // UniformEvaluator uniformEvaluator;
-    // config.evaluator = &uniformEvaluator;
     HeuristicEvaluator heuristicEvaluator;
-    config.evaluator = &heuristicEvaluator;
 
-    MCTS mcts(config);
-    if (nonInteractive)
-        GameUtils::runSearchAndReport(mcts, game);
-    else
-        GameUtils::interactiveSearchLoop(mcts, game);
+    if (useSerial) {
+        MCTS::Config config;
+        config.maxIterations = mctsIterations;
+        config.explorationConstant = 1.414;
+        config.searchMode = MCTS::SearchMode::PUCT;
+        config.arenaSize = GameUtils::arenaSizeFromEnv();
+        config.evaluator = &heuristicEvaluator;
+
+        MCTS mcts(config);
+        if (nonInteractive)
+            GameUtils::runSearchAndReport(mcts, game);
+        else
+            GameUtils::interactiveSearchLoop(mcts, game);
+    } else {
+        ParallelMCTS::Config config;
+        config.maxIterations = mctsIterations;
+        config.explorationConstant = 1.414;
+        config.numWorkerThreads = 6;
+        config.numEvalThreads = 0;
+        config.arenaSize = GameUtils::arenaSizeFromEnv(2);
+        config.evaluator = &heuristicEvaluator;
+
+        ParallelMCTS mcts(config);
+        if (nonInteractive)
+            GameUtils::runSearchAndReport(mcts, game);
+        else
+            GameUtils::interactiveSearchLoop(mcts, game);
+    }
 
     return 0;
 }
