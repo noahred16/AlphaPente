@@ -14,11 +14,13 @@ int main(int argc, char *argv[]) {
     int numOffsets = 16;
     bool nonInteractive = false;
     bool useSerial = false;
+    bool useUniform = false;
     int opt;
-    while ((opt = getopt(argc, argv, "no:s")) != -1) {
+    while ((opt = getopt(argc, argv, "no:su")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
+        else if (opt == 'u') useUniform = true;
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -55,6 +57,8 @@ int main(int argc, char *argv[]) {
     GameUtils::printGameState(game);
 
     HeuristicEvaluator heuristicEvaluator;
+    UniformEvaluator uniformEvaluator;
+    Evaluator *evaluator = useUniform ? static_cast<Evaluator *>(&uniformEvaluator) : &heuristicEvaluator;
 
     if (useSerial) {
         MCTS::Config config;
@@ -63,7 +67,7 @@ int main(int argc, char *argv[]) {
         config.searchMode = MCTS::SearchMode::PUCT;
         config.seed = 42;
         config.arenaSize = GameUtils::arenaSizeFromEnv();
-        config.evaluator = &heuristicEvaluator;
+        config.evaluator = evaluator;
 
         MCTS mcts(config);
         if (nonInteractive)
@@ -77,7 +81,7 @@ int main(int argc, char *argv[]) {
         config.numWorkerThreads = 6;
         config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
-        config.evaluator = &heuristicEvaluator;
+        config.evaluator = evaluator;
 
         ParallelMCTS mcts(config);
         if (nonInteractive)

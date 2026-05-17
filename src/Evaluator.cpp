@@ -126,8 +126,7 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
                 score = 0.0f;
             }
         } else {
-            // score = game.evaluateMove(move);
-            score = 1.0f;
+            score = game.evaluateMove(move);
         }
         policyScores.emplace_back(move, score);
         totalScore += score;
