@@ -38,9 +38,26 @@ else()
   endif()
 endif()
 
-# ─── Optional: OpenMP (MCTS parallelism) ──────────────────────────────────────
+# ─── Optional: LibTorch (NNEvaluator + AlphaNet) ──────────────────────────────
+# Find Torch before OpenMP: LibTorch bundles its own libgomp, so when Torch is
+# present we skip the separate OpenMP link to avoid loading two OpenMP runtimes.
 
-find_package(OpenMP)
+if(NOT DEFINED CMAKE_PREFIX_PATH AND EXISTS "/opt/libtorch")
+  list(APPEND CMAKE_PREFIX_PATH "/opt/libtorch")
+endif()
+
+find_package(Torch QUIET)
+if(TORCH_FOUND)
+  message(STATUS "LibTorch found: ${TORCH_VERSION}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+endif()
+
+# ─── Optional: OpenMP (MCTS parallelism) ──────────────────────────────────────
+# Skip when Torch is present — Torch's bundled libgomp provides OpenMP support.
+
+if(NOT TORCH_FOUND)
+  find_package(OpenMP)
+endif()
 
 # ─── Includes ─────────────────────────────────────────────────────────────────
 
@@ -58,8 +75,16 @@ add_library(pente_core
     src/Zobrist.cpp
 )
 
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(pente_core PUBLIC OpenMP::OpenMP_CXX)
+if(TORCH_FOUND)
+  target_compile_definitions(pente_core PUBLIC WITH_TORCH PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
+  target_sources(pente_core PRIVATE src/NNModel.cpp src/NNEvaluator.cpp)
+  target_link_libraries(pente_core PUBLIC "${TORCH_LIBRARIES}")
+  target_include_directories(pente_core SYSTEM PUBLIC "${TORCH_INCLUDE_DIRS}")
+else()
+  message(STATUS "LibTorch not found — NNEvaluator disabled")
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(pente_core PUBLIC OpenMP::OpenMP_CXX)
+  endif()
 endif()
 
 # ─── Executables ──────────────────────────────────────────────────────────────

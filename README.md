@@ -8,7 +8,10 @@ C++ implementation of AlphaZero for the game of Pente.
 - Refactor that time constraint concept
 - Review early solved stopping
 - store first as canonical instead of min as canonical
-
+- initialize a checkpoints/best_model in order to validate the NNEvaluator
+- simple benchmark script to validate training progress. 
+- training schedule
+- use ethernet cord. 
 
 ```
 /*

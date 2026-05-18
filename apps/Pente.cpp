@@ -5,6 +5,7 @@
 #include "PenteGame.hpp"
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <unistd.h>
 
 // How to run: ./pente "1. K10 L9 2. K12 M10" 100000 [-o <numOffsets>] [-n] [-s]
@@ -15,12 +16,14 @@ int main(int argc, char *argv[]) {
     bool nonInteractive = false;
     bool useSerial = false;
     bool useUniform = false;
+    std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:su")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suN:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
         else if (opt == 'u') useUniform = true;
+        else if (opt == 'N') nnPath = optarg;
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -59,6 +62,15 @@ int main(int argc, char *argv[]) {
     HeuristicEvaluator heuristicEvaluator;
     UniformEvaluator uniformEvaluator;
     Evaluator *evaluator = useUniform ? static_cast<Evaluator *>(&uniformEvaluator) : &heuristicEvaluator;
+
+#ifdef WITH_TORCH
+    std::unique_ptr<NNEvaluator> nnEval;
+    if (!nnPath.empty()) {
+        nnEval = std::make_unique<NNEvaluator>(nnPath);
+        evaluator = nnEval.get();
+        std::cout << "Using NNEvaluator: " << nnPath << std::endl;
+    }
+#endif
 
     if (useSerial) {
         MCTS::Config config;

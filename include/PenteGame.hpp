@@ -203,6 +203,8 @@ class PenteGame {
 
     // Config access
     const Config &getConfig() const { return config_; }
+    const BitBoard &getBlackBitBoard() const { return blackStones; }
+    const BitBoard &getWhiteBitBoard() const { return whiteStones; }
 };
 
 #endif // PENTE_HPP

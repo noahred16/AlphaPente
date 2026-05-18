@@ -1,36 +1,27 @@
-#include "Evaluator.hpp"
-#include "GameUtils.hpp"
-#include "PenteGame.hpp"
-#include "ParallelMCTS.hpp"
-#include "Profiler.hpp"
-#include <chrono>
-#include <iomanip>
+#include "NNModel.hpp"
+#include <filesystem>
 #include <iostream>
 
-int main(int argc, char *argv[]) {
-    std::cout << "Training AlphaPente..." << std::endl;
+int main() {
+    std::cout << "AlphaPente — model initialization" << std::endl;
 
-    // Setup
-    PenteGame game(PenteGame::Config::pente());
-    game.reset();
+#ifdef WITH_TORCH
+    std::string outDir = PROJECT_ROOT "/checkpoints/pente";
+    std::filesystem::create_directories(outDir);
+    std::string path = outDir + "/best_model.pt";
 
-    HeuristicEvaluator heuristicEvaluator;
+    AlphaNet model(64, 5);
+    torch::save(model, path);
 
-    ParallelMCTS::Config config;
-    config.maxIterations = 100;
-    config.explorationConstant = 1.7;
-    config.searchMode = ParallelMCTS::SearchMode::PUCT;
-    config.seed = 42;
-    config.evaluator = &heuristicEvaluator;
-    config.numWorkerThreads = 4;
-    config.numEvalThreads = 1;
-    config.arenaSize = GameUtils::arenaSizeFromEnv();
-    
-    // Search
-    ParallelMCTS parallelMcts(config);
-    parallelMcts.search(game);
+    size_t params = 0;
+    for (const auto &p : model->parameters())
+        params += static_cast<size_t>(p.numel());
 
-    std::cout << "Training complete!" << std::endl;
+    std::cout << "Saved initialized AlphaNet to " << path << std::endl;
+    std::cout << "  Channels: 64, ResBlocks: 5, Parameters: " << params << std::endl;
+#else
+    std::cout << "LibTorch not available — build with Torch to enable training." << std::endl;
+#endif
 
     return 0;
 }

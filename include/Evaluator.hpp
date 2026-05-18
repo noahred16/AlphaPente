@@ -2,6 +2,8 @@
 #define EVALUATOR_HPP
 
 #include "PenteGame.hpp"
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -48,5 +50,20 @@ class HeuristicEvaluator : public Evaluator {
     std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame &game) override;
     float evaluateValue(const PenteGame &game) override;
 };
+
+#ifdef WITH_TORCH
+class NNEvaluator : public Evaluator {
+  public:
+    explicit NNEvaluator(const std::string &modelPath);
+    ~NNEvaluator() override;
+    std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame &game) override;
+    std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame &game) override;
+    float evaluateValue(const PenteGame &game) override;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+#endif // WITH_TORCH
 
 #endif // EVALUATOR_HPP
