@@ -12,37 +12,36 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--verbose" || std::string(argv[i]) == "-v") VERBOSE = true;
     }
-    std::cout << "Playing Pente: No-Canon (Black) vs Canon-10 (White)..." << std::endl;
+    std::cout << "Playing Pente: Uniform (Black) vs Heuristic (White)..." << std::endl;
 
     PenteGame game(PenteGame::Config::pente());
     game.reset();
 
     const int warmupIterations = 1000000;
     const int initialIterations = 100000;
-    const int targetVisits = 100000;
+    const int targetVisits = 1000000;
 
+    UniformEvaluator uniformEvaluator;
     HeuristicEvaluator heuristicEvaluator;
     size_t arenaSize = GameUtils::arenaSizeFromEnv();
 
-    // Black: no canonical hashing (canonicalHashDepth = 0)
+    // Black: uniform policy (flat priors)
     MCTS::Config blackConfig;
     blackConfig.maxIterations = warmupIterations;
     blackConfig.explorationConstant = 1.7;
     blackConfig.searchMode = MCTS::SearchMode::PUCT;
     blackConfig.seed = 42;
-    blackConfig.evaluator = &heuristicEvaluator;
-    blackConfig.canonicalHashDepth = 0;
+    blackConfig.evaluator = &uniformEvaluator;
     blackConfig.arenaSize = arenaSize;
     MCTS blackMcts(blackConfig);
 
-    // White: canonical hashing enabled (default depth = 10)
+    // White: heuristic policy (evaluateMove priors)
     MCTS::Config whiteConfig;
     whiteConfig.maxIterations = warmupIterations;
     whiteConfig.explorationConstant = 1.7;
     whiteConfig.searchMode = MCTS::SearchMode::PUCT;
     whiteConfig.seed = 42;
     whiteConfig.evaluator = &heuristicEvaluator;
-    whiteConfig.canonicalHashDepth = 10;
     whiteConfig.arenaSize = arenaSize;
     MCTS whiteMcts(whiteConfig);
 
@@ -82,10 +81,10 @@ int main(int argc, char *argv[]) {
         double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t0).count();
 
         if (isBlackTurn) {
-            if (VERBOSE) std::cout << "Black's turn (No-Canon)\n";
+            if (VERBOSE) std::cout << "Black's turn (Uniform)\n";
             blackTotalTime += elapsed;
         } else {
-            if (VERBOSE) std::cout << "White's turn (Canon-10)\n";
+            if (VERBOSE) std::cout << "White's turn (Heuristic)\n";
             whiteTotalTime += elapsed;
         }
         if (VERBOSE) {
@@ -112,6 +111,15 @@ int main(int argc, char *argv[]) {
         idleMcts.reuseSubtree(move);
     }
 
+    // if verbose print the list of the moves. format: 1. K10 L10 2. J10 J11 ...
+    if (VERBOSE) {
+        std::cout << "\nGame over! Final moves:\n";
+        for (size_t i = 0; i < moves.size(); i += 2) {
+            std::cout << (i / 2 + 1) << ". " << moves[i];
+            if (i + 1 < moves.size()) std::cout << " " << moves[i + 1];
+            std::cout << "\n";
+        }
+    }
     GameUtils::printGameState(game);
 
     // Print moves
@@ -124,15 +132,15 @@ int main(int argc, char *argv[]) {
     // Print result
     PenteGame::Player winner = game.getWinner();
     if (winner == PenteGame::BLACK) {
-        std::cout << "Winner: Black (No-Canon)\n";
+        std::cout << "Winner: Black (Uniform)\n";
     } else if (winner == PenteGame::WHITE) {
-        std::cout << "Winner: White (Canon-10)\n";
+        std::cout << "Winner: White (Heuristic)\n";
     } else {
         std::cout << "Draw\n";
     }
 
-    std::cout << "Black (No-Canon) total time: " << blackTotalTime << "s\n";
-    std::cout << "White (Canon-10) total time: " << whiteTotalTime << "s\n";
+    std::cout << "Black (Uniform) total time: " << blackTotalTime << "s\n";
+    std::cout << "White (Heuristic) total time: " << whiteTotalTime << "s\n";
     std::cout << "Total time: " << blackTotalTime + whiteTotalTime << "s\n";
     std::cout << "Black arena: " << std::fixed << std::setprecision(1)
               << (blackMcts.getArenaUsedBytes() / (1024.0 * 1024.0)) << " MB used"
