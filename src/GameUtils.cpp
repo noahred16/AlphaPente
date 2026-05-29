@@ -27,7 +27,7 @@ void printCrashSummary() {
     double wallElapsed = std::chrono::duration<double>(wallEnd - g_crashCtx.wallStart).count();
     double cpuElapsed = static_cast<double>(std::clock() - g_crashCtx.cpuStart) / CLOCKS_PER_SEC;
     g_crashCtx.mcts->printStats(wallElapsed, cpuElapsed);
-    g_crashCtx.mcts->printBestMoves(15);
+    g_crashCtx.mcts->printBestMoves(5);
     PenteGame::Move best = g_crashCtx.mcts->getBestMove();
     std::string bestStr = GameUtils::displayMove(best.x, best.y);
     std::cout << "MCTS selected move: " << bestStr << std::endl;
@@ -194,7 +194,7 @@ void GameUtils::runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game) {
     double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
 
     mcts.printStats(wallElapsed);
-    mcts.printBestMoves(15);
+    mcts.printBestMoves(5);
     std::cout << "MCTS selected move: " << displayMove(bestMove.x, bestMove.y) << std::endl;
     std::cout << '\a' << std::flush;
 }
@@ -226,7 +226,7 @@ void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     double cpuElapsed = static_cast<double>(cpuEnd - cpuStart) / CLOCKS_PER_SEC;
 
     mcts.printStats(wallElapsed, cpuElapsed);
-    mcts.printBestMoves(15);
+    mcts.printBestMoves(5);
     PenteGame::Move bestMove = mcts.getBestMove();
     std::string bestMoveStr = displayMove(bestMove.x, bestMove.y);
     std::cout << "MCTS selected move: " << bestMoveStr << std::endl;

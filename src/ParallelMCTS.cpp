@@ -340,9 +340,10 @@ void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
             EvaluationResult result;
             result.node = req.node;
             result.gameState = req.gameState;
-            result.value = parent->config_.evaluator->evaluateValue(req.gameState);
-            result.policy = parent->config_.evaluator->evaluatePolicy(req.gameState);
             result.searchPath = req.searchPath;
+            auto [policy, value] = parent->config_.evaluator->evaluate(req.gameState);
+            result.policy = std::move(policy);
+            result.value = value;
 
             parent->backpropagationQueue_->push(result);
         }
@@ -414,6 +415,10 @@ void ParallelMCTS::prepareRoot(const PenteGame &game) {
     initialGame_ = game;
 
     std::lock_guard<std::mutex> lock(treeLock);
+
+    if (root_ && root_->positionHash == game.getHash()) {
+        return;  // reuse existing tree for same position
+    }
 
     root_ = allocateNode();
     root_->player = game.getCurrentPlayer();
@@ -530,10 +535,11 @@ int ParallelMCTS::getTreeSize() const {
 
 void ParallelMCTS::printStats(double wallTime, double /*cpuTime*/) const {
     int iters = totalIterations.load();
+    int totalVisits = getTotalVisits();
     double itersPerSec = wallTime > 0.0 ? iters / wallTime : 0.0;
     std::cout << "=== Parallel MCTS Stats ===" << std::endl;
-    std::cout << "Total Iterations: " << iters << std::endl;
-    std::cout << "Root Visits: " << getTotalVisits() << std::endl;
+    std::cout << "Total Iterations: " << totalVisits << std::endl;
+    std::cout << "Iterations (this run): " << iters << std::endl;
     std::cout << "Wall Time: " << wallTime << "s" << std::endl;
     std::cout << "Throughput (Wall): " << static_cast<int>(itersPerSec) << " iters/sec" << std::endl;
     std::cout << "Evaluation Queue Size: " << evaluationQueue_->size() << std::endl;
