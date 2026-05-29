@@ -1,0 +1,1752 @@
+[
+  {
+    "state": "1. K10 O8 2. N9 E19 3. M9 J7 4. L9",
+    "expected": [
+      "K9",
+      "O9"
+    ]
+  },
+  {
+    "state": "1. K10 S15 2. G7 J19 3. E9 F10 4. F8",
+    "expected": [
+      "D10",
+      "H6"
+    ]
+  },
+  {
+    "state": "1. K10 T7 2. G12 S17 3. H12 M2 4. J12",
+    "expected": [
+      "F12",
+      "K12"
+    ]
+  },
+  {
+    "state": "1. K10 L12 2. N11 T10 3. O10 M10 4. M12",
+    "expected": [
+      "L13",
+      "P9"
+    ]
+  },
+  {
+    "state": "1. K10 B16 2. H13 F8 3. G13 L3 4. J13",
+    "expected": [
+      "F13",
+      "K13"
+    ]
+  },
+  {
+    "state": "1. K10 H10 2. N13 A3 3. N14 S1 4. N12",
+    "expected": [
+      "N11",
+      "N15"
+    ]
+  },
+  {
+    "state": "1. K10 A19 2. N10 R5 3. O9 S17 4. M11",
+    "expected": [
+      "L12",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 T14 2. N8 T11 3. O8 C9 4. P8",
+    "expected": [
+      "M8",
+      "Q8"
+    ]
+  },
+  {
+    "state": "1. K10 F19 2. G13 K7 3. H13 M16 4. F13",
+    "expected": [
+      "E13",
+      "J13"
+    ]
+  },
+  {
+    "state": "1. K10 H19 2. N7 Q2 3. P9 M17 4. O8",
+    "expected": [
+      "M6",
+      "Q10"
+    ]
+  },
+  {
+    "state": "1. K10 R7 2. M7 R9 3. M8 T19 4. M9",
+    "expected": [
+      "M6",
+      "M10"
+    ]
+  },
+  {
+    "state": "1. K10 L6 2. G7 E8 3. H7 J10 4. F7",
+    "expected": [
+      "E7",
+      "J7"
+    ]
+  },
+  {
+    "state": "1. K10 K5 2. H7 Q13 3. H6 H14 4. H5",
+    "expected": [
+      "H4",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 A16 2. G9 Q2 3. G10 E11 4. G11",
+    "expected": [
+      "G8",
+      "G12"
+    ]
+  },
+  {
+    "state": "1. K10 N12 2. N9 C16 3. O10 A15 4. M8",
+    "expected": [
+      "L7",
+      "P11"
+    ]
+  },
+  {
+    "state": "1. K10 H17 2. G10 L6 3. G9 J16 4. G8",
+    "expected": [
+      "G7",
+      "G11"
+    ]
+  },
+  {
+    "state": "1. K10 S13 2. G12 T8 3. J12 T18 4. H12",
+    "expected": [
+      "F12",
+      "K12"
+    ]
+  },
+  {
+    "state": "1. K10 S10 2. G9 Q15 3. G7 M14 4. G8",
+    "expected": [
+      "G6",
+      "G10"
+    ]
+  },
+  {
+    "state": "1. K10 C17 2. G8 E5 3. H8 S12 4. F8",
+    "expected": [
+      "E8",
+      "J8"
+    ]
+  },
+  {
+    "state": "1. K10 G14 2. N13 C15 3. M14 S18 4. O12",
+    "expected": [
+      "L15",
+      "P11"
+    ]
+  },
+  {
+    "state": "1. K10 O19 2. N11 L17 3. P11 K5 4. O11",
+    "expected": [
+      "M11",
+      "Q11"
+    ]
+  },
+  {
+    "state": "1. K10 E4 2. G13 J3 3. F14 F1 4. E15",
+    "expected": [
+      "D16",
+      "H12"
+    ]
+  },
+  {
+    "state": "1. K10 F6 2. G11 C8 3. F12 R13 4. E13",
+    "expected": [
+      "D14",
+      "H10"
+    ]
+  },
+  {
+    "state": "1. K10 A5 2. K7 C3 3. L8 Q8 4. M9",
+    "expected": [
+      "J6",
+      "N10"
+    ]
+  },
+  {
+    "state": "1. K10 B18 2. L7 N18 3. L8 H17 4. L6",
+    "expected": [
+      "L5",
+      "L9"
+    ]
+  },
+  {
+    "state": "1. K10 J5 2. G13 T19 3. G14 H12 4. G12",
+    "expected": [
+      "G11",
+      "G15"
+    ]
+  },
+  {
+    "state": "1. K10 H3 2. G13 H9 3. H13 L11 4. J13",
+    "expected": [
+      "F13",
+      "K13"
+    ]
+  },
+  {
+    "state": "1. K10 O16 2. G11 L18 3. G12 P9 4. G13",
+    "expected": [
+      "G10",
+      "G14"
+    ]
+  },
+  {
+    "state": "1. K10 A3 2. L7 A5 3. L6 E11 4. L8",
+    "expected": [
+      "L5",
+      "L9"
+    ]
+  },
+  {
+    "state": "1. K10 S11 2. H7 B10 3. H9 G16 4. H8",
+    "expected": [
+      "H6",
+      "H10"
+    ]
+  },
+  {
+    "state": "1. K10 C19 2. L13 B4 3. M12 Q10 4. N11",
+    "expected": [
+      "K14",
+      "O10"
+    ]
+  },
+  {
+    "state": "1. K10 M5 2. H13 F17 3. J13 J16 4. G13",
+    "expected": [
+      "F13",
+      "K13"
+    ]
+  },
+  {
+    "state": "1. K10 H18 2. G9 J4 3. F9 Q17 4. H9",
+    "expected": [
+      "E9",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 R2 2. G8 Q7 3. H8 B6 4. J8",
+    "expected": [
+      "F8",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 K3 2. G9 F6 3. E11 M12 4. F10",
+    "expected": [
+      "D12",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 N18 2. M7 E8 3. M6 N17 4. M5",
+    "expected": [
+      "M4",
+      "M8"
+    ]
+  },
+  {
+    "state": "1. K10 M11 2. J13 F17 3. H12 D5 4. G11",
+    "expected": [
+      "F10",
+      "K14"
+    ]
+  },
+  {
+    "state": "1. K10 M11 2. G8 P14 3. F7 J2 4. E6",
+    "expected": [
+      "D5",
+      "H9"
+    ]
+  },
+  {
+    "state": "1. K10 Q16 2. K13 B11 3. H15 M10 4. J14",
+    "expected": [
+      "G16",
+      "L12"
+    ]
+  },
+  {
+    "state": "1. K10 Q16 2. K7 T17 3. L6 M6 4. M5",
+    "expected": [
+      "J8",
+      "N4"
+    ]
+  },
+  {
+    "state": "1. K10 C13 2. N8 G18 3. N6 A14 4. N7",
+    "expected": [
+      "N5",
+      "N9"
+    ]
+  },
+  {
+    "state": "1. K10 M16 2. G8 S10 3. G9 J18 4. G10",
+    "expected": [
+      "G7",
+      "G11"
+    ]
+  },
+  {
+    "state": "1. K10 N17 2. G7 M17 3. G8 A12 4. G9",
+    "expected": [
+      "G6",
+      "G10"
+    ]
+  },
+  {
+    "state": "1. K10 M9 2. N12 L1 3. M12 Q16 4. O12",
+    "expected": [
+      "L12",
+      "P12"
+    ]
+  },
+  {
+    "state": "1. K10 F12 2. N10 T2 3. O9 Q17 4. P8",
+    "expected": [
+      "M11",
+      "Q7"
+    ]
+  },
+  {
+    "state": "1. K10 F19 2. G13 Q8 3. F14 C17 4. H12",
+    "expected": [
+      "E15",
+      "J11"
+    ]
+  },
+  {
+    "state": "1. K10 T6 2. L7 E4 3. L8 K11 4. L9",
+    "expected": [
+      "L6",
+      "L10"
+    ]
+  },
+  {
+    "state": "1. K10 E10 2. J7 K3 3. J8 S6 4. J9",
+    "expected": [
+      "J6",
+      "J10"
+    ]
+  },
+  {
+    "state": "1. K10 A7 2. N8 G16 3. M8 T7 4. O8",
+    "expected": [
+      "L8",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 M13 2. L7 F19 3. L8 K16 4. L6",
+    "expected": [
+      "L5",
+      "L9"
+    ]
+  },
+  {
+    "state": "1. K10 E18 2. N8 G12 3. L6 B10 4. M7",
+    "expected": [
+      "K5",
+      "O9"
+    ]
+  },
+  {
+    "state": "1. K10 O3 2. L13 B4 3. K12 J7 4. J11",
+    "expected": [
+      "H10",
+      "M14"
+    ]
+  },
+  {
+    "state": "1. K10 J4 2. G7 K18 3. G8 B17 4. G9",
+    "expected": [
+      "G6",
+      "G10"
+    ]
+  },
+  {
+    "state": "1. K10 J5 2. L7 O3 3. L6 Q1 4. L5",
+    "expected": [
+      "L4",
+      "L8"
+    ]
+  },
+  {
+    "state": "1. K10 T13 2. N13 O1 3. N14 E2 4. N12",
+    "expected": [
+      "N11",
+      "N15"
+    ]
+  },
+  {
+    "state": "1. K10 G16 2. G9 S19 3. E11 K5 4. F10",
+    "expected": [
+      "D12",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 G12 2. G7 E3 3. J5 J14 4. H6",
+    "expected": [
+      "F8",
+      "K4"
+    ]
+  },
+  {
+    "state": "1. K10 J6 2. N11 T9 3. O12 D16 4. M10",
+    "expected": [
+      "L9",
+      "P13"
+    ]
+  },
+  {
+    "state": "1. K10 B18 2. K13 L6 3. H11 N17 4. J12",
+    "expected": [
+      "G10",
+      "L14"
+    ]
+  },
+  {
+    "state": "1. K10 S18 2. N10 K8 3. L8 B14 4. M9",
+    "expected": [
+      "K7",
+      "O11"
+    ]
+  },
+  {
+    "state": "1. K10 Q16 2. G11 J11 3. H10 E2 4. F12",
+    "expected": [
+      "E13",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 G18 2. L7 H17 3. M7 E6 4. K7",
+    "expected": [
+      "J7",
+      "N7"
+    ]
+  },
+  {
+    "state": "1. K10 C11 2. N7 R2 3. N8 M5 4. N6",
+    "expected": [
+      "N5",
+      "N9"
+    ]
+  },
+  {
+    "state": "1. K10 H5 2. G8 S18 3. J10 G5 4. H9",
+    "expected": [
+      "F7",
+      "K11"
+    ]
+  },
+  {
+    "state": "1. K10 Q5 2. G12 J4 3. H12 H8 4. F12",
+    "expected": [
+      "E12",
+      "J12"
+    ]
+  },
+  {
+    "state": "1. K10 D2 2. L13 H10 3. L14 R2 4. L15",
+    "expected": [
+      "L12",
+      "L16"
+    ]
+  },
+  {
+    "state": "1. K10 R18 2. H13 Q2 3. G14 L15 4. F15",
+    "expected": [
+      "E16",
+      "J12"
+    ]
+  },
+  {
+    "state": "1. K10 K6 2. M7 B12 3. O7 A12 4. N7",
+    "expected": [
+      "L7",
+      "P7"
+    ]
+  },
+  {
+    "state": "1. K10 P3 2. G12 D10 3. E10 K4 4. F11",
+    "expected": [
+      "D9",
+      "H13"
+    ]
+  },
+  {
+    "state": "1. K10 L4 2. G7 Q10 3. H8 S18 4. F6",
+    "expected": [
+      "E5",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 A3 2. H13 N18 3. G12 H7 4. F11",
+    "expected": [
+      "E10",
+      "J14"
+    ]
+  },
+  {
+    "state": "1. K10 K13 2. J7 O13 3. G5 C11 4. H6",
+    "expected": [
+      "F4",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 B4 2. H13 M5 3. F13 O3 4. G13",
+    "expected": [
+      "E13",
+      "J13"
+    ]
+  },
+  {
+    "state": "1. K10 K12 2. H13 D7 3. F11 Q1 4. G12",
+    "expected": [
+      "E10",
+      "J14"
+    ]
+  },
+  {
+    "state": "1. K10 G15 2. H7 D1 3. J8 F9 4. K9",
+    "expected": [
+      "G6",
+      "L10"
+    ]
+  },
+  {
+    "state": "1. K10 O2 2. J13 C5 3. L15 P18 4. K14",
+    "expected": [
+      "H12",
+      "M16"
+    ]
+  },
+  {
+    "state": "1. K10 R2 2. G13 J11 3. F13 E6 4. E13",
+    "expected": [
+      "D13",
+      "H13"
+    ]
+  },
+  {
+    "state": "1. K10 S1 2. G7 H15 3. F6 E8 4. H8",
+    "expected": [
+      "E5",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 O5 2. G12 T18 3. E10 P12 4. F11",
+    "expected": [
+      "D9",
+      "H13"
+    ]
+  },
+  {
+    "state": "1. K10 E8 2. J7 T9 3. H8 S12 4. K6",
+    "expected": [
+      "G9",
+      "L5"
+    ]
+  },
+  {
+    "state": "1. K10 H16 2. G8 M3 3. F7 D9 4. E6",
+    "expected": [
+      "D5",
+      "H9"
+    ]
+  },
+  {
+    "state": "1. K10 T4 2. N9 E16 3. P9 K2 4. O9",
+    "expected": [
+      "M9",
+      "Q9"
+    ]
+  },
+  {
+    "state": "1. K10 Q15 2. G7 J18 3. H7 E19 4. F7",
+    "expected": [
+      "E7",
+      "J7"
+    ]
+  },
+  {
+    "state": "1. K10 M5 2. N13 L3 3. L13 H10 4. M13",
+    "expected": [
+      "K13",
+      "O13"
+    ]
+  },
+  {
+    "state": "1. K10 L6 2. K13 G1 3. K14 B4 4. K15",
+    "expected": [
+      "K12",
+      "K16"
+    ]
+  },
+  {
+    "state": "1. K10 N3 2. J13 D13 3. K12 Q12 4. L11",
+    "expected": [
+      "H14",
+      "M10"
+    ]
+  },
+  {
+    "state": "1. K10 A18 2. K13 B13 3. L12 K11 4. M11",
+    "expected": [
+      "J14",
+      "N10"
+    ]
+  },
+  {
+    "state": "1. K10 C2 2. N11 O12 3. O11 T12 4. P11",
+    "expected": [
+      "M11",
+      "Q11"
+    ]
+  },
+  {
+    "state": "1. K10 P4 2. G9 K2 3. H9 J2 4. F9",
+    "expected": [
+      "E9",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 M12 2. J7 N15 3. K6 F7 4. H8",
+    "expected": [
+      "G9",
+      "L5"
+    ]
+  },
+  {
+    "state": "1. K10 T18 2. G10 S10 3. G12 N16 4. G11",
+    "expected": [
+      "G9",
+      "G13"
+    ]
+  },
+  {
+    "state": "1. K10 M7 2. M13 L3 3. N13 F13 4. O13",
+    "expected": [
+      "L13",
+      "P13"
+    ]
+  },
+  {
+    "state": "1. K10 H5 2. G7 C13 3. J5 O1 4. H6",
+    "expected": [
+      "F8",
+      "K4"
+    ]
+  },
+  {
+    "state": "1. K10 E5 2. G8 S14 3. J8 P11 4. H8",
+    "expected": [
+      "F8",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 B6 2. G9 S17 3. F9 S4 4. E9",
+    "expected": [
+      "D9",
+      "H9"
+    ]
+  },
+  {
+    "state": "1. K10 O1 2. K13 B6 3. K14 L8 4. K12",
+    "expected": [
+      "K11",
+      "K15"
+    ]
+  },
+  {
+    "state": "1. K10 H17 2. J13 T7 3. J12 Q18 4. J11",
+    "expected": [
+      "J10",
+      "J14"
+    ]
+  },
+  {
+    "state": "1. K10 O9 2. G12 P18 3. E12 O8 4. F12",
+    "expected": [
+      "D12",
+      "H12"
+    ]
+  },
+  {
+    "state": "1. K10 S5 2. H13 O16 3. K15 H10 4. J14",
+    "expected": [
+      "G12",
+      "L16"
+    ]
+  },
+  {
+    "state": "1. K10 H6 2. N10 C9 3. L12 G13 4. M11",
+    "expected": [
+      "K13",
+      "O9"
+    ]
+  },
+  {
+    "state": "1. K10 D11 2. H13 H5 3. H12 M14 4. H14",
+    "expected": [
+      "H11",
+      "H15"
+    ]
+  },
+  {
+    "state": "1. K10 R8 2. H7 O12 3. H5 Q9 4. H6",
+    "expected": [
+      "H4",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 P13 2. M7 C13 3. N6 K12 4. O5",
+    "expected": [
+      "L8",
+      "P4"
+    ]
+  },
+  {
+    "state": "1. K10 P6 2. H13 G17 3. G14 H15 4. J12",
+    "expected": [
+      "F15",
+      "K11"
+    ]
+  },
+  {
+    "state": "1. K10 E19 2. M7 S5 3. L6 A10 4. K5",
+    "expected": [
+      "J4",
+      "N8"
+    ]
+  },
+  {
+    "state": "1. K10 C3 2. L13 T2 3. J11 J3 4. K12",
+    "expected": [
+      "H10",
+      "M14"
+    ]
+  },
+  {
+    "state": "1. K10 A18 2. M7 T3 3. K9 L7 4. L8",
+    "expected": [
+      "J10",
+      "N6"
+    ]
+  },
+  {
+    "state": "1. K10 O9 2. M13 S5 3. K15 E19 4. L14",
+    "expected": [
+      "J16",
+      "N12"
+    ]
+  },
+  {
+    "state": "1. K10 P4 2. H13 L14 3. J12 T13 4. G14",
+    "expected": [
+      "F15",
+      "K11"
+    ]
+  },
+  {
+    "state": "1. K10 D2 2. N10 Q11 3. O10 A16 4. P10",
+    "expected": [
+      "M10",
+      "Q10"
+    ]
+  },
+  {
+    "state": "1. K10 P13 2. J13 G15 3. J14 F12 4. J12",
+    "expected": [
+      "J11",
+      "J15"
+    ]
+  },
+  {
+    "state": "1. K10 D12 2. H13 J11 3. K11 C13 4. J12",
+    "expected": [
+      "G14",
+      "L10"
+    ]
+  },
+  {
+    "state": "1. K10 G3 2. N11 L17 3. M11 F12 4. O11",
+    "expected": [
+      "L11",
+      "P11"
+    ]
+  },
+  {
+    "state": "1. K10 E11 2. G11 S3 3. J13 C16 4. H12",
+    "expected": [
+      "F10",
+      "K14"
+    ]
+  },
+  {
+    "state": "1. K10 B12 2. M13 K15 3. N14 T2 4. L12",
+    "expected": [
+      "K11",
+      "O15"
+    ]
+  },
+  {
+    "state": "1. K10 C5 2. N9 P14 3. M9 H14 4. L9",
+    "expected": [
+      "K9",
+      "O9"
+    ]
+  },
+  {
+    "state": "1. K10 R4 2. G7 T17 3. E5 T14 4. F6",
+    "expected": [
+      "D4",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 M18 2. N13 R19 3. L15 T3 4. M14",
+    "expected": [
+      "K16",
+      "O12"
+    ]
+  },
+  {
+    "state": "1. K10 S12 2. G7 P1 3. F8 E1 4. E9",
+    "expected": [
+      "D10",
+      "H6"
+    ]
+  },
+  {
+    "state": "1. K10 F10 2. M13 G11 3. N12 K1 4. O11",
+    "expected": [
+      "L14",
+      "P10"
+    ]
+  },
+  {
+    "state": "1. K10 J4 2. G9 N17 3. F10 J6 4. E11",
+    "expected": [
+      "D12",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 B10 2. G11 C15 3. H12 C11 4. J13",
+    "expected": [
+      "F10",
+      "K14"
+    ]
+  },
+  {
+    "state": "1. K10 M17 2. M7 M11 3. N6 B10 4. O5",
+    "expected": [
+      "L8",
+      "P4"
+    ]
+  },
+  {
+    "state": "1. K10 A8 2. L7 S1 3. J5 S2 4. K6",
+    "expected": [
+      "H4",
+      "M8"
+    ]
+  },
+  {
+    "state": "1. K10 E6 2. K13 Q7 3. H11 A4 4. J12",
+    "expected": [
+      "G10",
+      "L14"
+    ]
+  },
+  {
+    "state": "1. K10 H9 2. J13 L16 3. K12 P4 4. H14",
+    "expected": [
+      "G15",
+      "L11"
+    ]
+  },
+  {
+    "state": "1. K10 N15 2. N7 K18 3. O8 E14 4. M6",
+    "expected": [
+      "L5",
+      "P9"
+    ]
+  },
+  {
+    "state": "1. K10 D16 2. G8 N11 3. H8 T8 4. F8",
+    "expected": [
+      "E8",
+      "J8"
+    ]
+  },
+  {
+    "state": "1. K10 G7 2. G8 O2 3. F7 F4 4. E6",
+    "expected": [
+      "D5",
+      "H9"
+    ]
+  },
+  {
+    "state": "1. K10 N7 2. M7 G14 3. M6 R9 4. M5",
+    "expected": [
+      "M4",
+      "M8"
+    ]
+  },
+  {
+    "state": "1. K10 S14 2. L13 Q9 3. L14 G4 4. L12",
+    "expected": [
+      "L11",
+      "L15"
+    ]
+  },
+  {
+    "state": "1. K10 O8 2. J13 E18 3. H12 S12 4. K14",
+    "expected": [
+      "G11",
+      "L15"
+    ]
+  },
+  {
+    "state": "1. K10 N4 2. G8 K8 3. J10 R18 4. H9",
+    "expected": [
+      "F7",
+      "K11"
+    ]
+  },
+  {
+    "state": "1. K10 M4 2. N8 D11 3. N7 J19 4. N9",
+    "expected": [
+      "N6",
+      "N10"
+    ]
+  },
+  {
+    "state": "1. K10 T5 2. M13 R8 3. M12 E10 4. M14",
+    "expected": [
+      "M11",
+      "M15"
+    ]
+  },
+  {
+    "state": "1. K10 F4 2. N12 T14 3. O12 T11 4. M12",
+    "expected": [
+      "L12",
+      "P12"
+    ]
+  },
+  {
+    "state": "1. K10 O2 2. K7 J2 3. M9 F7 4. L8",
+    "expected": [
+      "J6",
+      "N10"
+    ]
+  },
+  {
+    "state": "1. K10 T16 2. N8 R5 3. M8 G11 4. O8",
+    "expected": [
+      "L8",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 O14 2. G8 S11 3. J6 K16 4. H7",
+    "expected": [
+      "F9",
+      "K5"
+    ]
+  },
+  {
+    "state": "1. K10 G4 2. G12 Q1 3. H13 K5 4. J14",
+    "expected": [
+      "F11",
+      "K15"
+    ]
+  },
+  {
+    "state": "1. K10 Q3 2. K7 G4 3. J8 P7 4. L6",
+    "expected": [
+      "H9",
+      "M5"
+    ]
+  },
+  {
+    "state": "1. K10 K12 2. L13 R12 3. L15 G1 4. L14",
+    "expected": [
+      "L12",
+      "L16"
+    ]
+  },
+  {
+    "state": "1. K10 E8 2. G13 P6 3. F13 N7 4. E13",
+    "expected": [
+      "D13",
+      "H13"
+    ]
+  },
+  {
+    "state": "1. K10 K18 2. M13 C6 3. L12 G8 4. K11",
+    "expected": [
+      "J10",
+      "N14"
+    ]
+  },
+  {
+    "state": "1. K10 H13 2. N8 S4 3. L6 A19 4. M7",
+    "expected": [
+      "K5",
+      "O9"
+    ]
+  },
+  {
+    "state": "1. K10 G19 2. G13 S8 3. G15 G5 4. G14",
+    "expected": [
+      "G12",
+      "G16"
+    ]
+  },
+  {
+    "state": "1. K10 B14 2. G10 O16 3. E8 G7 4. F9",
+    "expected": [
+      "D7",
+      "H11"
+    ]
+  },
+  {
+    "state": "1. K10 R14 2. M7 G15 3. N6 E2 4. L8",
+    "expected": [
+      "K9",
+      "O5"
+    ]
+  },
+  {
+    "state": "1. K10 E15 2. N10 H16 3. M9 O13 4. O11",
+    "expected": [
+      "L8",
+      "P12"
+    ]
+  },
+  {
+    "state": "1. K10 D5 2. M13 O14 3. N12 A5 4. L14",
+    "expected": [
+      "K15",
+      "O11"
+    ]
+  },
+  {
+    "state": "1. K10 E19 2. G7 T11 3. G5 M19 4. G6",
+    "expected": [
+      "G4",
+      "G8"
+    ]
+  },
+  {
+    "state": "1. K10 G5 2. J13 G9 3. H12 J19 4. G11",
+    "expected": [
+      "F10",
+      "K14"
+    ]
+  },
+  {
+    "state": "1. K10 D13 2. N9 E5 3. O8 N6 4. P7",
+    "expected": [
+      "M10",
+      "Q6"
+    ]
+  },
+  {
+    "state": "1. K10 K15 2. M13 L15 3. K13 A13 4. L13",
+    "expected": [
+      "J13",
+      "N13"
+    ]
+  },
+  {
+    "state": "1. K10 N6 2. G11 E1 3. H11 K17 4. J11",
+    "expected": [
+      "F11",
+      "K11"
+    ]
+  },
+  {
+    "state": "1. K10 Q5 2. J7 T10 3. K6 T17 4. L5",
+    "expected": [
+      "H8",
+      "M4"
+    ]
+  },
+  {
+    "state": "1. K10 C5 2. J13 N4 3. J12 L8 4. J14",
+    "expected": [
+      "J11",
+      "J15"
+    ]
+  },
+  {
+    "state": "1. K10 G8 2. G9 B18 3. F10 C3 4. E11",
+    "expected": [
+      "D12",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 T3 2. K13 N19 3. L14 O10 4. M15",
+    "expected": [
+      "J12",
+      "N16"
+    ]
+  },
+  {
+    "state": "1. K10 Q10 2. J13 T11 3. H13 O4 4. K13",
+    "expected": [
+      "G13",
+      "L13"
+    ]
+  },
+  {
+    "state": "1. K10 B4 2. G11 R18 3. H12 N6 4. J13",
+    "expected": [
+      "F10",
+      "K14"
+    ]
+  },
+  {
+    "state": "1. K10 H10 2. G10 E15 3. G9 J15 4. G8",
+    "expected": [
+      "G7",
+      "G11"
+    ]
+  },
+  {
+    "state": "1. K10 T19 2. M13 D14 3. K15 C19 4. L14",
+    "expected": [
+      "J16",
+      "N12"
+    ]
+  },
+  {
+    "state": "1. K10 A6 2. G9 E12 3. H10 R16 4. F8",
+    "expected": [
+      "E7",
+      "J11"
+    ]
+  },
+  {
+    "state": "1. K10 S12 2. L7 P12 3. K8 L14 4. J9",
+    "expected": [
+      "H10",
+      "M6"
+    ]
+  },
+  {
+    "state": "1. K10 R5 2. M7 L19 3. K5 E17 4. L6",
+    "expected": [
+      "J4",
+      "N8"
+    ]
+  },
+  {
+    "state": "1. K10 S17 2. L13 T2 3. L14 P2 4. L12",
+    "expected": [
+      "L11",
+      "L15"
+    ]
+  },
+  {
+    "state": "1. K10 S5 2. H7 N15 3. G7 M8 4. J7",
+    "expected": [
+      "F7",
+      "K7"
+    ]
+  },
+  {
+    "state": "1. K10 B13 2. J7 S11 3. K6 M3 4. L5",
+    "expected": [
+      "H8",
+      "M4"
+    ]
+  },
+  {
+    "state": "1. K10 E18 2. N10 E7 3. M9 G17 4. L8",
+    "expected": [
+      "K7",
+      "O11"
+    ]
+  },
+  {
+    "state": "1. K10 K14 2. K13 S19 3. H15 O9 4. J14",
+    "expected": [
+      "G16",
+      "L12"
+    ]
+  },
+  {
+    "state": "1. K10 B12 2. K13 C1 3. H11 J6 4. J12",
+    "expected": [
+      "G10",
+      "L14"
+    ]
+  },
+  {
+    "state": "1. K10 N6 2. G8 K2 3. G7 N10 4. G9",
+    "expected": [
+      "G6",
+      "G10"
+    ]
+  },
+  {
+    "state": "1. K10 D14 2. N13 G3 3. N14 C17 4. N15",
+    "expected": [
+      "N12",
+      "N16"
+    ]
+  },
+  {
+    "state": "1. K10 M5 2. J13 E2 3. H13 Q8 4. K13",
+    "expected": [
+      "G13",
+      "L13"
+    ]
+  },
+  {
+    "state": "1. K10 O15 2. M7 A6 3. N8 G14 4. O9",
+    "expected": [
+      "L6",
+      "P10"
+    ]
+  },
+  {
+    "state": "1. K10 T3 2. M7 S7 3. O5 B10 4. N6",
+    "expected": [
+      "L8",
+      "P4"
+    ]
+  },
+  {
+    "state": "1. K10 T5 2. N11 A8 3. M11 E8 4. O11",
+    "expected": [
+      "L11",
+      "P11"
+    ]
+  },
+  {
+    "state": "1. K10 M3 2. G9 G3 3. E7 M8 4. F8",
+    "expected": [
+      "D6",
+      "H10"
+    ]
+  },
+  {
+    "state": "1. K10 N3 2. G7 E18 3. F7 K6 4. E7",
+    "expected": [
+      "D7",
+      "H7"
+    ]
+  },
+  {
+    "state": "1. K10 T7 2. J13 A10 3. K13 H19 4. L13",
+    "expected": [
+      "H13",
+      "M13"
+    ]
+  },
+  {
+    "state": "1. K10 H5 2. N7 N1 3. N8 F10 4. N6",
+    "expected": [
+      "N5",
+      "N9"
+    ]
+  },
+  {
+    "state": "1. K10 M19 2. N10 L9 3. O10 K16 4. P10",
+    "expected": [
+      "M10",
+      "Q10"
+    ]
+  },
+  {
+    "state": "1. K10 T7 2. N10 O9 3. O10 K13 4. M10",
+    "expected": [
+      "L10",
+      "P10"
+    ]
+  },
+  {
+    "state": "1. K10 S7 2. N10 K5 3. M11 H2 4. O9",
+    "expected": [
+      "L12",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 A16 2. N7 P7 3. P9 F10 4. O8",
+    "expected": [
+      "M6",
+      "Q10"
+    ]
+  },
+  {
+    "state": "1. K10 F12 2. K7 L3 3. L6 C9 4. J8",
+    "expected": [
+      "H9",
+      "M5"
+    ]
+  },
+  {
+    "state": "1. K10 B2 2. G13 J7 3. F14 P6 4. H12",
+    "expected": [
+      "E15",
+      "J11"
+    ]
+  },
+  {
+    "state": "1. K10 O4 2. K13 B16 3. K15 M16 4. K14",
+    "expected": [
+      "K12",
+      "K16"
+    ]
+  },
+  {
+    "state": "1. K10 T11 2. G11 C19 3. F10 F6 4. H12",
+    "expected": [
+      "E9",
+      "J13"
+    ]
+  },
+  {
+    "state": "1. K10 F11 2. J7 F17 3. H6 O17 4. G5",
+    "expected": [
+      "F4",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 J17 2. K7 L13 3. H9 N1 4. J8",
+    "expected": [
+      "G10",
+      "L6"
+    ]
+  },
+  {
+    "state": "1. K10 T19 2. L13 C18 3. N13 N18 4. M13",
+    "expected": [
+      "K13",
+      "O13"
+    ]
+  },
+  {
+    "state": "1. K10 L13 2. N13 O19 3. O14 P12 4. M12",
+    "expected": [
+      "L11",
+      "P15"
+    ]
+  },
+  {
+    "state": "1. K10 F7 2. N12 N11 3. O12 T4 4. M12",
+    "expected": [
+      "L12",
+      "P12"
+    ]
+  },
+  {
+    "state": "1. K10 R3 2. N8 Q17 3. L8 R8 4. M8",
+    "expected": [
+      "K8",
+      "O8"
+    ]
+  },
+  {
+    "state": "1. K10 G2 2. N9 P13 3. O8 C15 4. M10",
+    "expected": [
+      "L11",
+      "P7"
+    ]
+  },
+  {
+    "state": "1. K10 N6 2. G13 T5 3. F14 M7 4. H12",
+    "expected": [
+      "E15",
+      "J11"
+    ]
+  },
+  {
+    "state": "1. K10 J15 2. N10 T13 3. N8 J17 4. N9",
+    "expected": [
+      "N7",
+      "N11"
+    ]
+  },
+  {
+    "state": "1. K10 Q19 2. J7 F7 3. G9 O12 4. H8",
+    "expected": [
+      "F10",
+      "K6"
+    ]
+  },
+  {
+    "state": "1. K10 R6 2. L13 D5 3. L15 T7 4. L14",
+    "expected": [
+      "L12",
+      "L16"
+    ]
+  },
+  {
+    "state": "1. K10 P5 2. G7 A7 3. F6 G18 4. E5",
+    "expected": [
+      "D4",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 N12 2. J13 C8 3. L11 P13 4. K12",
+    "expected": [
+      "H14",
+      "M10"
+    ]
+  },
+  {
+    "state": "1. K10 D7 2. J7 P6 3. H6 D9 4. K8",
+    "expected": [
+      "G5",
+      "L9"
+    ]
+  },
+  {
+    "state": "1. K10 H16 2. G8 B16 3. H7 T3 4. F9",
+    "expected": [
+      "E10",
+      "J6"
+    ]
+  },
+  {
+    "state": "1. K10 B2 2. G7 B18 3. F8 Q11 4. H6",
+    "expected": [
+      "E9",
+      "J5"
+    ]
+  },
+  {
+    "state": "1. K10 O15 2. K13 S5 3. H11 D3 4. J12",
+    "expected": [
+      "G10",
+      "L14"
+    ]
+  },
+  {
+    "state": "1. K10 F3 2. L7 M18 3. L9 Q5 4. L8",
+    "expected": [
+      "L6",
+      "L10"
+    ]
+  },
+  {
+    "state": "1. K10 Q11 2. L7 N6 3. K6 O9 4. J5",
+    "expected": [
+      "H4",
+      "M8"
+    ]
+  },
+  {
+    "state": "1. K10 D4 2. G7 O2 3. F7 Q3 4. H7",
+    "expected": [
+      "E7",
+      "J7"
+    ]
+  },
+  {
+    "state": "1. K10 R8 2. N11 A7 3. P9 M11 4. O10",
+    "expected": [
+      "M12",
+      "Q8"
+    ]
+  },
+  {
+    "state": "1. K10 K7 2. M13 J8 3. M12 O8 4. M11",
+    "expected": [
+      "M10",
+      "M14"
+    ]
+  },
+  {
+    "state": "1. K10 R11 2. N12 R5 3. O12 N3 4. P12",
+    "expected": [
+      "M12",
+      "Q12"
+    ]
+  },
+  {
+    "state": "1. K10 M2 2. N7 R4 3. O8 E9 4. P9",
+    "expected": [
+      "M6",
+      "Q10"
+    ]
+  },
+  {
+    "state": "1. K10 L14 2. G8 A8 3. J8 A14 4. H8",
+    "expected": [
+      "F8",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 E15 2. J7 M4 3. J8 N4 4. J9",
+    "expected": [
+      "J6",
+      "J10"
+    ]
+  },
+  {
+    "state": "1. K10 R18 2. N8 C14 3. M8 O18 4. L8",
+    "expected": [
+      "K8",
+      "O8"
+    ]
+  },
+  {
+    "state": "1. K10 D8 2. M13 C17 3. O15 T3 4. N14",
+    "expected": [
+      "L12",
+      "P16"
+    ]
+  },
+  {
+    "state": "1. K10 S5 2. L13 D17 3. J11 P18 4. K12",
+    "expected": [
+      "H10",
+      "M14"
+    ]
+  },
+  {
+    "state": "1. K10 D5 2. G10 M7 3. F9 G14 4. H11",
+    "expected": [
+      "E8",
+      "J12"
+    ]
+  },
+  {
+    "state": "1. K10 T17 2. G8 S9 3. E8 R7 4. F8",
+    "expected": [
+      "D8",
+      "H8"
+    ]
+  },
+  {
+    "state": "1. K10 S2 2. M7 Q6 3. O5 K9 4. N6",
+    "expected": [
+      "L8",
+      "P4"
+    ]
+  },
+  {
+    "state": "1. K10 D15 2. N13 T14 3. O14 R16 4. P15",
+    "expected": [
+      "M12",
+      "Q16"
+    ]
+  },
+  {
+    "state": "1. K10 H1 2. G7 R19 3. F8 G16 4. E9",
+    "expected": [
+      "D10",
+      "H6"
+    ]
+  },
+  {
+    "state": "1. K10 H12 2. L13 O2 3. L14 C1 4. L15",
+    "expected": [
+      "L12",
+      "L16"
+    ]
+  },
+  {
+    "state": "1. K10 M4 2. L7 A15 3. M7 H4 4. N7",
+    "expected": [
+      "K7",
+      "O7"
+    ]
+  },
+  {
+    "state": "1. K10 B2 2. N8 H19 3. P8 C10 4. O8",
+    "expected": [
+      "M8",
+      "Q8"
+    ]
+  },
+  {
+    "state": "1. K10 N19 2. N12 E18 3. M11 S3 4. L10",
+    "expected": [
+      "K9",
+      "O13"
+    ]
+  },
+  {
+    "state": "1. K10 J16 2. L7 M13 3. L8 N6 4. L6",
+    "expected": [
+      "L5",
+      "L9"
+    ]
+  },
+  {
+    "state": "1. K10 P14 2. N12 T5 3. P10 R12 4. O11",
+    "expected": [
+      "M13",
+      "Q9"
+    ]
+  },
+  {
+    "state": "1. K10 A3 2. G11 S5 3. E13 F18 4. F12",
+    "expected": [
+      "D14",
+      "H10"
+    ]
+  },
+  {
+    "state": "1. K10 R8 2. M13 L10 3. K11 N2 4. L12",
+    "expected": [
+      "J10",
+      "N14"
+    ]
+  },
+  {
+    "state": "1. K10 N9 2. N8 B9 3. M8 D17 4. O8",
+    "expected": [
+      "L8",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 Q17 2. J13 S1 3. J14 G2 4. J12",
+    "expected": [
+      "J11",
+      "J15"
+    ]
+  },
+  {
+    "state": "1. K10 O16 2. N8 T12 3. O8 J16 4. M8",
+    "expected": [
+      "L8",
+      "P8"
+    ]
+  },
+  {
+    "state": "1. K10 C10 2. N12 T8 3. P12 S10 4. O12",
+    "expected": [
+      "M12",
+      "Q12"
+    ]
+  },
+  {
+    "state": "1. K10 L13 2. N10 T12 3. O11 M5 4. M9",
+    "expected": [
+      "L8",
+      "P12"
+    ]
+  },
+  {
+    "state": "1. K10 G15 2. G11 J10 3. H10 E7 4. F12",
+    "expected": [
+      "E13",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 B14 2. G12 B11 3. F12 Q12 4. E12",
+    "expected": [
+      "D12",
+      "H12"
+    ]
+  },
+  {
+    "state": "1. K10 K12 2. J7 N18 3. J6 B12 4. J8",
+    "expected": [
+      "J5",
+      "J9"
+    ]
+  },
+  {
+    "state": "1. K10 S10 2. M13 R15 3. N14 O11 4. O15",
+    "expected": [
+      "L12",
+      "P16"
+    ]
+  },
+  {
+    "state": "1. K10 G18 2. K7 A11 3. K6 T13 4. K5",
+    "expected": [
+      "K4",
+      "K8"
+    ]
+  },
+  {
+    "state": "1. K10 Q9 2. H13 B3 3. G14 J16 4. F15",
+    "expected": [
+      "E16",
+      "J12"
+    ]
+  },
+  {
+    "state": "1. K10 Q19 2. G11 H18 3. E13 C2 4. F12",
+    "expected": [
+      "D14",
+      "H10"
+    ]
+  },
+  {
+    "state": "1. K10 Q11 2. G10 T19 3. H11 N4 4. F9",
+    "expected": [
+      "E8",
+      "J12"
+    ]
+  },
+  {
+    "state": "1. K10 O10 2. G12 S6 3. H11 B10 4. J10",
+    "expected": [
+      "F13",
+      "K9"
+    ]
+  },
+  {
+    "state": "1. K10 R5 2. L13 G1 3. L11 R4 4. L12",
+    "expected": [
+      "L10",
+      "L14"
+    ]
+  },
+  {
+    "state": "1. K10 A2 2. G12 N2 3. F12 B14 4. E12",
+    "expected": [
+      "D12",
+      "H12"
+    ]
+  },
+  {
+    "state": "1. K10 B19 2. J7 E6 3. L7 E16 4. K7",
+    "expected": [
+      "H7",
+      "M7"
+    ]
+  },
+  {
+    "state": "1. K10 E17 2. H13 D5 3. H11 M3 4. H12",
+    "expected": [
+      "H10",
+      "H14"
+    ]
+  }
+]

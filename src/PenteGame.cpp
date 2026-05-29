@@ -683,18 +683,6 @@ float PenteGame::evaluateMove(Move move) const {
         }
 
         // Block opponent's gap open three
-        // P _ O O (blocking O_OO pattern at left end)
-        if (isEmpty(x + dx, y + dy) && hasOpp(x + dx * 2, y + dy * 2) && hasOpp(x + dx * 3, y + dy * 3)) {
-            if (hasOpp(x + dx * 4, y + dy * 4) && isEmpty(x + dx * 5, y + dy * 5)) {
-                blockOpenThreeCount++; // Pattern: P _ O O O _ (blocking O_OO)
-            }
-        }
-        // O O _ P (blocking OO_O pattern at right end)
-        if (isEmpty(x - dx, y - dy) && hasOpp(x - dx * 2, y - dy * 2) && hasOpp(x - dx * 3, y - dy * 3)) {
-            if (hasOpp(x - dx * 4, y - dy * 4) && isEmpty(x - dx * 5, y - dy * 5)) {
-                blockOpenThreeCount++; // Pattern: _ O O O _ P (blocking OO_O)
-            }
-        }
         // P O _ O O (blocking O_OO at far left)
         if (hasOpp(x + dx, y + dy) && isEmpty(x + dx * 2, y + dy * 2) && hasOpp(x + dx * 3, y + dy * 3) &&
             hasOpp(x + dx * 4, y + dy * 4)) {

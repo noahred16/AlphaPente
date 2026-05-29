@@ -1,0 +1,3 @@
+timestamp,checkpoint,evaluator,suite,passed,total,score_pct
+2026-05-28T23:39:44,heuristic,heuristic,open-three-suite,250,250,100.0
+2026-05-28T23:39:51,/home/noah-smith/repos/AlphaPente/checkpoints/pente/best_model.pt,nn,open-three-suite,4,250,1.6

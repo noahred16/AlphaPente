@@ -104,25 +104,24 @@ The capture scalar injection into the value head (rather than as extra spatial p
 |------|--------|
 | `include/PenteGame.hpp` | Added `getBlackBitBoard()` and `getWhiteBitBoard()` const accessors returning `const BitBoard&` |
 | `include/Evaluator.hpp` | Added `NNEvaluator` class declaration (guarded by `#ifdef WITH_TORCH`); added `<memory>` and `<string>` includes |
-| `CMakeLists.txt` | Added `find_package(Torch QUIET)` block; conditionally compiles `NNModel.cpp` + `NNEvaluator.cpp` into `pente_core` and links LibTorch |
-| `apps/Train.cpp` | Replaced placeholder MCTS search with model initialization: constructs `AlphaNet(64, 5)`, saves to `checkpoints/pente/best_model.pt`, prints parameter count |
-| `apps/Pente.cpp` | Added `-N <path>` flag to load an `NNEvaluator` from a checkpoint; takes precedence over `-u` (uniform) and default (heuristic) |
+| `CMakeLists.txt` | Auto-detects LibTorch at `/opt/libtorch`; applies `TORCH_CXX_FLAGS`; skips separate OpenMP link when Torch is present to avoid dual `libgomp` conflict; defines `PROJECT_ROOT` and `WITH_TORCH` |
+| `apps/Train.cpp` | Constructs `AlphaNet(64, 5)`, saves to `PROJECT_ROOT/checkpoints/pente/best_model.pt`, prints parameter count |
+| `apps/Pente.cpp` | `-N` flag uses default checkpoint; `-p <path>` overrides; automatically sets `numEvalThreads=1` when NN is active |
+| `src/ParallelMCTS.cpp` | Fixed `evalThreadMain` to call `evaluate()` (single forward pass) instead of `evaluateValue()` + `evaluatePolicy()` separately (was 2 forward passes per position) |
 
 ---
 
-## Build Instructions
+## Build
 
-LibTorch must be installed and findable by CMake. If `find_package(Torch)` fails, set `CMAKE_PREFIX_PATH` to your LibTorch installation:
+LibTorch is installed at `/opt/libtorch`. CMakeLists.txt auto-detects it — no extra flags needed:
 
 ```bash
-# If installed via pip
-TORCH_PATH=$(python3 -c "import torch; print(torch.utils.cmake_prefix_path)")
 cd build
-cmake .. -DCMAKE_PREFIX_PATH="$TORCH_PATH"
+cmake ..
 make -j$(nproc)
 ```
 
-If LibTorch is not found, the build proceeds without NN support (`WITH_TORCH` is not defined). All NN-related code is compiled out and the existing heuristic/uniform evaluators work as before.
+If LibTorch is not found, the build proceeds without NN support (`WITH_TORCH` is not defined) and the existing heuristic/uniform evaluators work as before.
 
 ---
 
@@ -133,129 +132,133 @@ If LibTorch is not found, the build proceeds without NN support (`WITH_TORCH` is
 ```bash
 cd build
 ./train
-# Output:
-# Saved initialized AlphaNet to checkpoints/pente/best_model.pt
+# Saved initialized AlphaNet to /path/to/checkpoints/pente/best_model.pt
 # Channels: 64, ResBlocks: 5, Parameters: ~700000
 ```
-
-This creates a randomly initialized model. The weights are garbage but the file is valid for loading and confirms the pipeline works end-to-end.
 
 ### Run pente with the NN evaluator
 
 ```bash
-./pente "1. K10" 10000 -N checkpoints/pente/best_model.pt
+./pente "1. K10" 2000 -N -n          # default checkpoint
+./pente "1. K10" 2000 -p /other.pt -n  # custom checkpoint path
 ```
 
-The `-N` flag takes the path to a saved model. It can be combined with other flags:
-
-```bash
-./pente "1. K10" 10000 -N checkpoints/pente/best_model.pt -s   # serial MCTS
-./pente "1. K10" 10000 -N checkpoints/pente/best_model.pt -n   # non-interactive
-```
-
-The `-N` flag overrides `-u` (uniform) and the default (heuristic).
+`-N` is a boolean flag (no argument) that loads `checkpoints/pente/best_model.pt` via the `PROJECT_ROOT` compile-time constant. `-p <path>` accepts a custom path.
 
 ### Policy inference details
 
-The model outputs log-softmax probabilities over all 361 board positions. `NNEvaluator::evaluate` does the following post-processing:
+The model outputs log-softmax probabilities over all 361 board positions. `NNEvaluator::evaluate` post-processes them:
 
 1. `exp(log_policy)` → raw probabilities for all 361 positions
-2. Filter to legal moves only (`game.getLegalMoves()` — the promising-moves set)
-3. Renormalize filtered probabilities to sum to 1.0
-4. Sort by probability (largest first), matching `HeuristicEvaluator` output format
+2. Filter to legal moves only (`game.getLegalMoves()`)
+3. Renormalize to sum to 1.0
+4. Sort by probability descending, matching `HeuristicEvaluator` output format
 
-If all legal-move probabilities are zero (degenerate case), falls back to uniform over legal moves.
+If all filtered probabilities are zero (degenerate case), falls back to uniform over legal moves.
 
 ---
 
 ## Per-game model organization
 
-Each game variant uses a separate checkpoint directory. The architecture is shared — only the weights differ because each game has different tactical patterns and rules.
+Each game variant uses a separate checkpoint directory. The architecture is shared — only the weights differ.
 
 ```
 checkpoints/
-  pente/
-    best_model.pt
-  gomoku/
-    best_model.pt
-  keryopente/
-    best_model.pt
+  pente/best_model.pt
+  gomoku/best_model.pt        (future)
+  keryopente/best_model.pt    (future)
 ```
-
-The `train` app currently only initializes the Pente model. Gomoku and Keryo-Pente initialization will follow the same pattern once self-play training is set up for each variant.
 
 ---
 
 ## Current Status (as of 2026-05-17)
 
-**Complete:**
-- `AlphaNet` model definition and LibTorch module registration
-- `NNEvaluator` implementing the `Evaluator` interface
-- Board → tensor encoding (3 planes, current-player perspective)
-- Capture scalar normalization and injection into value head
-- Optional LibTorch detection in CMake — build degrades gracefully without it
-- `train` app initializes and saves a model checkpoint
-- `pente` app loads a model via `-N <path>` flag
+**Complete — pipeline validated end-to-end:**
+- `AlphaNet` model (ResNet dual-head) compiles and runs with LibTorch
+- `NNEvaluator` implementing the full `Evaluator` interface
+- Board → tensor encoding (3 planes, current-player perspective) using `BitBoard::forEachSetBit`
+- Capture scalar normalization injected into value head FC
+- LibTorch auto-detected from `/opt/libtorch` — `cmake ..` with no extra args
+- OpenMP/libgomp conflict resolved: Torch's bundled libgomp is used exclusively when Torch is present
+- NNPACK warning suppressed via `at::globalContext().setUserEnabledNNPACK(false)`
+- `train` initializes and saves a model to `checkpoints/pente/best_model.pt`
+- `pente -N` loads and runs the model; eval serialized through one thread to avoid BLAS contention
+- `evalThreadMain` fixed to use `evaluate()` (one forward pass per position, not two)
 
-**Not yet working:**
-- LibTorch `find_package` path not yet configured on this machine. Need to set `CMAKE_PREFIX_PATH` to the LibTorch installation. The code compiles correctly once found.
-- Model is randomly initialized — outputs noise. The pipeline is structurally correct but results will be meaningless until training runs.
+**Known limitation — CPU inference is slow without batching:**
+
+Measured baseline on CPU (no GPU available on this machine):
+
+| Mode | Throughput |
+|------|-----------|
+| Heuristic evaluator | ~500,000 iters/sec |
+| NNEvaluator, unbatched CPU | ~130 iters/sec |
+
+The bottleneck is one full ResNet forward pass per MCTS iteration. The eval thread serializes all inference through a single thread (correct for thread safety), but processes positions one at a time with no tensor batching.
 
 ---
 
 ## Future Work
 
-### 1. Wire up batched evaluation in ParallelMCTS
+### 1. True batched inference (highest priority)
 
-`ParallelMCTS` already has `numEvalThreads` and `evaluationBatchSize` fields, and a placeholder eval-thread queue. The current `NNEvaluator::evaluate` runs inference one position at a time. To use the GPU efficiently, the eval threads should:
+The `evalThreadMain` already pops a batch from the queue but calls `evaluate()` per item. True batching means stacking the batch into a single `[B, 3, 19, 19]` tensor and running one `model->forward()` call. BLAS scales sublinearly with batch size — a batch of 16 costs ~2× a batch of 1, not 16×. Expected gain: **6–8× on CPU** (~800–1000 iters/sec), and a prerequisite for efficient GPU use.
 
-1. Collect a batch of positions from the worker queue (up to `evaluationBatchSize`)
-2. Stack them into a single `[B, 3, 19, 19]` tensor
-3. Run a single forward pass
-4. Fan out results back to waiting worker threads
+Implementation plan:
+1. Add `NNEvaluator::evaluateBatch(const vector<PenteGame>&)` that stacks all positions into one tensor, runs a single `forward()`, and returns a vector of `(policy, value)` pairs
+2. Rework `evalThreadMain` to call `evaluateBatch()` on the full popped batch instead of looping over `evaluate()`
 
-This requires a `evaluateBatch(vector<const PenteGame*>)` method or a callback-based interface that ParallelMCTS drives directly. The single-position path in `evaluate()` stays for serial MCTS and testing.
+### 2. GPU support
 
-### 2. Self-play data generation
+No GPU is present on the development machine, but the code is structurally ready — input tensors are already moved to `impl_->device` before the forward pass. To enable:
+1. Switch to a CUDA-enabled LibTorch build
+2. In `NNEvaluator::Impl`: set `device = torch::kCUDA` if `torch::cuda::is_available()`
+3. `model->to(device)` (already called at construction)
 
-The `train` app needs to:
-1. Run MCTS with the current best model as evaluator
-2. Record `(state, policy_target, value_target)` tuples from each game
-3. Store to disk as a replay buffer (HDF5 or flat binary)
+**Performance estimates (RTX 3060+ class GPU):**
 
-Policy target = MCTS visit-count distribution (not the raw NN policy prior).
-Value target = game outcome from that player's perspective (+1 win, -1 loss, 0 draw).
+| Mode | Throughput |
+|------|-----------|
+| Current: unbatched CPU | ~130 iters/sec |
+| Batched CPU (batch=16) | ~800–1,000 iters/sec |
+| Batched GPU (batch=16+) | ~5,000–25,000 iters/sec |
 
-### 3. Training loop
+A modern GPU runs this network in ~0.1ms per forward pass vs ~6ms on CPU. With batching the gap widens further since GPU utilization improves with larger batches. Realistic expectation: **50–200× faster than current** once batching and GPU are both enabled.
+
+### 3. Self-play data generation
+
+The `train` app needs to run MCTS games and record `(state, policy_target, value_target)` tuples:
+- Policy target = MCTS visit-count distribution (not the raw NN prior)
+- Value target = game outcome from that player's perspective (+1 win, -1 loss, 0 draw)
+- Store to disk as a replay buffer (flat binary or HDF5)
+
+### 4. Training loop
 
 Given a replay buffer:
 1. Sample minibatches
-2. Compute cross-entropy loss on policy head (against MCTS visit distribution)
-3. Compute MSE loss on value head (against game outcome)
-4. Total loss = policy loss + value loss (equal weighting to start)
-5. Adam optimizer, learning rate ~1e-3, weight decay ~1e-4
+2. Cross-entropy loss on policy head (vs. MCTS visit distribution)
+3. MSE loss on value head (vs. game outcome)
+4. Adam optimizer, lr ~1e-3, weight decay ~1e-4
 
-Standard AlphaZero uses a shared loss with equal weight. The value head often needs a separate scale factor because its target range is `[-1, 1]` while policy cross-entropy is unbounded.
+### 5. Model evaluation and promotion
 
-### 4. Model evaluation and promotion
+Before promoting a candidate to `best_model.pt`:
+- Play N games between candidate and current best
+- Promote if win rate > 55% (AlphaZero threshold)
+- Archive checkpoints by iteration number
 
-Before promoting a candidate model to `best_model.pt`:
-- Play N games between candidate and current best (using MCTS with each as evaluator)
-- Promote if candidate wins > 55% (AlphaZero used 55%)
-- Save checkpoint with iteration number alongside `best_model.pt`
+### 6. Gomoku and Keryo-Pente
 
-### 5. Gomoku and Keryo-Pente training
+Same pipeline, separate checkpoint dirs. Gomoku (no captures) is simpler — good sanity check before full Pente training.
 
-Same pipeline, separate checkpoint directories. Gomoku is simpler (no captures) so may converge faster — useful as a sanity check before running the full Pente/Keryo-Pente training.
+### 7. Architecture scaling
 
-### 6. Architecture scaling
-
-Once training is running, scale up as needed:
+Once training is running:
 - 128 channels, 10 blocks: ~2.8M parameters
-- 256 channels, 19 blocks: ~23M parameters (AlphaZero scale for chess)
+- 256 channels, 19 blocks: ~23M parameters
 
-Pente on a 19×19 board is likely solvable with the smaller scale. Profile against the heuristic evaluator to determine when returns diminish.
+Profile improvement vs. heuristic evaluator to determine when to scale up.
 
-### 7. TorchScript export (optional)
+### 8. TorchScript export (optional)
 
-Once the model is trained, exporting to TorchScript (`torch::jit::script`) enables loading without requiring the `AlphaNetImpl` class definition at runtime. This simplifies deployment and is required for Python-side training if we move training to Python and inference back to C++.
+Exporting to TorchScript (`torch::jit::script`) enables loading without the `AlphaNetImpl` class definition at runtime. Required if training moves to Python and only inference stays in C++.

@@ -18,12 +18,13 @@ int main(int argc, char *argv[]) {
     bool useUniform = false;
     std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suN:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
         else if (opt == 'u') useUniform = true;
-        else if (opt == 'N') nnPath = optarg;
+        else if (opt == 'N') nnPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
+        else if (opt == 'p') nnPath = optarg;
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -49,6 +50,7 @@ int main(int argc, char *argv[]) {
     PenteGame::Config penteConfig = PenteGame::Config::pente();
     penteConfig.numOffsets = numOffsets;
     std::cout << "Num offsets: " << numOffsets << std::endl;
+    if (!nnPath.empty()) std::cout << "Evaluator: NN (" << nnPath << ")" << std::endl;
     PenteGame game(penteConfig);
     game.reset();
 
@@ -68,7 +70,6 @@ int main(int argc, char *argv[]) {
     if (!nnPath.empty()) {
         nnEval = std::make_unique<NNEvaluator>(nnPath);
         evaluator = nnEval.get();
-        std::cout << "Using NNEvaluator: " << nnPath << std::endl;
     }
 #endif
 
@@ -91,7 +92,7 @@ int main(int argc, char *argv[]) {
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
         config.numWorkerThreads = 6;
-        config.numEvalThreads = 0;  // 0 = inline eval (CPU heuristic); set >0 for NN/GPU
+        config.numEvalThreads = nnPath.empty() ? 0 : 1;  // NN: serialize evals through one thread to avoid BLAS conflicts
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = evaluator;
 

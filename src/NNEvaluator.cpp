@@ -10,6 +10,7 @@ struct NNEvaluator::Impl {
     torch::Device device{torch::kCPU};
 
     explicit Impl(const std::string &path) {
+        at::globalContext().setUserEnabledNNPACK(false);
         model = AlphaNet(64, 5);
         torch::load(model, path);
         model->eval();

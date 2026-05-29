@@ -100,6 +100,7 @@ add_pente_executable(test       apps/Test.cpp)
 add_pente_executable(pente      apps/Pente.cpp)
 add_pente_executable(gomoku     apps/Gomoku.cpp)
 add_pente_executable(keryopente apps/KeryoPente.cpp)
+add_pente_executable(benchmark  apps/Benchmark.cpp)
 
 # ─── Unit tests ───────────────────────────────────────────────────────────────
 
