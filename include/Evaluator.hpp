@@ -22,6 +22,10 @@ class Evaluator {
     // Returns: value in range [-1.0, 1.0] where 1.0 = current player winning
     virtual float evaluateValue(const PenteGame &game) = 0;
 
+    // Batch evaluation — default loops over evaluate(); NNEvaluator overrides with one forward pass
+    virtual std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
+        evaluateBatch(const std::vector<PenteGame> &games);
+
     void setMaxRolloutDepth(int depth) { maxRolloutDepth_ = depth; }
 
   protected:
@@ -52,6 +56,7 @@ class HeuristicEvaluator : public Evaluator {
 };
 
 #ifdef WITH_TORCH
+#include <torch/torch.h>
 class NNEvaluator : public Evaluator {
   public:
     explicit NNEvaluator(const std::string &modelPath);
@@ -59,6 +64,11 @@ class NNEvaluator : public Evaluator {
     std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame &game) override;
     std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame &game) override;
     float evaluateValue(const PenteGame &game) override;
+
+    static std::pair<torch::Tensor, torch::Tensor> gameToTensors(const PenteGame &game);
+
+    std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
+        evaluateBatch(const std::vector<PenteGame> &games) override;
 
   private:
     struct Impl;

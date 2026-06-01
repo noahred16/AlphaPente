@@ -11,7 +11,7 @@ struct NNEvaluator::Impl {
 
     explicit Impl(const std::string &path) {
         at::globalContext().setUserEnabledNNPACK(false);
-        model = AlphaNet(64, 5);
+        model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
         torch::load(model, path);
         model->eval();
         model->to(device);
@@ -24,7 +24,7 @@ NNEvaluator::NNEvaluator(const std::string &modelPath)
 NNEvaluator::~NNEvaluator() = default;
 
 // Build input tensors from game state, from current player's perspective.
-static std::pair<torch::Tensor, torch::Tensor> gameToTensors(const PenteGame &game) {
+std::pair<torch::Tensor, torch::Tensor> NNEvaluator::gameToTensors(const PenteGame &game) {
     constexpr int B = PenteGame::BOARD_SIZE;
     auto planes = torch::zeros({3, B, B});
     auto acc = planes.accessor<float, 3>();
@@ -83,6 +83,62 @@ NNEvaluator::evaluate(const PenteGame &game) {
               [](const auto &a, const auto &b) { return a.second > b.second; });
 
     return {policy, valueTensor.item<float>()};
+}
+
+std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
+NNEvaluator::evaluateBatch(const std::vector<PenteGame> &games) {
+    if (games.empty()) return {};
+
+    constexpr int B = PenteGame::BOARD_SIZE;
+    int N = (int)games.size();
+
+    std::vector<torch::Tensor> planeVec, captureVec;
+    planeVec.reserve(N);
+    captureVec.reserve(N);
+    for (const auto &g : games) {
+        auto [planes, captures] = gameToTensors(g);
+        planeVec.push_back(std::move(planes));
+        captureVec.push_back(std::move(captures));
+    }
+
+    torch::NoGradGuard no_grad;
+    auto batchPlanes   = torch::stack(planeVec,   0).to(impl_->device);  // [N, 3, 19, 19]
+    auto batchCaptures = torch::stack(captureVec, 0).to(impl_->device);  // [N, 2]
+
+    auto [logPolicy, valueTensor] = impl_->model->forward(batchPlanes, batchCaptures);
+
+    auto probs  = torch::exp(logPolicy).cpu();  // [N, 361]
+    auto values = valueTensor.cpu();             // [N, 1]
+
+    std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>> results;
+    results.reserve(N);
+
+    for (int i = 0; i < N; i++) {
+        auto row = probs[i];
+        auto probsAcc = row.accessor<float, 1>();
+        const auto &legalMoves = games[i].getLegalMoves();
+
+        std::vector<std::pair<PenteGame::Move, float>> policy;
+        policy.reserve(legalMoves.size());
+
+        float total = 0.0f;
+        for (const auto &move : legalMoves) {
+            float p = probsAcc[move.y * B + move.x];
+            policy.emplace_back(move, p);
+            total += p;
+        }
+        if (total > 0.0f)
+            for (auto &[m, p] : policy) p /= total;
+        else
+            for (auto &[m, p] : policy) p = 1.0f / (float)legalMoves.size();
+
+        std::sort(policy.begin(), policy.end(),
+                  [](const auto &a, const auto &b) { return a.second > b.second; });
+
+        results.emplace_back(std::move(policy), values[i][0].item<float>());
+    }
+
+    return results;
 }
 
 std::vector<std::pair<PenteGame::Move, float>>

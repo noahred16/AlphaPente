@@ -17,14 +17,16 @@ TORCH_MODULE(ResBlock);
 //          captures [B, 2]           — (my captures, opp captures) normalized to [0,1]
 // Outputs: log_policy [B, 361], value [B, 1]
 struct AlphaNetImpl : torch::nn::Module {
-    static constexpr int BOARD = 19;
+    static constexpr int BOARD        = 19;
+    static constexpr int kChannels    = 32;
+    static constexpr int kResBlocks   = 3;
 
     torch::nn::Conv2d inputConv{nullptr}, policyConv{nullptr}, valueConv{nullptr};
     torch::nn::BatchNorm2d inputBn{nullptr}, policyBn{nullptr}, valueBn{nullptr};
     torch::nn::ModuleList resBlocks{nullptr};
     torch::nn::Linear policyFc{nullptr}, valueFc1{nullptr}, valueFc2{nullptr};
 
-    AlphaNetImpl(int channels = 64, int numResBlocks = 5);
+    AlphaNetImpl(int channels = kChannels, int numResBlocks = kResBlocks);
     std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor planes, torch::Tensor captures);
 };
 TORCH_MODULE(AlphaNet);

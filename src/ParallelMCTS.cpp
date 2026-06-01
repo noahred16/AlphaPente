@@ -336,19 +336,24 @@ void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
     while (running) {
         auto batch = parent->evaluationQueue_->popBatch(parent->config_.evaluationBatchSize);
 
-        for (const auto &req : batch) {
-            EvaluationResult result;
-            result.node = req.node;
-            result.gameState = req.gameState;
-            result.searchPath = req.searchPath;
-            auto [policy, value] = parent->config_.evaluator->evaluate(req.gameState);
-            result.policy = std::move(policy);
-            result.value = value;
+        if (!batch.empty()) {
+            std::vector<PenteGame> games;
+            games.reserve(batch.size());
+            for (const auto &req : batch)
+                games.push_back(req.gameState);
 
-            parent->backpropagationQueue_->push(result);
-        }
+            auto evalResults = parent->config_.evaluator->evaluateBatch(games);
 
-        if (batch.empty()) {
+            for (size_t i = 0; i < batch.size(); i++) {
+                EvaluationResult result;
+                result.node       = batch[i].node;
+                result.gameState  = batch[i].gameState;
+                result.searchPath = batch[i].searchPath;
+                result.policy     = std::move(evalResults[i].first);
+                result.value      = evalResults[i].second;
+                parent->backpropagationQueue_->push(result);
+            }
+        } else {
             std::this_thread::yield();
         }
     }

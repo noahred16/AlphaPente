@@ -30,6 +30,15 @@ float Evaluator::rollout(const PenteGame &game) {
     return 0.0f;
 }
 
+std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
+Evaluator::evaluateBatch(const std::vector<PenteGame> &games) {
+    std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>> results;
+    results.reserve(games.size());
+    for (const auto &g : games)
+        results.push_back(evaluate(g));
+    return results;
+}
+
 // ============================================================================
 // UniformEvaluator Implementation
 // ============================================================================
