@@ -57,25 +57,29 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
 int main(int argc, char *argv[]) {
     std::string gameFlag      = "pente";
     int         stepsOverride = 0;  // 0 = auto
+    bool        bootstrap     = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "g:t:b")) != -1) {
         if      (opt == 'g') gameFlag      = optarg;
         else if (opt == 't') stepsOverride = std::stoi(optarg);
+        else if (opt == 'b') bootstrap     = true;
         else {
-            std::cerr << "Usage: train [-g game] [-t steps]\n";
+            std::cerr << "Usage: train [-g game] [-t steps] [-b]\n";
             return 1;
         }
     }
 
     const std::string ckptDir    = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
     const std::string bestPath   = ckptDir + "/best_model.pt";
-    const std::string bufferPath = ckptDir + "/buffer.pt";
+    const std::string bufferPath = bootstrap ? ckptDir + "/bootstrap.pt"
+                                             : ckptDir + "/buffer.pt";
 
     auto buf = loadBuffer(bufferPath);
 
     std::cout << "AlphaPente Train\n"
-              << "  game  : " << gameFlag   << "\n"
+              << "  game  : " << gameFlag << "\n"
+              << "  mode  : " << (bootstrap ? "bootstrap" : "selfplay") << "\n"
               << "  buffer: " << buf.size() << " positions\n\n";
 
     if (buf.size() < MIN_BUFFER_SIZE) {

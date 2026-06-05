@@ -5,6 +5,7 @@
 #include "PenteGame.hpp"
 #include "SelfPlay.hpp"
 #include "TrainCommon.hpp"
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -16,22 +17,31 @@ int main(int argc, char *argv[]) {
     std::string evalFlag = "auto";  // auto | heuristic | nn
     int gamesPerIter     = 100;
     int mctsSims         = 100;
+    bool bootstrap       = false;
+    int tailMoves        = 0;     // 0 = all moves
+    bool augment         = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:")) != -1) {
-        if      (opt == 'g') gameFlag    = optarg;
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:a")) != -1) {
+        if      (opt == 'g') gameFlag     = optarg;
         else if (opt == 'n') gamesPerIter = std::stoi(optarg);
-        else if (opt == 's') mctsSims    = std::stoi(optarg);
-        else if (opt == 'e') evalFlag    = optarg;
+        else if (opt == 's') mctsSims     = std::stoi(optarg);
+        else if (opt == 'e') evalFlag     = optarg;
+        else if (opt == 'b') bootstrap    = true;
+        else if (opt == 't') tailMoves    = std::stoi(optarg);
+        else if (opt == 'a') augment      = true;
         else {
-            std::cerr << "Usage: generate [-g game] [-n games] [-s sims] [-e auto|heuristic|nn]\n";
+            std::cerr << "Usage: generate [-g game] [-n games] [-s sims] [-e auto|heuristic|nn] [-b] [-t tail_moves] [-a]\n";
             return 1;
         }
     }
 
+    if (bootstrap) evalFlag = "heuristic";
+
     const std::string ckptDir    = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
     const std::string bestPath   = ckptDir + "/best_model.pt";
-    const std::string bufferPath = ckptDir + "/buffer.pt";
+    const std::string bufferPath = bootstrap ? ckptDir + "/bootstrap.pt"
+                                             : ckptDir + "/buffer.pt";
 
     std::filesystem::create_directories(ckptDir);
     if (!std::filesystem::exists(bestPath)) {
@@ -53,9 +63,12 @@ int main(int argc, char *argv[]) {
 
     std::cout << "AlphaPente Generate\n"
               << "  game     : " << gameFlag      << "\n"
+              << "  mode     : " << (bootstrap ? "bootstrap" : "selfplay") << "\n"
               << "  games    : " << gamesPerIter  << "\n"
               << "  sims     : " << mctsSims       << "\n"
-              << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n\n";
+              << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
+              << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n"
+              << "  augment  : " << (augment ? "yes (8x)" : "no") << "\n\n";
 
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
@@ -76,8 +89,14 @@ int main(int argc, char *argv[]) {
 
     std::cout << "── Self-play (" << gamesPerIter << " games) ──────────────────────────\n";
 
+    auto t0 = std::chrono::steady_clock::now();
+
     for (int g = 0; g < gamesPerIter; g++) {
+        auto tGame = std::chrono::steady_clock::now();
         auto examples = runGame(eval, gameConfig, spConfig, rng);
+
+        if (tailMoves > 0 && (int)examples.size() > tailMoves)
+            examples.erase(examples.begin(), examples.end() - tailMoves);
 
         if (!examples.empty()) {
             float v0 = examples[0].value;
@@ -94,10 +113,54 @@ int main(int argc, char *argv[]) {
             totalPositions++;
         }
 
-        if ((g + 1) % 10 == 0 || g + 1 == gamesPerIter)
+        if ((g + 1) % 10 == 0 || g + 1 == gamesPerIter) {
+            double gameSecs = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - tGame).count();
+            double elapsed  = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            double avgSecs  = elapsed / (g + 1);
             std::cout << "  " << std::setw(3) << (g + 1) << "/" << gamesPerIter
-                      << "  pos: " << std::setw(6) << totalPositions
-                      << "  B/W/D: " << bWins << "/" << wWins << "/" << draws << "\n";
+                      << "  pos: "  << std::setw(6) << totalPositions
+                      << "  B/W/D: " << bWins << "/" << wWins << "/" << draws
+                      << "  game: " << std::fixed << std::setprecision(1) << gameSecs << "s"
+                      << "  avg: "  << std::setprecision(1) << avgSecs << "s\n";
+        }
+    }
+
+    double totalSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    int preAugPositions = totalPositions;
+    std::cout << "\n  total: " << std::fixed << std::setprecision(1) << totalSecs << "s"
+              << "  avg/game: " << std::setprecision(1) << totalSecs / gamesPerIter << "s"
+              << "  avg/pos: "  << std::setprecision(3) << (totalPositions > 0 ? totalSecs / totalPositions : 0.0) << "s\n";
+
+    if (augment) {
+        std::vector<torch::Tensor> augPlanes, augCaptures, augPolicies, augValues;
+        augPlanes.reserve(allPlanes.size() * 8);
+        augCaptures.reserve(allCaptures.size() * 8);
+        augPolicies.reserve(allPolicies.size() * 8);
+        augValues.reserve(allValues.size() * 8);
+
+        constexpr int B = PenteGame::BOARD_SIZE;
+        for (int i = 0; i < (int)allPlanes.size(); i++) {
+            auto pol2d = allPolicies[i].view({B, B});
+            for (int flip = 0; flip < 2; flip++) {
+                auto p   = flip ? torch::flip(allPlanes[i], {2})   : allPlanes[i];
+                auto pol = flip ? torch::flip(pol2d,        {1})   : pol2d;
+                for (int rot = 0; rot < 4; rot++) {
+                    augPlanes.push_back(rot > 0 ? torch::rot90(p,   rot, {1, 2}) : p);
+                    augPolicies.push_back((rot > 0 ? torch::rot90(pol, rot, {0, 1}) : pol).flatten());
+                    augCaptures.push_back(allCaptures[i]);
+                    augValues.push_back(allValues[i]);
+                }
+            }
+        }
+        allPlanes   = std::move(augPlanes);
+        allCaptures = std::move(augCaptures);
+        allPolicies = std::move(augPolicies);
+        allValues   = std::move(augValues);
+        totalPositions = (int)allPlanes.size();
+        std::cout << "  augmented: " << preAugPositions << " → " << totalPositions
+                  << " positions (8x)\n";
     }
 
     auto newStates   = torch::stack(allPlanes,   0);
@@ -105,11 +168,17 @@ int main(int argc, char *argv[]) {
     auto newPolicies = torch::stack(allPolicies, 0);
     auto newValues   = torch::stack(allValues,   0).unsqueeze(1);
 
-    std::cout << "\n── Buffer ───────────────────────────────────────────────────────\n";
+    std::cout << "\n── " << (bootstrap ? "Bootstrap" : "Buffer")
+              << " ───────────────────────────────────────────────────────\n";
     auto buf = loadBuffer(bufferPath);
-    std::cout << "  loaded : " << buf.size() << " positions\n";
-    buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues);
-    std::cout << "  updated: " << buf.size() << " positions\n";
+    std::cout << "  existing: " << buf.size() << " positions\n"
+              << "  new     : " << totalPositions << " positions\n";
+    if (bootstrap) {
+        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues, /*maxSize=*/0);
+    } else {
+        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues);
+    }
+    std::cout << "  total   : " << buf.size() << " positions\n";
     saveBuffer(buf, bufferPath);
     std::cout << "  saved  → " << bufferPath << "\n";
 

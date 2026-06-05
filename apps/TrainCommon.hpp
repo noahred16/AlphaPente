@@ -51,7 +51,8 @@ inline ReplayBuffer mergeAndTrim(ReplayBuffer existing,
                                   torch::Tensor newStates,
                                   torch::Tensor newCaptures,
                                   torch::Tensor newPolicies,
-                                  torch::Tensor newValues) {
+                                  torch::Tensor newValues,
+                                  int64_t maxSize = BUFFER_SIZE) {
     if (!existing.states.defined()) {
         existing = {newStates, newCaptures, newPolicies, newValues};
     } else {
@@ -61,8 +62,8 @@ inline ReplayBuffer mergeAndTrim(ReplayBuffer existing,
         existing.values   = torch::cat({existing.values,   newValues},   0);
     }
     int64_t n = existing.states.size(0);
-    if (n > BUFFER_SIZE) {
-        int64_t drop = n - BUFFER_SIZE;
+    if (maxSize > 0 && n > maxSize) {
+        int64_t drop = n - maxSize;
         existing.states   = existing.states.slice(0, drop);
         existing.captures = existing.captures.slice(0, drop);
         existing.policies = existing.policies.slice(0, drop);

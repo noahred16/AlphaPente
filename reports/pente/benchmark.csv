@@ -47,3 +47,4 @@ timestamp,checkpoint,evaluator,suite,passed,total,score_pct
 2026-06-02T08:20:26,checkpoints/pente/model_iter0039.pt,nn,open-three-suite,250,250,100.0
 2026-06-02T08:35:54,checkpoints/pente/model_iter0040.pt,nn,open-three-suite,250,250,100.0
 2026-06-02T08:48:44,checkpoints/pente/model_iter0040.pt,nn-vs-heuristic,arena,3,10,30.0
+2026-06-05T00:39:30,checkpoints/pente/model_iter0001.pt,nn,open-three-suite,6,250,2.4

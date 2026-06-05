@@ -1,6 +1,22 @@
 # Pente AlphaZero Implementation
 C++ implementation of AlphaZero for the game of Pente.
 
+## Usage
+bootstrap heuristc generation. 
+```
+./generate -b [-n games] [-s sims] [-g game]
+./generate -b -n 4 -s 25000 -g pente
+./generate -b -t 10 -n 220 -s 25000 -g pente
+./generate -b -t 10 -n 1 -s 250 -g pente 
+./generate -b -t 10 -n 4 -s 25000 -g pente -a
+```
+train on bootstrap data
+```
+./train -b — train on bootstrap data, all positions
+./train -b -p 15 — train on bootstrap data, only positions with 15+ pieces on board
+./train — current behavior, trains on buffer.pt
+```
+
 ## TODOS
 - Review Virtual loss/mean for parallezation of search
 [x] Add logic for solved wins/losses, Minimax Backprop
