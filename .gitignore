@@ -1,3 +1,8 @@
+# Project ignores (all checkpoints except checkpoints/pente/best_model.pt)
+checkpoints/
+!checkpoints/pente/best_model.pt
+*.pdf
+
 # C++ Build artifacts
 build/
 bin/

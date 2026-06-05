@@ -59,6 +59,7 @@ class HeuristicEvaluator : public Evaluator {
 #include <torch/torch.h>
 class NNEvaluator : public Evaluator {
   public:
+    NNEvaluator();  // randomly initialized weights (iteration 0)
     explicit NNEvaluator(const std::string &modelPath);
     ~NNEvaluator() override;
     std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame &game) override;

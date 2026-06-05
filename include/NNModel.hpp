@@ -13,13 +13,15 @@ struct ResBlockImpl : torch::nn::Module {
 TORCH_MODULE(ResBlock);
 
 // AlphaZero-style dual-head ResNet.
-// Inputs:  planes   [B, 3, 19, 19]  — current player, opponent, empty
-//          captures [B, 2]           — (my captures, opp captures) normalized to [0,1]
+// Inputs:  planes   [B, 5, 19, 19]  — current player, opponent, empty,
+//                                      my_captures/max (const plane), opp_captures/max (const plane)
+//          captures [B, 2]           — same capture scalars fed directly into value head
 // Outputs: log_policy [B, 361], value [B, 1]
 struct AlphaNetImpl : torch::nn::Module {
     static constexpr int BOARD        = 19;
-    static constexpr int kChannels    = 32;
-    static constexpr int kResBlocks   = 3;
+    static constexpr int kChannels    = 64;
+    static constexpr int kResBlocks   = 6;
+    static constexpr int kInputPlanes = 5;
 
     torch::nn::Conv2d inputConv{nullptr}, policyConv{nullptr}, valueConv{nullptr};
     torch::nn::BatchNorm2d inputBn{nullptr}, policyBn{nullptr}, valueBn{nullptr};

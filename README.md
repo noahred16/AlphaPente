@@ -172,6 +172,68 @@ From the `build/` directory:
 gdb -ex run -ex bt -ex quit --args ./pente "1  K10 ..."
 ```
 
+## Training
+
+Training is split into two steps: `generate` (self-play → buffer) and `train` (buffer → model checkpoint).
+
+### Bootstrap (first run)
+
+Fill the replay buffer with heuristic-guided games before the network has learned anything:
+
+```bash
+cd build
+
+# Repeat until buffer is large enough (need 5000+ positions to start training)
+./generate -n 100 -s 1000 -e heuristic
+
+# Train on the buffer
+./train
+```
+
+### Normal training loop
+
+Once a checkpoint exists, `generate` automatically switches to NN self-play:
+
+```bash
+./generate -n 100 -s 400   # -e auto: uses nn after first checkpoint
+./train
+```
+
+Or run the loop script to iterate continuously:
+
+```bash
+./scripts/train_loop.sh -n 100 -s 400 -i 20   # 20 iterations
+```
+
+### Flags
+
+```
+generate [-g pente|gomoku|keryopente] [-n games] [-s sims] [-e auto|heuristic|nn]
+train    [-g pente|gomoku|keryopente] [-t steps]   # -t overrides gradient steps
+```
+
+### Benchmark
+
+Check model quality against the open-3 test suite (results appended to `reports/pente/benchmark.csv`):
+
+```bash
+./benchmark         # open-three suite only (uses latest model_iterXXXX.pt)
+./benchmark -a      # also runs arena: NN vs Heuristic (20 games, 1000 sims/move)
+./benchmark -a -G 40 -S 2000   # more games / higher sims for a stronger signal
+```
+
+The arena result is appended to the same CSV with suite name `arena`.
+Win rate > 50% (decisive games) means the NN has surpassed the heuristic.
+
+### Reset
+
+Wipe checkpoints and buffer to start fresh:
+
+```bash
+cd /path/to/AlphaPente
+./scripts/reset_training.sh [-g pente]
+```
+
 ## Unit Tests
 
 Run all unit tests:

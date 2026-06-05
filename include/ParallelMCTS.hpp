@@ -50,6 +50,10 @@ class ParallelMCTS {
         int evaluationBatchSize = 32;    // Batch size for neural network evaluation
         int queueCapacity = 10000;       // Max size of evaluation queue
 
+        // Dirichlet root noise (self-play exploration). Set alpha=0 to disable.
+        float dirichletAlpha   = 0.0f;
+        float dirichletEpsilon = 0.25f;
+
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
@@ -263,6 +267,7 @@ class ParallelMCTS {
 
     // Helper methods
     int selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &game) const;
+    void injectDirichletNoise();
 
     // Arena allocation
     ThreadSafeNode *allocateNode();

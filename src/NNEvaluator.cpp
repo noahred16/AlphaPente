@@ -9,6 +9,13 @@ struct NNEvaluator::Impl {
     AlphaNet model{nullptr};
     torch::Device device{torch::kCPU};
 
+    Impl() {
+        at::globalContext().setUserEnabledNNPACK(false);
+        model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+        model->eval();
+        model->to(device);
+    }
+
     explicit Impl(const std::string &path) {
         at::globalContext().setUserEnabledNNPACK(false);
         model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
@@ -18,6 +25,9 @@ struct NNEvaluator::Impl {
     }
 };
 
+NNEvaluator::NNEvaluator()
+    : impl_(std::make_unique<Impl>()) {}
+
 NNEvaluator::NNEvaluator(const std::string &modelPath)
     : impl_(std::make_unique<Impl>(modelPath)) {}
 
@@ -26,7 +36,7 @@ NNEvaluator::~NNEvaluator() = default;
 // Build input tensors from game state, from current player's perspective.
 std::pair<torch::Tensor, torch::Tensor> NNEvaluator::gameToTensors(const PenteGame &game) {
     constexpr int B = PenteGame::BOARD_SIZE;
-    auto planes = torch::zeros({3, B, B});
+    auto planes = torch::zeros({AlphaNetImpl::kInputPlanes, B, B});
     auto acc = planes.accessor<float, 3>();
 
     bool blackToMove = (game.getCurrentPlayer() == PenteGame::BLACK);
@@ -44,9 +54,17 @@ std::pair<torch::Tensor, torch::Tensor> NNEvaluator::gameToTensors(const PenteGa
     int oppCaptures = blackToMove ? game.getWhiteCaptures() : game.getBlackCaptures();
     float maxCap    = static_cast<float>(game.getConfig().capturesToWin);
 
+    float myCapNorm  = myCaptures  / maxCap;
+    float oppCapNorm = oppCaptures / maxCap;
+    for (int y = 0; y < B; y++)
+        for (int x = 0; x < B; x++) {
+            acc[3][y][x] = myCapNorm;
+            acc[4][y][x] = oppCapNorm;
+        }
+
     auto captures = torch::zeros({2});
-    captures[0] = myCaptures  / maxCap;
-    captures[1] = oppCaptures / maxCap;
+    captures[0] = myCapNorm;
+    captures[1] = oppCapNorm;
 
     return {planes, captures};
 }

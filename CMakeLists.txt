@@ -77,7 +77,7 @@ add_library(pente_core
 
 if(TORCH_FOUND)
   target_compile_definitions(pente_core PUBLIC WITH_TORCH PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
-  target_sources(pente_core PRIVATE src/NNModel.cpp src/NNEvaluator.cpp)
+  target_sources(pente_core PRIVATE src/NNModel.cpp src/NNEvaluator.cpp src/SelfPlay.cpp)
   target_link_libraries(pente_core PUBLIC "${TORCH_LIBRARIES}")
   target_include_directories(pente_core SYSTEM PUBLIC "${TORCH_INCLUDE_DIRS}")
 else()
@@ -94,6 +94,7 @@ macro(add_pente_executable target source)
   target_link_libraries(${target} PRIVATE pente_core)
 endmacro()
 
+add_pente_executable(generate   apps/Generate.cpp)
 add_pente_executable(train      apps/Train.cpp)
 add_pente_executable(play       apps/Play.cpp)
 add_pente_executable(test       apps/Test.cpp)
@@ -101,6 +102,7 @@ add_pente_executable(pente      apps/Pente.cpp)
 add_pente_executable(gomoku     apps/Gomoku.cpp)
 add_pente_executable(keryopente apps/KeryoPente.cpp)
 add_pente_executable(benchmark  apps/Benchmark.cpp)
+add_pente_executable(inspect    apps/Inspect.cpp)
 
 # ─── Unit tests ───────────────────────────────────────────────────────────────
 
@@ -108,5 +110,6 @@ add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
     tests/ParallelMCTSTests.cpp
+    tests/SelfPlayTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)

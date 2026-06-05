@@ -19,7 +19,7 @@ torch::Tensor ResBlockImpl::forward(torch::Tensor x) {
 
 AlphaNetImpl::AlphaNetImpl(int ch, int numBlocks) {
     inputConv = register_module("inputConv",
-        torch::nn::Conv2d(torch::nn::Conv2dOptions(3, ch, 3).padding(1).bias(false)));
+        torch::nn::Conv2d(torch::nn::Conv2dOptions(kInputPlanes, ch, 3).padding(1).bias(false)));
     inputBn = register_module("inputBn", torch::nn::BatchNorm2d(ch));
 
     resBlocks = register_module("resBlocks", torch::nn::ModuleList());

@@ -396,6 +396,8 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     setupSlabs();
     tl_slab = &workerSlabs_[0];  // main thread uses slab 0 during prepareRoot
     prepareRoot(game);
+    if (config_.dirichletAlpha > 0.0f)
+        injectDirichletNoise();
     tl_slab = nullptr;
 
     if (config_.numEvalThreads > 0) evalPool_->start();
@@ -414,6 +416,25 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     if (config_.numEvalThreads > 0) evalPool_->stop();
 
     return getBestMove();
+}
+
+void ParallelMCTS::injectDirichletNoise() {
+    if (!root_ || root_->childCapacity == 0) return;
+
+    int cap = root_->childCapacity;
+    std::gamma_distribution<float> gamma(config_.dirichletAlpha, 1.0f);
+
+    std::vector<float> noise(cap);
+    float sum = 0.0f;
+    for (int i = 0; i < cap; i++) {
+        noise[i] = gamma(rng_);
+        sum += noise[i];
+    }
+    if (sum < 1e-8f) return;
+
+    float eps = config_.dirichletEpsilon;
+    for (int i = 0; i < cap; i++)
+        root_->priors[i] = (1.0f - eps) * root_->priors[i] + eps * (noise[i] / sum);
 }
 
 void ParallelMCTS::prepareRoot(const PenteGame &game) {

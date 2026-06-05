@@ -1,5 +1,6 @@
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
+#include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include <chrono>
 #include <ctime>
@@ -88,18 +89,121 @@ static void appendResult(const std::string &csvPath,
       << std::fixed << std::setprecision(1) << pct << "\n";
 }
 
+// ── Arena (NN vs Heuristic) ───────────────────────────────────────────────────
+
+struct ArenaResult { int nnWins, hWins, draws; };
+
+static ArenaResult runArena(Evaluator *nnEval, int numGames, int simsPerMove,
+                            const PenteGame::Config &gameConfig) {
+    ArenaResult result{0, 0, 0};
+
+    ParallelMCTS::Config nnCfg, hCfg;
+    nnCfg.maxIterations      = simsPerMove;
+    nnCfg.explorationConstant = 1.7;
+    nnCfg.numWorkerThreads   = 6;
+    nnCfg.numEvalThreads     = 1;
+    nnCfg.arenaSize          = GameUtils::arenaSizeFromEnv();
+    nnCfg.evaluator          = nnEval;
+
+    HeuristicEvaluator hEval;
+    hCfg.maxIterations       = simsPerMove;
+    hCfg.explorationConstant = 1.7;
+    hCfg.numWorkerThreads    = 6;
+    hCfg.numEvalThreads      = 0;
+    hCfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+    hCfg.evaluator           = &hEval;
+
+    for (int g = 0; g < numGames; g++) {
+        bool nnIsBlack = (g % 2 == 0);
+
+        ParallelMCTS nnMcts(nnCfg), hMcts(hCfg);
+        PenteGame game(gameConfig);
+        game.reset();
+
+        while (!game.isGameOver()) {
+            bool isBlackTurn = (game.getCurrentPlayer() == PenteGame::BLACK);
+            bool nnTurn      = (nnIsBlack == isBlackTurn);
+            auto &mcts       = nnTurn ? nnMcts : hMcts;
+
+            mcts.search(game);
+            PenteGame::Move move = mcts.getBestMove();
+            game.makeMove(move.x, move.y);
+            nnMcts.reuseSubtree(move);
+            hMcts.reuseSubtree(move);
+        }
+
+        PenteGame::Player winner = game.getWinner();
+        bool nnWon = (nnIsBlack  && winner == PenteGame::BLACK) ||
+                     (!nnIsBlack && winner == PenteGame::WHITE);
+        bool draw  = (winner == PenteGame::NONE);
+
+        if      (draw)   result.draws++;
+        else if (nnWon)  result.nnWins++;
+        else             result.hWins++;
+
+        std::string nnColor = nnIsBlack ? "B" : "W";
+        std::string outcome = draw ? "draw" : (nnWon ? "nn" : "heuristic");
+        std::cout << "  game " << std::setw(2) << (g + 1)
+                  << "  nn=" << nnColor
+                  << "  winner: " << outcome
+                  << "  (nn " << result.nnWins << "/"
+                  << (g + 1 - result.draws) << " decisive)\n";
+    }
+
+    return result;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
+static std::string latestCheckpoint(const std::string &ckptDir) {
+    std::string best;
+    int maxIter = 0;
+    if (std::filesystem::exists(ckptDir)) {
+        for (const auto &entry : std::filesystem::directory_iterator(ckptDir)) {
+            const std::string stem = entry.path().stem().string();
+            if (stem.rfind("model_iter", 0) == 0) {
+                try {
+                    int n = std::stoi(stem.substr(10));
+                    if (n > maxIter) { maxIter = n; best = entry.path().string(); }
+                } catch (...) {}
+            }
+        }
+    }
+    if (!best.empty()) return best;
+    return ckptDir + "/best_model.pt";  // fallback before first training run
+}
+
 int main(int argc, char *argv[]) {
-    std::string modelPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
+    std::string gameFlag  = "pente";
     std::string suitePath = PROJECT_ROOT "/tests/open-three-suite.json";
-    std::string outPath   = PROJECT_ROOT "/reports/pente/benchmark.csv";
+    std::string outPath   = "";  // derived from gameFlag unless overridden
+    bool runArenaFlag     = false;
+    int  arenaGames       = 10;
+    int  arenaSims        = 1000;
+
+    // Pre-scan for -g so we can build the default model path correctly
+    for (int i = 1; i < argc - 1; i++)
+        if (std::string(argv[i]) == "-g") gameFlag = argv[i + 1];
+
+    std::string ckptDir   = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    std::string modelPath = latestCheckpoint(ckptDir);
+    outPath = std::string(PROJECT_ROOT) + "/reports/" + gameFlag + "/benchmark.csv";
+
+    auto resolve = [](const std::string &path) {
+        if (std::filesystem::exists(path)) return path;
+        std::string rooted = std::string(PROJECT_ROOT) + "/" + path;
+        return std::filesystem::exists(rooted) ? rooted : path;
+    };
 
     int opt;
-    while ((opt = getopt(argc, argv, "p:t:o:")) != -1) {
-        if      (opt == 'p') modelPath = optarg;
-        else if (opt == 't') suitePath = optarg;
-        else if (opt == 'o') outPath   = optarg;
+    while ((opt = getopt(argc, argv, "g:p:t:o:aG:S:")) != -1) {
+        if      (opt == 'g') { /* already handled above */ }
+        else if (opt == 'p') modelPath  = resolve(optarg);
+        else if (opt == 't') suitePath  = resolve(optarg);
+        else if (opt == 'o') outPath    = resolve(optarg);
+        else if (opt == 'a') runArenaFlag = true;
+        else if (opt == 'G') arenaGames = std::stoi(optarg);
+        else if (opt == 'S') arenaSims  = std::stoi(optarg);
     }
 
     std::cout << "AlphaPente Benchmark\n"
@@ -165,9 +269,37 @@ int main(int argc, char *argv[]) {
     std::cout << "\nResult: " << passed << "/" << total
               << "  (" << std::fixed << std::setprecision(1) << pct << "%)\n";
 
+    // Use relative path in CSV (strip PROJECT_ROOT prefix if present)
+    std::string relModelPath = modelPath;
+    std::string projectRoot  = PROJECT_ROOT;
+    if (relModelPath.rfind(projectRoot, 0) == 0)
+        relModelPath = relModelPath.substr(projectRoot.size() + 1);
+
     std::string suiteName = std::filesystem::path(suitePath).stem().string();
-    appendResult(outPath, modelPath, evaluatorName, suiteName, passed, total);
+    appendResult(outPath, relModelPath, evaluatorName, suiteName, passed, total);
     std::cout << "Appended to " << outPath << "\n";
+
+#ifdef WITH_TORCH
+    if (runArenaFlag && nnEval) {
+        PenteGame::Config gameConfig =
+            (gameFlag == "gomoku")     ? PenteGame::Config::gomoku()     :
+            (gameFlag == "keryopente") ? PenteGame::Config::keryoPente() :
+                                         PenteGame::Config::pente();
+
+        std::cout << "\n── Arena: NN vs Heuristic (" << arenaGames << " games, "
+                  << arenaSims << " sims/move) ──────────────────\n";
+        auto ar = runArena(nnEval.get(), arenaGames, arenaSims, gameConfig);
+        int decisive = ar.nnWins + ar.hWins;
+        double nnPct = decisive > 0 ? 100.0 * ar.nnWins / decisive : 0.0;
+        std::cout << "\nArena result: nn " << ar.nnWins
+                  << "  heuristic " << ar.hWins
+                  << "  draws " << ar.draws
+                  << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
+
+        appendResult(outPath, relModelPath, "nn-vs-heuristic", "arena", ar.nnWins, arenaGames);
+        std::cout << "Appended arena result to " << outPath << "\n";
+    }
+#endif
 
     return 0;
 }
