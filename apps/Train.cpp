@@ -95,7 +95,8 @@ int main(int argc, char *argv[]) {
     std::cout << "── Training (" << gradientSteps << " steps) ──────────────────────────\n";
 
     AlphaNet model(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
-    torch::load(model, bestPath);
+    if (std::filesystem::exists(bestPath))
+        torch::load(model, bestPath);
     trainModel(model, buf, gradientSteps);
 
     int iterNum = nextIterNumber(ckptDir);

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+# Self-play training loop — generates games, trains, and benchmarks each iteration.
+# Run from anywhere in the repo.
 # Usage: ./scripts/train_loop.sh [-n games] [-s sims] [-i max_iters] [-g game]
-# Run from the build/ directory.
 
 set -euo pipefail
 
@@ -20,19 +21,22 @@ while getopts "n:s:i:g:" opt; do
 done
 
 BUILD_DIR="$(cd "$(dirname "$0")/../build" && pwd)"
-LOG_DIR="$(dirname "$0")/../logs"
+LOG_DIR="$(cd "$(dirname "$0")/.." && pwd)/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/train_$(date +%Y%m%d_%H%M%S).log"
 
 cd "$BUILD_DIR"
 
-echo "AlphaPente training loop" | tee "$LOG"
-echo "  game : $GAME"           | tee -a "$LOG"
-echo "  games: $GAMES"          | tee -a "$LOG"
-echo "  sims : $SIMS"           | tee -a "$LOG"
-echo "  limit: ${MAX_ITERS:-unlimited}" | tee -a "$LOG"
-echo "  log  : $LOG"            | tee -a "$LOG"
-echo ""                         | tee -a "$LOG"
+LIMIT_STR=$([ "$MAX_ITERS" -eq 0 ] && echo "unlimited" || echo "$MAX_ITERS")
+
+echo "Self-play training loop"   | tee "$LOG"
+echo "  game  : $GAME"           | tee -a "$LOG"
+echo "  games : $GAMES"          | tee -a "$LOG"
+echo "  sims  : $SIMS"           | tee -a "$LOG"
+echo "  limit : $LIMIT_STR"      | tee -a "$LOG"
+echo "  log   : $LOG"            | tee -a "$LOG"
+echo "  start : $(date)"         | tee -a "$LOG"
+echo ""                          | tee -a "$LOG"
 
 ITER=0
 START=$(date +%s)
@@ -48,20 +52,23 @@ trap cleanup INT TERM
 while true; do
     ITER=$(( ITER + 1 ))
     ITER_START=$(date +%s)
-    echo "── Iteration $ITER  $(date '+%H:%M:%S') ────────────────────────────────" | tee -a "$LOG"
 
-    ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" 2>&1 | tee -a "$LOG"
-    ./train    -g "$GAME" 2>&1 | tee -a "$LOG"
+    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+    echo "Iteration $ITER  —  $(date)"                                  | tee -a "$LOG"
+    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
 
-    # Find the checkpoint this iteration produced
-    LATEST=$(ls -t "../checkpoints/$GAME"/model_iter*.pt 2>/dev/null | head -1)
-    if [[ -n "$LATEST" ]]; then
-        echo "" | tee -a "$LOG"
-        echo "Benchmark: $LATEST" | tee -a "$LOG"
-        ./benchmark -p "$LATEST" 2>&1 | grep -E "Result:|model_iter" | tee -a "$LOG"
-    fi
+    ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" -a 2>&1 | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
+
+    ./train -g "$GAME" 2>&1 | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
+
+    echo "── Benchmark ────────────────────────────────────────────────────" | tee -a "$LOG"
+    ./benchmark -g "$GAME" 2>&1 | tee -a "$LOG"
 
     ITER_ELAPSED=$(( $(date +%s) - ITER_START ))
+    echo "" | tee -a "$LOG"
     echo "Iteration $ITER done in ${ITER_ELAPSED}s" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 

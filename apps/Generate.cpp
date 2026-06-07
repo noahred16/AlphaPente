@@ -70,13 +70,16 @@ int main(int argc, char *argv[]) {
               << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n"
               << "  augment  : " << (augment ? "yes (8x)" : "no") << "\n\n";
 
+    if (!useHeuristic)
+        torch::set_num_threads(1);  // 1w/6e: each eval thread runs its own forward pass
+
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
     spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.5f;
-    spConfig.numWorkerThreads = 6;
-    spConfig.numEvalThreads   = useHeuristic ? 0 : 1;  // heuristic uses inline mode
+    spConfig.numWorkerThreads = useHeuristic ? 6 : 1;
+    spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
 
     std::unique_ptr<Evaluator> evalPtr = useHeuristic
         ? std::unique_ptr<Evaluator>(std::make_unique<HeuristicEvaluator>())

@@ -7,6 +7,11 @@
 #include <iostream>
 #include <thread>
 
+#ifdef WITH_TORCH
+#include <torch/torch.h>
+#include <unordered_map>
+#endif
+
 TEST_CASE("search returns a valid move after completing all iterations") {
     PenteGame game(PenteGame::Config::pente());
     game.reset();
@@ -212,7 +217,7 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
     }
 
     double baseline = results[0].itersPerSec;
-    std::cout << "\n  Speedup vs 1w/1e baseline:\n";
+    std::cout << "\n  Speedup vs 1w/0e baseline:\n";
     for (auto &r : results) {
         std::cout << std::setprecision(2)
                   << "    " << r.workers << "w / " << r.evalThreads << "e: "
@@ -220,3 +225,130 @@ TEST_CASE("Benchmark: parallel speedup across worker counts") {
     }
     std::cout << "\n";
 }
+
+#ifdef WITH_TORCH
+// Each MCTS worker thread gets its own NNEvaluator — no shared model, no eval queue.
+// Works with numEvalThreads=0 (inline mode): each worker evaluates independently.
+class PerWorkerNNEvaluator : public Evaluator {
+    static NNEvaluator &local() {
+        thread_local NNEvaluator worker;
+        return worker;
+    }
+public:
+    std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>
+    evaluate(const PenteGame &game) override { return local().evaluate(game); }
+    std::vector<std::pair<PenteGame::Move, float>>
+    evaluatePolicy(const PenteGame &game) override { return local().evaluatePolicy(game); }
+    float evaluateValue(const PenteGame &game) override { return local().evaluateValue(game); }
+    std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
+    evaluateBatch(const std::vector<PenteGame> &games) override { return local().evaluateBatch(games); }
+};
+
+TEST_CASE("Benchmark: NN eval throughput across thread configs") {
+    PenteGame game(PenteGame::Config::pente());
+    game.reset();
+
+    NNEvaluator sharedEval;
+    PerWorkerNNEvaluator perWorkerEval;
+
+    const int iterations = 2000;
+
+    struct Result {
+        std::string label;
+        int workers;
+        int evalThreads;
+        int torchThreads;
+        double simsPerSec;
+        double wallSec;
+    };
+
+    auto runWith = [&](Evaluator &eval, int workers, int evalThreads, int torchThreads) -> Result {
+        torch::set_num_threads(torchThreads);
+
+        ParallelMCTS::Config config;
+        config.numWorkerThreads    = workers;
+        config.numEvalThreads      = evalThreads;
+        config.evaluationBatchSize = 32;
+        config.maxIterations       = iterations;
+        config.evaluator           = &eval;
+
+        ParallelMCTS mcts(config);
+        auto start = std::chrono::high_resolution_clock::now();
+        mcts.search(game);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        double wallSec = std::chrono::duration<double>(end - start).count();
+        return {"", workers, evalThreads, torchThreads, iterations / wallSec, wallSec};
+    };
+
+    std::cout << "\n--- NN Eval Throughput Benchmark (" << iterations << " sims) ---\n";
+    std::cout << std::setw(12) << "evaluator"
+              << std::setw(8)  << "workers"
+              << std::setw(8)  << "eval-t"
+              << std::setw(8)  << "torch-t"
+              << std::setw(12) << "sims/sec"
+              << std::setw(10) << "wall(s)"
+              << "\n" << std::string(58, '-') << "\n";
+
+    std::vector<Result> results;
+
+    auto run = [&](int w, int e, int t) {
+        auto r = runWith(sharedEval, w, e, t);
+        r.label = "shared";
+        results.push_back(r);
+        std::cout << std::fixed
+                  << std::setw(12) << r.label
+                  << std::setw(8)  << r.workers
+                  << std::setw(8)  << r.evalThreads
+                  << std::setw(8)  << r.torchThreads
+                  << std::setw(12) << std::setprecision(1) << r.simsPerSec
+                  << std::setw(10) << std::setprecision(3) << r.wallSec
+                  << "\n";
+    };
+
+    auto runPW = [&](int w, int t) {
+        auto r = runWith(perWorkerEval, w, 0, t);
+        r.label = "per-worker";
+        results.push_back(r);
+        std::cout << std::fixed
+                  << std::setw(12) << r.label
+                  << std::setw(8)  << r.workers
+                  << std::setw(8)  << r.evalThreads
+                  << std::setw(8)  << r.torchThreads
+                  << std::setw(12) << std::setprecision(1) << r.simsPerSec
+                  << std::setw(10) << std::setprecision(3) << r.wallSec
+                  << "\n";
+    };
+
+    // Top contenders from initial sweep (all >290 sims/sec at 400 iterations)
+    run(1, 4, 2);   // 338 sims/sec — previous best
+    run(1, 3, 3);   // 329
+    run(1, 6, 1);   // 325
+    run(1, 4, 1);   // 317
+    run(1, 3, 2);   // 315
+    run(1, 2, 2);   // 312
+    run(2, 3, 2);   // 308
+    run(2, 4, 1);   // 303
+    run(2, 2, 3);   // 299
+    run(2, 4, 2);   // 294
+
+    // Per-worker: N workers each own their model — no eval queue, no contention
+    std::cout << "\n";
+    runPW(4, 1);    // 4 workers × 1 torch thread = 4 cores
+    runPW(6, 1);    // 6 workers × 1 torch thread = 6 cores
+    runPW(8, 1);    // 8 workers × 1 torch thread = 8 cores
+    runPW(4, 2);    // 4 workers × 2 torch threads = 8 cores
+
+    double baseline = results[0].simsPerSec;
+    std::cout << "\n  Speedup vs first config:\n";
+    for (auto &r : results) {
+        std::cout << std::setprecision(2)
+                  << "    " << r.label << " " << r.workers << "w/" << r.evalThreads << "e"
+                  << " torch=" << r.torchThreads << ": "
+                  << r.simsPerSec / baseline << "x\n";
+    }
+    std::cout << "\n";
+
+    torch::set_num_threads(1);
+}
+#endif
