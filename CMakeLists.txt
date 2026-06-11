@@ -46,6 +46,30 @@ if(NOT DEFINED CMAKE_PREFIX_PATH AND EXISTS "/opt/libtorch")
   list(APPEND CMAKE_PREFIX_PATH "/opt/libtorch")
 endif()
 
+# Auto-detect LibTorch from the active Python environment if not already set.
+# On clusters without a libtorch module, `pip install torch` inside a venv is
+# the easiest path. This lets `cmake ..` work without a manual -DCMAKE_PREFIX_PATH.
+if(NOT TORCH_FOUND)
+  find_program(PYTHON_EXE NAMES python3 python)
+  if(PYTHON_EXE)
+    execute_process(
+      COMMAND ${PYTHON_EXE} -c "import torch; print(torch.utils.cmake_prefix_path)"
+      OUTPUT_VARIABLE TORCH_CMAKE_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(TORCH_CMAKE_PREFIX)
+      list(APPEND CMAKE_PREFIX_PATH "${TORCH_CMAKE_PREFIX}")
+    endif()
+  endif()
+endif()
+
+# Stub out CUDA::nvToolsExt before find_package(Torch) — newer CUDA toolkits
+# (13.x) don't ship this target, but PyTorch's cmake scripts still reference it.
+if(NOT TARGET CUDA::nvToolsExt)
+  add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+endif()
+
 find_package(Torch QUIET)
 if(TORCH_FOUND)
   message(STATUS "LibTorch found: ${TORCH_VERSION}")
@@ -62,6 +86,7 @@ endif()
 # ─── Includes ─────────────────────────────────────────────────────────────────
 
 include_directories(include)
+add_compile_definitions(PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
 
 # ─── Core library ─────────────────────────────────────────────────────────────
 
@@ -76,7 +101,7 @@ add_library(pente_core
 )
 
 if(TORCH_FOUND)
-  target_compile_definitions(pente_core PUBLIC WITH_TORCH PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
+  target_compile_definitions(pente_core PUBLIC WITH_TORCH)
   target_sources(pente_core PRIVATE src/NNModel.cpp src/NNEvaluator.cpp src/SelfPlay.cpp)
   target_link_libraries(pente_core PUBLIC "${TORCH_LIBRARIES}")
   target_include_directories(pente_core SYSTEM PUBLIC "${TORCH_INCLUDE_DIRS}")
