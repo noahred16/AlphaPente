@@ -1,6 +1,17 @@
 # Pente AlphaZero Implementation
 C++ implementation of AlphaZero for the game of Pente.
 
+## Setup
+
+```bash
+cd ~/repos/AlphaPente
+mkdir -p libs && cd libs
+# CPU-only, cxx11 ABI (matches GCC 11.5 fine)
+wget https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-latest.zip
+unzip libtorch-cxx11-abi-shared-with-deps-latest.zip
+```
+
+
 ## Usage
 bootstrap heuristc generation. 
 ```

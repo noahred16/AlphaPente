@@ -206,3 +206,5 @@ cython_debug/
 templates/
 
 .claude/worktrees
+
+libs/

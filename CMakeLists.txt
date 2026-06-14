@@ -70,6 +70,7 @@ if(NOT TARGET CUDA::nvToolsExt)
   add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
 endif()
 
+set(USE_KINETO OFF CACHE BOOL "" FORCE)
 find_package(Torch QUIET)
 if(TORCH_FOUND)
   message(STATUS "LibTorch found: ${TORCH_VERSION}")
