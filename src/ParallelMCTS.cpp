@@ -333,10 +333,16 @@ bool ParallelMCTS::EvalPool::isRunning() const {
 }
 
 void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
+    int batchCount = 0;
+    // ~10 prints per run: interval in real (non-empty) batches
+    int printEvery = std::max(1, parent->config_.maxIterations / parent->config_.evaluationBatchSize / 10);
     while (running) {
         auto batch = parent->evaluationQueue_->popBatch(parent->config_.evaluationBatchSize);
 
         if (!batch.empty()) {
+            if (++batchCount % printEvery == 0)
+                fprintf(stderr, "[eval] queue=%zu batch=%zu\n",
+                        parent->evaluationQueue_->size(), batch.size());
             std::vector<PenteGame> games;
             games.reserve(batch.size());
             for (const auto &req : batch)

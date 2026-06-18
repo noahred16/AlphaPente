@@ -8,8 +8,17 @@
 #include <torch/torch.h>
 #include <unistd.h>
 
-static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSteps) {
+static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSteps,
+                       torch::Device device) {
     model->train();
+    model->to(device);
+
+    // Move entire buffer to device once up front
+    auto states   = buf.states.to(device);
+    auto captures = buf.captures.to(device);
+    auto policies = buf.policies.to(device);
+    auto values   = buf.values.to(device);
+
     torch::optim::SGD optimizer(
         model->parameters(),
         torch::optim::SGDOptions(LR).momentum(0.9).weight_decay(WEIGHT_DECAY));
@@ -22,12 +31,12 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
     std::cout << "  baseline policy loss (uniform): ~5.89\n";
 
     for (int step = 0; step < gradientSteps; step++) {
-        auto idx = torch::randint(0, n, {BATCH_SIZE}, torch::kInt64);
+        auto idx = torch::randint(0, n, {BATCH_SIZE}, torch::kInt64).to(device);
 
-        auto bStates   = buf.states.index_select(0, idx);
-        auto bCaptures = buf.captures.index_select(0, idx);
-        auto bPolicies = buf.policies.index_select(0, idx);
-        auto bValues   = buf.values.index_select(0, idx);
+        auto bStates   = states.index_select(0, idx);
+        auto bCaptures = captures.index_select(0, idx);
+        auto bPolicies = policies.index_select(0, idx);
+        auto bValues   = values.index_select(0, idx);
 
         optimizer.zero_grad();
         auto [logPolicy, valuePred] = model->forward(bStates, bCaptures);
@@ -94,16 +103,20 @@ int main(int argc, char *argv[]) {
 
     std::cout << "── Training (" << gradientSteps << " steps) ──────────────────────────\n";
 
+    torch::Device device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU);
+    std::cout << "  device: " << device << "\n\n";
+
     AlphaNet model(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
     if (std::filesystem::exists(bestPath))
         torch::load(model, bestPath);
-    trainModel(model, buf, gradientSteps);
+    trainModel(model, buf, gradientSteps, device);
 
     int iterNum = nextIterNumber(ckptDir);
     char iterSuffix[8];
     std::snprintf(iterSuffix, sizeof(iterSuffix), "%04d", iterNum);
     std::string iterPath = ckptDir + "/model_iter" + iterSuffix + ".pt";
 
+    model->to(torch::kCPU);
     torch::save(model, iterPath);
     torch::save(model, bestPath);
 

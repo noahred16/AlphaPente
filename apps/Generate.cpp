@@ -16,7 +16,7 @@ int main(int argc, char *argv[]) {
     std::string gameFlag = "pente";
     std::string evalFlag = "auto";  // auto | heuristic | nn
     int gamesPerIter     = 100;
-    int mctsSims         = 100;
+    int mctsSims         = 20000;
     bool bootstrap       = false;
     int tailMoves        = 0;     // 0 = all moves
     bool augment         = false;
@@ -78,7 +78,7 @@ int main(int argc, char *argv[]) {
     spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.5f;
-    spConfig.numWorkerThreads = useHeuristic ? 6 : 1;
+    spConfig.numWorkerThreads = useHeuristic ? 12 : 1;
     spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
 
     std::unique_ptr<Evaluator> evalPtr = useHeuristic

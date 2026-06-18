@@ -7,7 +7,14 @@
 
 struct NNEvaluator::Impl {
     AlphaNet model{nullptr};
-    torch::Device device{torch::kCPU};
+    torch::Device device{torch::cuda::is_available() ? torch::kCUDA : torch::kCPU};
+    // fp32 throughout. fp16 (kHalf) was tested but hurt throughput on this model
+    // (64 channels, 6 res blocks) — too small to saturate Tensor Cores, and pure
+    // fp16 destabilizes BatchNorm. Worth revisiting at 128+ channels, ideally with
+    // PyTorch AMP rather than a blunt model->to(kHalf).
+    // Future: torch_tensorrt can compile a fixed-batch-size engine for 2-4x gains
+    // by fusing ops and eliminating PyTorch dispatch overhead.
+    torch::ScalarType dtype{torch::kFloat};
 
     Impl() {
         at::globalContext().setUserEnabledNNPACK(false);
@@ -75,10 +82,10 @@ NNEvaluator::evaluate(const PenteGame &game) {
 
     torch::NoGradGuard no_grad;
     auto [logPolicy, valueTensor] = impl_->model->forward(
-        planes.unsqueeze(0).to(impl_->device),
-        captures.unsqueeze(0).to(impl_->device));
+        planes.unsqueeze(0).to(impl_->device, impl_->dtype),
+        captures.unsqueeze(0).to(impl_->device, impl_->dtype));
 
-    auto probs = torch::exp(logPolicy).squeeze(0).cpu(); // [361]
+    auto probs = torch::exp(logPolicy).squeeze(0).to(torch::kFloat).cpu(); // [361]
     auto probsAcc = probs.accessor<float, 1>();
 
     constexpr int B = PenteGame::BOARD_SIZE;
@@ -120,13 +127,13 @@ NNEvaluator::evaluateBatch(const std::vector<PenteGame> &games) {
     }
 
     torch::NoGradGuard no_grad;
-    auto batchPlanes   = torch::stack(planeVec,   0).to(impl_->device);  // [N, 3, 19, 19]
-    auto batchCaptures = torch::stack(captureVec, 0).to(impl_->device);  // [N, 2]
+    auto batchPlanes   = torch::stack(planeVec,   0).to(impl_->device, impl_->dtype);  // [N, 5, 19, 19]
+    auto batchCaptures = torch::stack(captureVec, 0).to(impl_->device, impl_->dtype);  // [N, 2]
 
     auto [logPolicy, valueTensor] = impl_->model->forward(batchPlanes, batchCaptures);
 
-    auto probs  = torch::exp(logPolicy).cpu();  // [N, 361]
-    auto values = valueTensor.cpu();             // [N, 1]
+    auto probs  = torch::exp(logPolicy).to(torch::kFloat).cpu();  // [N, 361]
+    auto values = valueTensor.to(torch::kFloat).cpu();             // [N, 1]
 
     std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>> results;
     results.reserve(N);

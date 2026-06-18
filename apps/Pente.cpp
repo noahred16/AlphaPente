@@ -13,18 +13,20 @@ int main(int argc, char *argv[]) {
     std::cout << "Playing Pente..." << std::endl;
 
     int numOffsets = 16;
+    int batchSize = 512;
     bool nonInteractive = false;
     bool useSerial = false;
     bool useUniform = false;
     std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
         else if (opt == 'u') useUniform = true;
         else if (opt == 'N') nnPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
         else if (opt == 'p') nnPath = optarg;
+        else if (opt == 'b') batchSize = std::atoi(optarg);
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -91,8 +93,9 @@ int main(int argc, char *argv[]) {
         ParallelMCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
-        config.numWorkerThreads = 6;
+        config.numWorkerThreads = 12;
         config.numEvalThreads = nnPath.empty() ? 0 : 1;  // NN: serialize evals through one thread to avoid BLAS conflicts
+        config.evaluationBatchSize = batchSize;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = evaluator;
 

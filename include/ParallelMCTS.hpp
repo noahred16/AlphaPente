@@ -47,7 +47,7 @@ class ParallelMCTS {
         // Parallel-specific config
         int numWorkerThreads = 4;        // Number of tree traversal threads
         int numEvalThreads = 1;          // Number of evaluation threads
-        int evaluationBatchSize = 32;    // Batch size for neural network evaluation
+        int evaluationBatchSize = 512;   // Batch size for neural network evaluation
         int queueCapacity = 10000;       // Max size of evaluation queue
 
         // Dirichlet root noise (self-play exploration). Set alpha=0 to disable.

@@ -5,30 +5,46 @@
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <unistd.h>
 
 int main(int argc, char *argv[]) {
     bool verbose     = false;
-    int  simulations = 50000;
+    int  simulations = 20000;
+    std::string nnPath;
 
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if      (arg == "-v" || arg == "--verbose") verbose = true;
-        else if (arg == "-s" && i + 1 < argc)       simulations = std::stoi(argv[++i]);
+    int opt;
+    while ((opt = getopt(argc, argv, "vs:Np:")) != -1) {
+        if      (opt == 'v') verbose     = true;
+        else if (opt == 's') simulations = std::stoi(optarg);
+        else if (opt == 'N') nnPath      = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
+        else if (opt == 'p') nnPath      = optarg;
     }
 
-    std::cout << "Playing Pente (HeuristicEvaluator, " << simulations << " sims/move)\n\n";
+    std::string evalName = nnPath.empty() ? "HeuristicEvaluator" : "NNEvaluator";
+    std::cout << "Playing Pente (" << evalName << ", " << simulations << " sims/move)\n\n";
 
     PenteGame game(PenteGame::Config::pente());
     game.reset();
 
-    HeuristicEvaluator eval;
+    HeuristicEvaluator hEval;
+    Evaluator *evalPtr = &hEval;
+
+#ifdef WITH_TORCH
+    std::unique_ptr<NNEvaluator> nnEval;
+    if (!nnPath.empty()) {
+        nnEval  = std::make_unique<NNEvaluator>(nnPath);
+        evalPtr = nnEval.get();
+    }
+#endif
 
     ParallelMCTS::Config cfg;
-    cfg.evaluator           = &eval;
+    cfg.evaluator           = evalPtr;
     cfg.maxIterations       = simulations;
     cfg.explorationConstant = 1.7;
-    cfg.numWorkerThreads    = 6;
-    cfg.numEvalThreads      = 0;  // inline mode: heuristic is cheap, no queue overhead
+    cfg.numWorkerThreads    = 12;
+    cfg.numEvalThreads      = nnPath.empty() ? 0 : 1;
+    cfg.evaluationBatchSize = 512;
     cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
     cfg.seed                = 42;
 
