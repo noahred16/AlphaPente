@@ -276,7 +276,8 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
             }
         }
 
-        if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations)
+        if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations ||
+            root->isTerminal())
             break;
 
         std::this_thread::yield();
@@ -519,7 +520,7 @@ PenteGame::Move ParallelMCTS::getBestMove() const {
         ThreadSafeNode *child = root_->children[i];
         if (child == nullptr) continue;
 
-        if (child->solvedStatus == SolvedStatus::SOLVED_WIN)
+        if (child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN)
             return root_->moves[i];
 
         int32_t visits = child->visits.load(std::memory_order_relaxed);
@@ -645,8 +646,8 @@ void ParallelMCTS::printBestMoves(int n) const {
             ? child->totalValue.load(std::memory_order_relaxed) / visits
             : 0.0;
         const char *status =
-            child->solvedStatus == SolvedStatus::SOLVED_WIN  ? "WIN"  :
-            child->solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
+            child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN  ? "WIN"  :
+            child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
 
         std::cout << std::setw(6)  << moveLabel(root_->moves[i].x, root_->moves[i].y)
                   << std::setw(10) << visits
@@ -740,10 +741,9 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
     if (game.isGameOver()) {
         // After a winning move, currentPlayer has already toggled to the NEXT player.
         // The winner is always the previous mover (opponent of currentPlayer).
-        // Convention matches single-threaded MCTS: SOLVED_WIN means the last mover won,
-        // which is a win from the parent's perspective (the parent made this winning move).
+        // Convention: SOLVED_WIN means the last mover won (a win from the parent's perspective).
         node->value = 1.0f;
-        node->solvedStatus = SolvedStatus::SOLVED_WIN;
+        node->solvedStatus.store(SolvedStatus::SOLVED_WIN, std::memory_order_release);
     }
     node->evaluated.store(true, std::memory_order_relaxed);
     node->expanded.store(true, std::memory_order_release);
@@ -767,6 +767,43 @@ void ParallelMCTS::backpropagate(ThreadSafeNode *node, float value,
         // Remove virtual loss if one was applied (root has none)
         if (current->virtualLosses.load(std::memory_order_relaxed) > 0)
             virtualLossManager_->removeVirtualLoss(current);
+
+        // Minimax solved-status propagation
+        if (!searchPath.empty()) {
+            ThreadSafeNode *parent = searchPath.back();
+            auto status = current->solvedStatus.load(std::memory_order_acquire);
+            if (status == SolvedStatus::SOLVED_WIN) {
+                // Current player at parent has a winning move → parent's mover loses.
+                SolvedStatus exp = SolvedStatus::UNSOLVED;
+                parent->solvedStatus.compare_exchange_strong(
+                    exp, SolvedStatus::SOLVED_LOSS,
+                    std::memory_order_release, std::memory_order_relaxed);
+            } else if (status == SolvedStatus::SOLVED_LOSS) {
+                // This child is a proven loss for the mover. Check if all of parent's
+                // children are now proven losses — if so, parent is a proven win.
+                // Scan under nodeSubtreeLock to avoid races with lazy child creation.
+                if (parent->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::UNSOLVED) {
+                    bool allLoss = true;
+                    {
+                        std::lock_guard<std::mutex> lock(parent->nodeSubtreeLock);
+                        for (int i = 0; i < parent->childCapacity; ++i) {
+                            ThreadSafeNode *sib = parent->children[i];
+                            if (sib == nullptr ||
+                                sib->solvedStatus.load(std::memory_order_acquire) != SolvedStatus::SOLVED_LOSS) {
+                                allLoss = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (allLoss && parent->childCapacity > 0) {
+                        SolvedStatus exp = SolvedStatus::UNSOLVED;
+                        parent->solvedStatus.compare_exchange_strong(
+                            exp, SolvedStatus::SOLVED_WIN,
+                            std::memory_order_release, std::memory_order_relaxed);
+                    }
+                }
+            }
+        }
 
         currentValue = -currentValue;  // flip for parent's perspective
     }
@@ -795,9 +832,10 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
             exploitation    = 0.0;
         } else {
             effectiveVisits = virtualLossManager_->getEffectiveVisits(child);
-            if (child->solvedStatus == SolvedStatus::SOLVED_WIN) {
+            auto childStatus = child->solvedStatus.load(std::memory_order_acquire);
+            if (childStatus == SolvedStatus::SOLVED_WIN) {
                 exploitation = std::numeric_limits<double>::infinity();
-            } else if (child->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+            } else if (childStatus == SolvedStatus::SOLVED_LOSS) {
                 exploitation = -std::numeric_limits<double>::infinity();
             } else {
                 exploitation = (effectiveVisits == 0) ? 0.0 :

@@ -80,7 +80,7 @@ class ParallelMCTS {
         // platform size) so cold reads never invalidate hot write cache lines.
         alignas(64) PenteGame::Move move;
         PenteGame::Player player;
-        SolvedStatus solvedStatus = SolvedStatus::UNSOLVED;
+        std::atomic<SolvedStatus> solvedStatus{SolvedStatus::UNSOLVED};
         uint64_t positionHash = 0;
         uint16_t childCount = 0;
         uint16_t childCapacity = 0;
@@ -90,7 +90,7 @@ class ParallelMCTS {
         ThreadSafeNode **children = nullptr;
 
         bool isFullyExpanded() const { return expanded.load(); }
-        bool isTerminal() const { return solvedStatus != SolvedStatus::UNSOLVED; }
+        bool isTerminal() const { return solvedStatus.load(std::memory_order_acquire) != SolvedStatus::UNSOLVED; }
     };
 
     // Evaluation request - node to be evaluated by the NN
