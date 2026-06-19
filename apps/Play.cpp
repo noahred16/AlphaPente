@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     cfg.evaluator           = evalPtr;
     cfg.maxIterations       = simulations;
     cfg.explorationConstant = 1.7;
-    cfg.numWorkerThreads    = 12;
+    cfg.numWorkerThreads    = GameUtils::numThreadsFromEnv();
     cfg.numEvalThreads      = nnPath.empty() ? 0 : 1;
     cfg.evaluationBatchSize = 512;
     cfg.arenaSize           = GameUtils::arenaSizeFromEnv();

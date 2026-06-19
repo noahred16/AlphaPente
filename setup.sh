@@ -8,6 +8,14 @@ if [[ "$(hostname)" == "explorer-02" ]]; then
     module load cmake/4.2.3
 fi
 
+# Auto-detect system specs if .env doesn't exist yet
+cd ~/repos/AlphaPente
+if [ ! -f .env ]; then
+    echo "No .env found. Detecting system specs..."
+    bash scripts/detect_system_specs.sh
+    echo ""
+fi
+
 # Setup libs (just libtorch)
 cd ~/repos/AlphaPente
 mkdir -p libs && cd libs

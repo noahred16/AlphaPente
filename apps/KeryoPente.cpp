@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         ParallelMCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
-        config.numWorkerThreads = 6;
+        config.numWorkerThreads = GameUtils::numThreadsFromEnv();
         config.numEvalThreads = 0;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);
         config.evaluator = &heuristicEvaluator;

@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
         ParallelMCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
-        config.numWorkerThreads = 12;
+        config.numWorkerThreads = GameUtils::numThreadsFromEnv();
         config.numEvalThreads = nnPath.empty() ? 0 : 1;  // NN: serialize evals through one thread to avoid BLAS conflicts
         config.evaluationBatchSize = batchSize;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB

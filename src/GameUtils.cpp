@@ -48,19 +48,45 @@ static size_t parseGbValue(const char *val) {
     return gb > 0 ? gb * 1024ULL * 1024 * 1024 : 0;
 }
 
-static size_t readFromDotEnv() {
+static const char *readKeyFromDotEnv(const std::string &key, std::string &out) {
     for (const char *path : {".env", "../.env"}) {
         std::ifstream f(path);
         if (!f) continue;
         std::string line;
         while (std::getline(f, line)) {
-            if (line.rfind("ARENA_SIZE_GB=", 0) == 0) {
-                size_t bytes = parseGbValue(line.c_str() + 14);
-                if (bytes > 0) return bytes;
+            if (line.rfind(key, 0) == 0 && line.size() > key.size()) {
+                out = line.substr(key.size());
+                return out.c_str();
             }
         }
     }
+    return nullptr;
+}
+
+static size_t readFromDotEnv() {
+    std::string val;
+    const char *p = readKeyFromDotEnv("ARENA_SIZE_GB=", val);
+    if (p) {
+        size_t bytes = parseGbValue(p);
+        if (bytes > 0) return bytes;
+    }
     return 0;
+}
+
+int GameUtils::numThreadsFromEnv() {
+    const char *val = std::getenv("NUM_THREADS");
+    if (val && std::strlen(val) > 0) {
+        int n = std::atoi(val);
+        if (n > 0) return n;
+    }
+    std::string buf;
+    const char *p = readKeyFromDotEnv("NUM_THREADS=", buf);
+    if (p) {
+        int n = std::atoi(p);
+        if (n > 0) return n;
+    }
+    std::cerr << "Error: NUM_THREADS not set. Add it to .env or set the environment variable.\n";
+    std::exit(1);
 }
 
 size_t GameUtils::arenaSizeFromEnv(size_t defaultGb) {

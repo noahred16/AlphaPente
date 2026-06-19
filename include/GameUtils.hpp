@@ -38,6 +38,9 @@ class GameUtils {
 
     // Read ARENA_SIZE_GB from env var or .env file; falls back to defaultGb if unset or invalid.
     static size_t arenaSizeFromEnv(size_t defaultGb = 8);
+
+    // Read NUM_THREADS from env var or .env file; aborts if unset or invalid.
+    static int numThreadsFromEnv();
 };
 
 #endif // GAMEUTILS_HPP
