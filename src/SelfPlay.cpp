@@ -29,6 +29,11 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     std::vector<SelfPlayExample> examples;
 
     while (!game.isGameOver()) {
+        if (game.getMoveCount() == cfg.explorationDropoff) {
+            auto c = mcts.getConfig();
+            c.dirichletAlpha = 0.0f;
+            mcts.setConfig(c);
+        }
         mcts.search(game);
 
         const auto *root = mcts.getRoot();
@@ -57,7 +62,7 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f});
 
         int chosen = 0;
-        if (game.getMoveCount() >= cfg.tempDropoff || totalVisits == 0) {
+        if (game.getMoveCount() >= cfg.explorationDropoff || totalVisits == 0) {
             chosen = (int)(std::max_element(visits.begin(), visits.end()) - visits.begin());
         } else {
             std::uniform_int_distribution<int> dist(0, totalVisits - 1);
