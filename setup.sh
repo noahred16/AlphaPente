@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Computing cluster steps, optional
+REPO_ROOT="$HOME/repos/AlphaPente"
+
+# Computing cluster: load modules if on known host
 if [[ "$(hostname)" == "explorer-02" ]]; then
     echo "Host explorer-02 detected. Loading CUDA, cuDNN, and CMake..."
     module load cuda/12.3.0
@@ -9,54 +11,56 @@ if [[ "$(hostname)" == "explorer-02" ]]; then
 fi
 
 # Auto-detect system specs if .env doesn't exist yet
-cd ~/repos/AlphaPente
-if [ ! -f .env ]; then
+if [ ! -f "$REPO_ROOT/.env" ]; then
     echo "No .env found. Detecting system specs..."
-    bash scripts/detect_system_specs.sh
+    bash "$REPO_ROOT/scripts/detect_system_specs.sh"
     echo ""
 fi
 
-# Setup libs (just libtorch)
-cd ~/repos/AlphaPente
-mkdir -p libs && cd libs
-
-# Check if the libtorch directory does not exist before installing
-if [ ! -d "libtorch" ]; then
-    echo "libtorch not found. Downloading and installing..."
-    # CPU-only, cxx11 ABI (matches GCC 11.5 fine)
-    wget "https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu121.zip" \
-        -O libtorch-2.5.1-cu121.zip
-    unzip libtorch-2.5.1-cu121.zip
-    # Optional: Clean up the zip file after extraction
-    rm libtorch-2.5.1-cu121.zip
-    echo "✅ libtorch installation completed."
+# Detect GPU and pick matching libtorch variant
+if nvidia-smi &>/dev/null; then
+    CUDA_VER=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+    VARIANT="cu121"
+    LIBTORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu121.zip"
+    echo "GPU detected (sm_${CUDA_VER}) — using CUDA libtorch (cu121)"
 else
-    echo "✅ libtorch directory already exists. Skipping installation."
+    VARIANT="cpu"
+    LIBTORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcpu.zip"
+    echo "No GPU detected — using CPU-only libtorch"
 fi
 
-# Build
-cd ~/repos/AlphaPente
+# Download libtorch if missing or wrong variant
+mkdir -p "$REPO_ROOT/libs" && cd "$REPO_ROOT/libs"
+
+LIBTORCH_CHANGED=false
+if [ -d libtorch ] && grep -q "$VARIANT" libtorch/build-version 2>/dev/null; then
+    echo "✅ libtorch ($VARIANT) already installed. Skipping download."
+else
+    LIBTORCH_CHANGED=true
+    if [ -d libtorch ]; then
+        echo "Removing mismatched libtorch ($(cat libtorch/build-version 2>/dev/null || echo unknown))..."
+        rm -rf libtorch
+    fi
+    echo "Downloading libtorch ($VARIANT)..."
+    wget "$LIBTORCH_URL" -O libtorch.zip
+    unzip libtorch.zip
+    rm libtorch.zip
+    echo "✅ libtorch installed."
+fi
+
+# Configure and build
+cd "$REPO_ROOT"
+if [ "$LIBTORCH_CHANGED" = true ]; then
+    echo "libtorch changed — clearing build dir."
+    rm -rf build
+fi
 mkdir -p build && cd build
 
-CMAKE_BASE="-DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=~/repos/AlphaPente/libs/libtorch -Wno-dev"
-if cmake .. $CMAKE_BASE 2>&1; then
-    echo "cmake configured with auto-detected CUDA arch."
+if cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$REPO_ROOT/libs/libtorch" -Wno-dev; then
+    echo "cmake configured successfully."
+    make -j"$(nproc)"
+    echo "✅ Build completed."
 else
-    CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1)
-    if [ -n "$CUDA_ARCH" ]; then
-        echo "Auto-detection failed. Retrying with detected arch: $CUDA_ARCH"
-        cmake .. $CMAKE_BASE -DTORCH_CUDA_ARCH_LIST="$CUDA_ARCH"
-    else
-        echo "No GPU detected. Building without libtorch."
-        cmake .. -DCMAKE_BUILD_TYPE=Release
-    fi
+    echo "cmake failed — see output above."
+    exit 1
 fi
-# make -j$(nproc)
-make
-echo "✅ Build completed."
-
-# mkdir build
-# cd build
-# cmake ..
-# make
-# cd ../
