@@ -37,7 +37,20 @@ fi
 # Build
 cd ~/repos/AlphaPente
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=~/repos/AlphaPente/libs/libtorch
+
+CMAKE_BASE="-DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=~/repos/AlphaPente/libs/libtorch -Wno-dev"
+if cmake .. $CMAKE_BASE 2>&1; then
+    echo "cmake configured with auto-detected CUDA arch."
+else
+    CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1)
+    if [ -n "$CUDA_ARCH" ]; then
+        echo "Auto-detection failed. Retrying with detected arch: $CUDA_ARCH"
+        cmake .. $CMAKE_BASE -DTORCH_CUDA_ARCH_LIST="$CUDA_ARCH"
+    else
+        echo "No GPU detected. Building without libtorch."
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+    fi
+fi
 # make -j$(nproc)
 make
 echo "✅ Build completed."
