@@ -7,12 +7,34 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
 
-TOTAL_THREADS=$(nproc)
+# Prefer cgroup v2 CPU quota over nproc, which sees the full host on shared servers.
+CGROUP_CPU_MAX=/sys/fs/cgroup/cpu.max
+if [[ -r "$CGROUP_CPU_MAX" ]]; then
+  read -r quota period < "$CGROUP_CPU_MAX"
+  if [[ "$quota" != "max" && "$period" -gt 0 ]]; then
+    TOTAL_THREADS=$(echo "$quota $period" | awk '{printf "%d", $1/$2}')
+    [[ "$TOTAL_THREADS" -lt 1 ]] && TOTAL_THREADS=1
+  else
+    TOTAL_THREADS=$(nproc)
+  fi
+else
+  TOTAL_THREADS=$(nproc)
+fi
 NUM_THREADS=$(( TOTAL_THREADS * 8 / 10 ))
 [ "$NUM_THREADS" -lt 1 ] && NUM_THREADS=1
 
-TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-TOTAL_MEM_GB=$(( TOTAL_MEM_KB / 1024 / 1024 ))
+# Prefer cgroup v2 memory limit over /proc/meminfo, which sees the full host on shared servers.
+CGROUP_MEM_MAX=/sys/fs/cgroup/memory.max
+if [[ -r "$CGROUP_MEM_MAX" ]]; then
+  MEM_LIMIT_BYTES=$(cat "$CGROUP_MEM_MAX")
+  if [[ "$MEM_LIMIT_BYTES" != "max" ]]; then
+    TOTAL_MEM_GB=$(( MEM_LIMIT_BYTES / 1024 / 1024 / 1024 ))
+  else
+    TOTAL_MEM_GB=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+  fi
+else
+  TOTAL_MEM_GB=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+fi
 ARENA_SIZE_GB=$(( TOTAL_MEM_GB * 8 / 10 ))
 [ "$ARENA_SIZE_GB" -lt 1 ] && ARENA_SIZE_GB=1
 
