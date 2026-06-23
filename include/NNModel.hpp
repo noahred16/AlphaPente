@@ -19,8 +19,8 @@ TORCH_MODULE(ResBlock);
 // Outputs: log_policy [B, 361], value [B, 1]
 struct AlphaNetImpl : torch::nn::Module {
     static constexpr int BOARD        = 19;
-    static constexpr int kChannels    = 64;
-    static constexpr int kResBlocks   = 6;
+    static constexpr int kChannels    = 128;
+    static constexpr int kResBlocks   = 8;
     static constexpr int kInputPlanes = 5;
 
     torch::nn::Conv2d inputConv{nullptr}, policyConv{nullptr}, valueConv{nullptr};
