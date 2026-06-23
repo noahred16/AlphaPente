@@ -3,8 +3,8 @@
 REPO_ROOT="$HOME/repos/AlphaPente"
 
 # Computing cluster: load modules if on known host
-if [[ "$(hostname)" == "explorer-02" ]]; then
-    echo "Host explorer-02 detected. Loading CUDA, cuDNN, and CMake..."
+if [[ "$(hostname)" == explorer* ]]; then
+    echo "Host $(hostname) detected. Loading CUDA, cuDNN, and CMake..."
     module load cuda/12.3.0
     module load cuDNN/9.10.2
     module load cmake/4.2.3
