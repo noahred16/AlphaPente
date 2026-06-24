@@ -108,6 +108,7 @@ int main(int argc, char *argv[]) {
     std::mt19937 rng(std::random_device{}());
     std::vector<torch::Tensor> allPlanes, allCaptures, allPolicies, allValues;
     int totalPositions = 0, bWins = 0, wWins = 0, draws = 0;
+    int lastGameMoves = 0;
 
     std::cout << "── Self-play (" << gamesPerIter << " games) ──────────────────────────\n";
 
@@ -117,6 +118,7 @@ int main(int argc, char *argv[]) {
         auto tGame = std::chrono::steady_clock::now();
         auto examples = runGame(eval, gameConfig, spConfig, rng);
 
+        lastGameMoves = (int)examples.size();
         if (tailMoves > 0 && (int)examples.size() > tailMoves)
             examples.erase(examples.begin(), examples.end() - tailMoves);
 
@@ -144,6 +146,7 @@ int main(int argc, char *argv[]) {
             std::cout << "  " << std::setw(3) << (g + 1) << "/" << gamesPerIter
                       << "  pos: "  << std::setw(6) << totalPositions
                       << "  B/W/D: " << bWins << "/" << wWins << "/" << draws
+                      << "  moves: " << std::setw(3) << lastGameMoves
                       << "  game: " << std::fixed << std::setprecision(1) << gameSecs << "s"
                       << "  avg: "  << std::setprecision(1) << avgSecs << "s\n";
         }

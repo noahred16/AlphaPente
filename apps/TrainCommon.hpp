@@ -5,7 +5,7 @@
 #include <iostream>
 #include <torch/torch.h>
 
-static constexpr int   BUFFER_SIZE       = 100'000;
+static constexpr int   BUFFER_SIZE       = 500'000;
 static constexpr int   MIN_BUFFER_SIZE   = 5'000;
 static constexpr int   BATCH_SIZE        = 256;
 static constexpr int   MIN_GRAD_STEPS    = 200;
