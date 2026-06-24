@@ -27,17 +27,18 @@ AlphaNetImpl::AlphaNetImpl(int ch, int numBlocks) {
         resBlocks->push_back(ResBlock(ch));
 
     policyConv = register_module("policyConv",
-        torch::nn::Conv2d(torch::nn::Conv2dOptions(ch, 2, 1).bias(false)));
-    policyBn = register_module("policyBn", torch::nn::BatchNorm2d(2));
+        torch::nn::Conv2d(torch::nn::Conv2dOptions(ch, 4, 1).bias(false)));
+    policyBn = register_module("policyBn", torch::nn::BatchNorm2d(4));
     policyFc  = register_module("policyFc",
-        torch::nn::Linear(2 * BOARD * BOARD, BOARD * BOARD));
+        torch::nn::Linear(4 * BOARD * BOARD, BOARD * BOARD));
 
     valueConv = register_module("valueConv",
         torch::nn::Conv2d(torch::nn::Conv2dOptions(ch, 1, 1).bias(false)));
     valueBn  = register_module("valueBn",  torch::nn::BatchNorm2d(1));
     valueFc1 = register_module("valueFc1",
         torch::nn::Linear(BOARD * BOARD + 2, 256)); // +2 for capture scalars
-    valueFc2 = register_module("valueFc2", torch::nn::Linear(256, 1));
+    valueFc2 = register_module("valueFc2", torch::nn::Linear(256, 64));
+    valueFc3 = register_module("valueFc3", torch::nn::Linear(64, 1));
 }
 
 std::pair<torch::Tensor, torch::Tensor> AlphaNetImpl::forward(
@@ -47,7 +48,7 @@ std::pair<torch::Tensor, torch::Tensor> AlphaNetImpl::forward(
     for (const auto& block : *resBlocks)
         x = block->as<ResBlockImpl>()->forward(x);
 
-    // Policy head: [B, 2, 19, 19] -> [B, 361] log-probabilities
+    // Policy head: [B, 4, 19, 19] -> [B, 361] log-probabilities
     auto p = torch::relu(policyBn(policyConv(x)));
     p = torch::log_softmax(policyFc(p.flatten(1)), /*dim=*/1);
 
@@ -55,7 +56,8 @@ std::pair<torch::Tensor, torch::Tensor> AlphaNetImpl::forward(
     auto v = torch::relu(valueBn(valueConv(x)));
     v = torch::cat({v.flatten(1), captures}, /*dim=*/1);
     v = torch::relu(valueFc1(v));
-    v = torch::tanh(valueFc2(v));
+    v = torch::relu(valueFc2(v));
+    v = torch::tanh(valueFc3(v));
 
     return {p, v};
 }

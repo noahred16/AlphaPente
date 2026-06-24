@@ -14,7 +14,7 @@ static constexpr float WEIGHT_DECAY      = 1e-4f;
 static constexpr float VALUE_LOSS_WEIGHT = 1.0f;
 
 struct ReplayBuffer {
-    torch::Tensor states;    // [N, 3, 19, 19]
+    torch::Tensor states;    // [N, 5, 19, 19]  — my stones, opp stones, empty, my_captures/max (const), opp_captures/max (const)
     torch::Tensor captures;  // [N, 2]
     torch::Tensor policies;  // [N, 361]
     torch::Tensor values;    // [N, 1]

@@ -26,7 +26,7 @@ struct AlphaNetImpl : torch::nn::Module {
     torch::nn::Conv2d inputConv{nullptr}, policyConv{nullptr}, valueConv{nullptr};
     torch::nn::BatchNorm2d inputBn{nullptr}, policyBn{nullptr}, valueBn{nullptr};
     torch::nn::ModuleList resBlocks{nullptr};
-    torch::nn::Linear policyFc{nullptr}, valueFc1{nullptr}, valueFc2{nullptr};
+    torch::nn::Linear policyFc{nullptr}, valueFc1{nullptr}, valueFc2{nullptr}, valueFc3{nullptr};
 
     AlphaNetImpl(int channels = kChannels, int numResBlocks = kResBlocks);
     std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor planes, torch::Tensor captures);
