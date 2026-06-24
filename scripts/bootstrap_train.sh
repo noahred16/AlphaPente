@@ -8,13 +8,15 @@ set -euo pipefail
 GAME="pente"
 ROUNDS=6
 TRAINS_PER_ROUND=5
+ARENA_SIMS=400
 
-while getopts "g:r:n:" opt; do
+while getopts "g:r:n:s:" opt; do
     case $opt in
         g) GAME=$OPTARG ;;
         r) ROUNDS=$OPTARG ;;
         n) TRAINS_PER_ROUND=$OPTARG ;;
-        *) echo "Usage: $0 [-g game] [-r rounds] [-n trains_per_round]" >&2; exit 1 ;;
+        s) ARENA_SIMS=$OPTARG ;;
+        *) echo "Usage: $0 [-g game] [-r rounds] [-n trains_per_round] [-s arena_sims]" >&2; exit 1 ;;
     esac
 done
 
@@ -28,6 +30,7 @@ cd "$BUILD_DIR"
 echo "Bootstrap training"      | tee "$LOG"
 echo "  game  : $GAME"         | tee -a "$LOG"
 echo "  rounds: $ROUNDS x $TRAINS_PER_ROUND trains" | tee -a "$LOG"
+echo "  arena sims: $ARENA_SIMS"                  | tee -a "$LOG"
 echo "  log   : $LOG"          | tee -a "$LOG"
 echo "  start : $(date)"       | tee -a "$LOG"
 echo ""                        | tee -a "$LOG"
@@ -61,7 +64,7 @@ done
 echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
 echo "Final arena: NN vs heuristic" | tee -a "$LOG"
 echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-./benchmark -g "$GAME" -a -S 400 2>&1 | tee -a "$LOG"
+./benchmark -g "$GAME" -a -S "$ARENA_SIMS" 2>&1 | tee -a "$LOG"
 echo "" | tee -a "$LOG"
 echo "All done!  $(date)" | tee -a "$LOG"
 ELAPSED=$(( $(date +%s) - START ))

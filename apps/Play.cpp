@@ -9,46 +9,73 @@
 #include <unistd.h>
 
 int main(int argc, char *argv[]) {
-    bool verbose     = false;
-    int  simulations = 20000;
+    bool verbose          = false;
+    bool heuristicOpponent = false;
+    int  simulations      = 800;
     std::string nnPath;
 
+    auto usage = [&]() {
+        std::cout <<
+            "Usage: play [-s sims] [-v] [-N] [-p model.pt] [-H]\n"
+            "\n"
+            "  -s <n>      MCTS simulations per move (default: " << simulations << ")\n"
+            "  -v          verbose: print board, visit counts, and top moves each turn\n"
+            "  -N          use best NN model (checkpoints/pente/best_model.pt)\n"
+            "  -p <path>   use a specific .pt model file\n"
+            "  -H          heuristic opponent: Black=NN/heuristic, White=heuristic\n"
+            "  -h          show this help\n"
+            "\n"
+            "Runs an AI-vs-AI Pente game so you can inspect the training data distribution.\n";
+    };
+
     int opt;
-    while ((opt = getopt(argc, argv, "vs:Np:")) != -1) {
-        if      (opt == 'v') verbose     = true;
-        else if (opt == 's') simulations = std::stoi(optarg);
-        else if (opt == 'N') nnPath      = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
-        else if (opt == 'p') nnPath      = optarg;
+    while ((opt = getopt(argc, argv, "vs:Np:Hh")) != -1) {
+        if      (opt == 'v') verbose            = true;
+        else if (opt == 's') simulations        = std::stoi(optarg);
+        else if (opt == 'N') nnPath             = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
+        else if (opt == 'p') nnPath             = optarg;
+        else if (opt == 'H') heuristicOpponent  = true;
+        else if (opt == 'h') { usage(); return 0; }
+        else                 { usage(); return 1; }
     }
 
     std::string evalName = nnPath.empty() ? "HeuristicEvaluator" : "NNEvaluator";
-    std::cout << "Playing Pente (" << evalName << ", " << simulations << " sims/move)\n\n";
+    std::string p2Name   = heuristicOpponent ? "HeuristicEvaluator" : evalName;
+    std::cout << "Playing Pente (Black: " << evalName << " vs White: " << p2Name
+              << ", " << simulations << " sims/move)\n\n";
 
     PenteGame game(PenteGame::Config::pente());
     game.reset();
 
     HeuristicEvaluator hEval;
-    Evaluator *evalPtr = &hEval;
+    Evaluator *blackEval = &hEval;
 
 #ifdef WITH_TORCH
     std::unique_ptr<NNEvaluator> nnEval;
     if (!nnPath.empty()) {
-        nnEval  = std::make_unique<NNEvaluator>(nnPath);
-        evalPtr = nnEval.get();
+        nnEval    = std::make_unique<NNEvaluator>(nnPath);
+        blackEval = nnEval.get();
     }
 #endif
 
-    ParallelMCTS::Config cfg;
-    cfg.evaluator           = evalPtr;
-    cfg.maxIterations       = simulations;
-    cfg.explorationConstant = 1.7;
-    cfg.numWorkerThreads    = GameUtils::numThreadsFromEnv();
-    cfg.numEvalThreads      = nnPath.empty() ? 0 : 1;
-    cfg.evaluationBatchSize = 512;
-    cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
-    cfg.seed                = 42;
+    auto makeCfg = [&](Evaluator *eval) {
+        ParallelMCTS::Config cfg;
+        cfg.evaluator           = eval;
+        cfg.maxIterations       = simulations;
+        cfg.explorationConstant = 1.7;
+        cfg.numWorkerThreads    = GameUtils::numThreadsFromEnv();
+        cfg.numEvalThreads      = (eval != &hEval) ? 1 : 0;
+        cfg.evaluationBatchSize = 512;
+        cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+        cfg.seed                = 42;
+        return cfg;
+    };
 
-    ParallelMCTS mcts(cfg);
+    ParallelMCTS::Config blackCfg = makeCfg(blackEval);
+    ParallelMCTS::Config whiteCfg = makeCfg(&hEval);
+
+    ParallelMCTS blackMCTS(blackCfg);
+    ParallelMCTS whiteMCTS(heuristicOpponent ? whiteCfg : blackCfg);
 
     std::vector<std::string> moves;
     game.makeMove("K10");
@@ -59,13 +86,17 @@ int main(int argc, char *argv[]) {
     while (!game.isGameOver()) {
         if (verbose) GameUtils::printGameState(game);
 
+        bool isBlack = (game.getCurrentPlayer() == PenteGame::BLACK);
+        ParallelMCTS &mcts    = (isBlack || !heuristicOpponent) ? blackMCTS : whiteMCTS;
+        ParallelMCTS::Config &cfg = (isBlack || !heuristicOpponent) ? blackCfg : whiteCfg;
+
         auto t0 = std::chrono::high_resolution_clock::now();
 
-        // Top up to target rather than restarting from zero
         int currentVisits = mcts.getTotalVisits();
         int needed        = std::max(0, simulations - currentVisits);
         if (verbose)
-            std::cout << "  root visits: " << currentVisits << ", running " << needed << " more\n";
+            std::cout << "  [" << (isBlack ? "Black" : "White") << "] "
+                      << "root visits: " << currentVisits << ", running " << needed << " more\n";
 
         cfg.maxIterations = needed;
         mcts.setConfig(cfg);
@@ -85,7 +116,8 @@ int main(int argc, char *argv[]) {
 
         moves.push_back(GameUtils::displayMove(move.x, move.y));
         game.makeMove(move.x, move.y);
-        mcts.reuseSubtree(move);
+        blackMCTS.reuseSubtree(move);
+        if (heuristicOpponent) whiteMCTS.reuseSubtree(move);
     }
 
     GameUtils::printGameState(game);

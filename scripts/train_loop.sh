@@ -6,7 +6,7 @@
 set -euo pipefail
 
 GAMES=50
-SIMS=400
+SIMS=800
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
 ARENA=false
@@ -25,10 +25,10 @@ Options:
 
 Examples:
   # standard self-play training
-  ./scripts/train_loop.sh -n 50 -s 400 -g pente
+  ./scripts/train_loop.sh -n 50 -s 800 -g pente
 
   # with arena enabled (NN vs heuristic at 3 sim tiers + any roster models)
-  ./scripts/train_loop.sh -n 50 -s 400 -g pente -a
+  ./scripts/train_loop.sh -n 50 -s 800 -g pente -a
 
   # quick smoke-test: 3 iterations, small game count
   ./scripts/train_loop.sh -n 10 -s 100 -i 3 -g pente
