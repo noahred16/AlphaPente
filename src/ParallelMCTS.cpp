@@ -341,9 +341,9 @@ void ParallelMCTS::EvalPool::evalThreadMain(int /*evalId*/) {
         auto batch = parent->evaluationQueue_->popBatch(parent->config_.evaluationBatchSize);
 
         if (!batch.empty()) {
-            if (++batchCount % printEvery == 0)
-                fprintf(stderr, "[eval] queue=%zu batch=%zu\n",
-                        parent->evaluationQueue_->size(), batch.size());
+            // if (++batchCount % printEvery == 0)
+            //     fprintf(stderr, "[eval] queue=%zu batch=%zu\n",
+            //             parent->evaluationQueue_->size(), batch.size());
             std::vector<PenteGame> games;
             games.reserve(batch.size());
             for (const auto &req : batch)

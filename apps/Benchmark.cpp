@@ -349,7 +349,8 @@ int main(int argc, char *argv[]) {
                       << "  draws " << ar.draws
                       << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
 
-            appendResult(outPath, relModelPath, "nn-vs-" + opponentLabel, "arena", ar.nnWins, arenaGames);
+            std::string arenaLabel = "nn@" + std::to_string(arenaSims) + "-vs-" + opponentLabel + "@" + std::to_string(oppSims);
+            appendResult(outPath, relModelPath, arenaLabel, "arena", ar.nnWins, arenaGames);
             std::cout << "Appended arena result to " << outPath << "\n";
         }
     }

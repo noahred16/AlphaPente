@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Bootstrap data generation — run from project root.
-# ~10.9s/game @ 25k sims. 16 batches x 100 games = 1,600 games, ~4.8 hours.
-# Produces ~132,000 positions (1,600 games x 10 tail moves x 8 symmetries).
+# ~1.2s/game @ 25k sims. 16 batches x 100 games = 1,600 games, ~32 minutes.
+# Produces ~256,000 positions (1,600 games x 20 tail moves x 8 symmetries).
 
 set -euo pipefail
 
 GAME="${1:-pente}"
-BATCHES=16
+BATCHES=5
 GAMES_PER_BATCH=100
 SIMS=25000
-TAIL=10
+TAIL=20
 
 echo "Bootstrap generation"
 echo "  game   : $GAME"
