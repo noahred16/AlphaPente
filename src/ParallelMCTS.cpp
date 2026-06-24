@@ -223,14 +223,18 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
     while (running) {
         // PHASE 1: Claim an iteration slot and select a leaf.
         //
-        // In queue mode, throttle submissions so virtual losses don't pile up before
-        // any backprop fires. With 1 worker and 6 eval threads the worker can exhaust
-        // all 800 slots in Phase 1 before a single result returns — every popular node
-        // then carries 30+ VLs, forcing near-uniform exploration and producing very soft
-        // policy targets. Capping in-flight at evaluationBatchSize keeps VLs bounded
-        // to one batch-worth while still keeping the eval pipeline fully fed.
+        // In single-worker queue mode the worker runs Phase 1 orders-of-magnitude
+        // faster than eval threads can return results, so it exhausts all iteration
+        // slots before a single backprop fires — every popular node accumulates
+        // hundreds of VLs, forcing near-uniform exploration and very soft policy
+        // targets. Cap in-flight to one batch-worth to prevent this.
+        //
+        // Multi-worker mode does NOT need the cap: each worker alternates Phase 1
+        // and Phase 2, the workers collectively drain the backprop queue faster,
+        // and — critically — VLs are *intentional* in parallel search to discourage
+        // workers from piling onto the same path.
         bool claimSlot = true;
-        if (parent->config_.numEvalThreads > 0) {
+        if (parent->config_.numEvalThreads > 0 && parent->config_.numWorkerThreads == 1) {
             int inFlight = parent->totalInProgress.load(std::memory_order_relaxed)
                          - parent->totalIterations.load(std::memory_order_relaxed);
             claimSlot = (inFlight < parent->config_.evaluationBatchSize);
