@@ -17,9 +17,10 @@ int main(int argc, char *argv[]) {
     bool nonInteractive = false;
     bool useSerial = false;
     bool useUniform = false;
+    float dirichletEpsilon = 0.25f;
     std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:d:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
@@ -27,6 +28,7 @@ int main(int argc, char *argv[]) {
         else if (opt == 'N') nnPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
         else if (opt == 'p') nnPath = optarg;
         else if (opt == 'b') batchSize = std::atoi(optarg);
+        else if (opt == 'd') dirichletEpsilon = std::stof(optarg);
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
@@ -83,6 +85,9 @@ int main(int argc, char *argv[]) {
         config.seed = 42;
         config.arenaSize = GameUtils::arenaSizeFromEnv();
         config.evaluator = evaluator;
+        config.dirichletEpsilon = dirichletEpsilon;
+        config.dirichletAlpha = 0.3;
+        config.dirichletMoveThreshold = 10;
 
         MCTS mcts(config);
         if (nonInteractive)
@@ -98,6 +103,9 @@ int main(int argc, char *argv[]) {
         config.evaluationBatchSize = batchSize;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = evaluator;
+        config.dirichletAlpha = 0.3f;
+        config.dirichletEpsilon = dirichletEpsilon;
+        config.dirichletMoveThreshold = 10;
 
         ParallelMCTS mcts(config);
         if (nonInteractive)

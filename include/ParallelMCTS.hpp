@@ -51,8 +51,10 @@ class ParallelMCTS {
         int queueCapacity = 10000;       // Max size of evaluation queue
 
         // Dirichlet root noise (self-play exploration). Set alpha=0 to disable.
+        // Only applied when getMoveCount() <= dirichletMoveThreshold (-1 = always).
         float dirichletAlpha   = 0.0f;
         float dirichletEpsilon = 0.25f;
+        int dirichletMoveThreshold = -1;
 
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };

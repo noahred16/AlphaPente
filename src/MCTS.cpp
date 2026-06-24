@@ -78,9 +78,29 @@ void MCTS::initNodeChildren(Node *node, int capacity) {
 // Main Search Interface
 // ============================================================================
 
+void MCTS::applyDirichletNoise(Node *node) {
+    int n = node->childCapacity;
+    if (n == 0) return;
+
+    std::gamma_distribution<double> gamma(config_.dirichletAlpha, 1.0);
+    double sum = 0.0;
+    std::vector<double> noise(n);
+    for (int i = 0; i < n; i++) {
+        noise[i] = gamma(rng_);
+        sum += noise[i];
+    }
+    if (sum <= 0.0) return;
+
+    double eps = config_.dirichletEpsilon;
+    for (int i = 0; i < n; i++) {
+        node->priors[i] = (float)((1.0 - eps) * node->priors[i] + eps * noise[i] / sum);
+    }
+}
+
 PenteGame::Move MCTS::search(const PenteGame &game) {
     this->startSimulations_ = totalSimulations_; // For tracking how many sims were done in this search
     this->game = game;
+    rootNoiseApplied_ = false;
     auto startTime = std::chrono::high_resolution_clock::now();
 
     std::vector<Node *> searchPath;
@@ -95,6 +115,14 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
         root_ = allocateNode();
     }
     root_->player = game.getCurrentPlayer();
+
+    // Reused root: already evaluated from a prior search, apply noise now
+    bool dirichletEnabled = config_.dirichletEpsilon > 0.0 &&
+                            game.getMoveCount() <= config_.dirichletMoveThreshold;
+    if (dirichletEnabled && root_->evaluated && !rootNoiseApplied_) {
+        applyDirichletNoise(root_);
+        rootNoiseApplied_ = true;
+    }
 
     // Local copy of game for simulations - inherit seed from MCTS config for reproducibility
     PenteGame::Config localGameConfig = game.getConfig();
@@ -145,6 +173,12 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
                       << arena_.totalSize() / (1024.0 * 1024.0) << " MB arena used).\n"
                       << "Returning best move found so far.\n";
             break;
+        }
+
+        // Fresh root: apply Dirichlet noise to root priors on first expansion
+        if (dirichletEnabled && node == root_ && !rootNoiseApplied_) {
+            applyDirichletNoise(root_);
+            rootNoiseApplied_ = true;
         }
 
         // Simulation: play out the game randomly, only if not already solved

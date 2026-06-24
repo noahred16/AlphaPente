@@ -47,6 +47,12 @@ class MCTS {
         uint32_t seed = 0; // 0 = non-deterministic (random_device), non-zero = deterministic seed
         int canonicalHashDepth = 10; // 0 = disabled; use canonical hash when getMoveCount() <= this value
 
+        // Dirichlet noise at root — encourages exploration of diverse lines.
+        // Only applied when getMoveCount() <= dirichletMoveThreshold. 0.0 epsilon = disabled.
+        double dirichletAlpha = 0.3;
+        double dirichletEpsilon = 0.0;
+        int dirichletMoveThreshold = 10;
+
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
@@ -138,6 +144,7 @@ class MCTS {
     // Helper methods
     int selectBestMoveIndex(Node *node, const PenteGame &game, int currentSym) const;
     void updateChildrenPriors(Node *node, const PenteGame &game);
+    void applyDirichletNoise(Node *node);
 
     // Arena allocation helpers
     Node *allocateNode();
@@ -157,6 +164,8 @@ class MCTS {
     std::vector<Node *> reusePath; // For subtree reuse during search
     mutable std::mt19937 rng_;
 
+
+    bool rootNoiseApplied_ = false;
 
     // Statistics
     int startSimulations_ = 0;

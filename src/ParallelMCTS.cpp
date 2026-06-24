@@ -403,7 +403,9 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     setupSlabs();
     tl_slab = &workerSlabs_[0];  // main thread uses slab 0 during prepareRoot
     prepareRoot(game);
-    if (config_.dirichletAlpha > 0.0f)
+    bool dirichletThresholdMet = (config_.dirichletMoveThreshold < 0 ||
+                                   game.getMoveCount() <= config_.dirichletMoveThreshold);
+    if (config_.dirichletAlpha > 0.0f && dirichletThresholdMet)
         injectDirichletNoise();
     tl_slab = nullptr;
 
