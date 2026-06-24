@@ -20,9 +20,16 @@ fi
 # Detect GPU and pick matching libtorch variant
 if nvidia-smi &>/dev/null; then
     CUDA_VER=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
-    VARIANT="cu121"
-    LIBTORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu121.zip"
-    echo "GPU detected (sm_${CUDA_VER}) — using CUDA libtorch (cu121)"
+    # Blackwell (sm_120+) requires CUDA 12.8+ wheels; older GPUs use cu121
+    if [ "${CUDA_VER}" -ge 120 ] 2>/dev/null; then
+        VARIANT="cu128"
+        LIBTORCH_URL="https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu128.zip"
+        echo "GPU detected (sm_${CUDA_VER}, Blackwell) — using CUDA libtorch (cu128)"
+    else
+        VARIANT="cu121"
+        LIBTORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu121.zip"
+        echo "GPU detected (sm_${CUDA_VER}) — using CUDA libtorch (cu121)"
+    fi
 else
     VARIANT="cpu"
     LIBTORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcpu.zip"
