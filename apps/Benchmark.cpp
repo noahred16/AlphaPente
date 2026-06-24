@@ -182,6 +182,7 @@ int main(int argc, char *argv[]) {
     int  arenaGames       = 10;
     int  arenaSims        = 1000;
     int  opponentSims     = 0;   // 0 = same as arenaSims
+    int  suiteSims        = 0;   // 0 = raw policy, >0 = MCTS with N sims
     std::string opponentPath = "";
 
     // Pre-scan for -g so we can build the default model path correctly
@@ -200,13 +201,14 @@ int main(int argc, char *argv[]) {
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
+            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-s sims] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
             "  -p  candidate model checkpoint              (default: latest in checkpoints/<game>/)\n"
             "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
             "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
+            "  -s  suite MCTS sims per position (0=raw policy) (default: " << suiteSims << ")\n"
             "  -a  run arena match after the suite\n"
             "  -G  arena game count                        (default: " << arenaGames << ")\n"
             "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
@@ -217,16 +219,20 @@ int main(int argc, char *argv[]) {
             "  # as called by train_loop.sh (NN at 400 sims vs heuristic at 100)\n"
             "  ./benchmark -g pente -a -G 10 -S 400 -T 100\n"
             "\n"
+            "  # suite with MCTS search instead of raw policy\n"
+            "  ./benchmark -g pente -s 800\n"
+            "\n"
             "  # ad hoc: pit the latest checkpoint against a roster model\n"
             "  ./benchmark -g pente -a -G 20 -S 400 -P checkpoints/pente/roster/model_iter0030.pt\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:aG:S:T:P:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:aG:S:T:P:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
         else if (opt == 'p') modelPath    = resolve(optarg);
         else if (opt == 't') suitePath    = resolve(optarg);
         else if (opt == 'o') outPath      = resolve(optarg);
+        else if (opt == 's') suiteSims    = std::stoi(optarg);
         else if (opt == 'a') runArenaFlag = true;
         else if (opt == 'G') arenaGames   = std::stoi(optarg);
         else if (opt == 'S') arenaSims    = std::stoi(optarg);
@@ -273,6 +279,23 @@ int main(int argc, char *argv[]) {
     int passed = 0;
     int total  = static_cast<int>(cases.size());
 
+#ifdef WITH_TORCH
+    // Build MCTS instance once for reuse across cases (only when sims requested + NN available)
+    std::unique_ptr<ParallelMCTS> suiteMcts;
+    if (suiteSims > 0 && nnEval) {
+        ParallelMCTS::Config cfg;
+        cfg.maxIterations       = suiteSims;
+        cfg.explorationConstant = 1.7;
+        cfg.numWorkerThreads    = 6;
+        cfg.numEvalThreads      = 1;
+        cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+        cfg.evaluator           = nnEval.get();
+        cfg.dirichletAlpha      = 0.0f;  // no noise for benchmarking
+        suiteMcts = std::make_unique<ParallelMCTS>(cfg);
+        evaluatorName = "nn@" + std::to_string(suiteSims);
+    }
+#endif
+
     for (int i = 0; i < total; ++i) {
         const auto &tc = cases[i];
 
@@ -281,11 +304,20 @@ int main(int argc, char *argv[]) {
         for (const auto &mv : GameUtils::parseGameString(tc.state.c_str()))
             game.makeMove(mv.c_str());
 
-        auto policy = evaluator->evaluatePolicy(game);
-
         std::string topMove;
-        if (!policy.empty())
-            topMove = GameUtils::displayMove(policy.front().first.x, policy.front().first.y);
+#ifdef WITH_TORCH
+        if (suiteMcts) {
+            suiteMcts->reset();
+            suiteMcts->search(game);
+            PenteGame::Move mv = suiteMcts->getBestMove();
+            topMove = GameUtils::displayMove(mv.x, mv.y);
+        } else
+#endif
+        {
+            auto policy = evaluator->evaluatePolicy(game);
+            if (!policy.empty())
+                topMove = GameUtils::displayMove(policy.front().first.x, policy.front().first.y);
+        }
 
         for (const auto &exp : tc.expected)
             if (topMove == exp) { ++passed; break; }

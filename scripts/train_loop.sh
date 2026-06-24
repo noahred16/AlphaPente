@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-GAMES=50
+GAMES=200
 SIMS=800
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
@@ -94,8 +94,11 @@ while true; do
     ./train -g "$GAME" 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
-    echo "── Benchmark ────────────────────────────────────────────────────" | tee -a "$LOG"
+    echo "── Benchmark (raw policy) ───────────────────────────────────────" | tee -a "$LOG"
     ./benchmark -g "$GAME" 2>&1 | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
+    echo "── Benchmark (MCTS $SIMS sims) ──────────────────────────────────" | tee -a "$LOG"
+    ./benchmark -g "$GAME" -s "$SIMS" 2>&1 | tee -a "$LOG"
 
     if [[ "$ARENA" == true ]]; then
         echo "" | tee -a "$LOG"
