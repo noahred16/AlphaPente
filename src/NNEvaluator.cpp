@@ -126,10 +126,10 @@ NNEvaluator::evaluateBatch(const std::vector<PenteGame> &games) {
         captureVec.push_back(std::move(captures));
     }
 
-    torch::NoGradGuard no_grad;
     auto batchPlanes   = torch::stack(planeVec,   0).to(impl_->device, impl_->dtype);  // [N, 5, 19, 19]
     auto batchCaptures = torch::stack(captureVec, 0).to(impl_->device, impl_->dtype);  // [N, 2]
 
+    torch::NoGradGuard no_grad;
     auto [logPolicy, valueTensor] = impl_->model->forward(batchPlanes, batchCaptures);
 
     auto probs  = torch::exp(logPolicy).to(torch::kFloat).cpu();  // [N, 361]

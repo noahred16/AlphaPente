@@ -252,26 +252,37 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                 parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             } else {
                 // Queue mode: hand off to eval thread; backprop happens in Phase 2.
-                // Atomically claim the leaf so only one worker evaluates it.
-                // Without this, multiple workers select the same unexpanded leaf
-                // (it stays expanded=false until the batch round-trip completes),
-                // push it N times, and burn all iteration slots on ~49 nodes.
-                bool expected = false;
-                if (leaf->evaluated.compare_exchange_strong(
-                        expected, true,
-                        std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    EvaluationRequest request;
-                    request.node       = leaf;
-                    request.gameState  = workerGame;
-                    request.searchPath = searchPath;
-                    if (!parent->evaluationQueue_->tryPush(request)) {
-                        // Queue full — un-claim so another worker can retry later
-                        leaf->evaluated.store(false, std::memory_order_release);
+                auto leafStatus = leaf->solvedStatus.load(std::memory_order_acquire);
+                if (leafStatus != SolvedStatus::UNSOLVED) {
+                    // Leaf is already proved (SOLVED_WIN/LOSS marked by select() or a prior
+                    // backprop). Backprop directly — no eval round-trip needed.
+                    // SOLVED_WIN: player who moved into leaf wins → value +1.0f.
+                    // SOLVED_LOSS: player who moved into leaf loses → value -1.0f.
+                    float value = (leafStatus == SolvedStatus::SOLVED_WIN) ? 1.0f : -1.0f;
+                    parent->backpropagate(leaf, value, searchPath);
+                    parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    // Atomically claim the leaf so only one worker evaluates it.
+                    // Without this, multiple workers select the same unexpanded leaf
+                    // (it stays expanded=false until the batch round-trip completes),
+                    // push it N times, and burn all iteration slots on ~49 nodes.
+                    bool expected = false;
+                    if (leaf->evaluated.compare_exchange_strong(
+                            expected, true,
+                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                        EvaluationRequest request;
+                        request.node       = leaf;
+                        request.gameState  = workerGame;
+                        request.searchPath = searchPath;
+                        if (!parent->evaluationQueue_->tryPush(request)) {
+                            // Queue full — un-claim so another worker can retry later
+                            leaf->evaluated.store(false, std::memory_order_release);
+                            parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                        }
+                    } else {
+                        // Another worker already claimed this leaf — return slot and move on
                         parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
                     }
-                } else {
-                    // Another worker already claimed this leaf — return slot and move on
-                    parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
                 }
             }
         } else {
@@ -433,7 +444,15 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         std::cerr << "Warning: parallel MCTS search timed out\n";
 
     workerPool_->stop();
-    if (config_.numEvalThreads > 0) evalPool_->stop();
+    if (config_.numEvalThreads > 0) {
+        evalPool_->stop();
+        // Drain both queues so stale items from an early-terminated search never
+        // carry over into the next call.  Leftover eval requests would be processed
+        // immediately by the fresh eval threads on the next search() call, causing a
+        // burst of concurrent NN forward passes and stale backprops into the new tree.
+        drainEvalQueue();
+        drainBackpropQueue();
+    }
 
     // If search terminated early because a WIN was proved, credit the remaining
     // iterations to that child so its visit count reflects how strongly we back it.
@@ -719,7 +738,19 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
     while (node->expanded.load(std::memory_order_acquire) && !node->isTerminal()) {
         // Select best child index using PUCT
         int bestIndex = selectBestMoveIndex(node, game);
-        if (bestIndex < 0) return node;  // no children (e.g. zero-capacity terminal)
+        if (bestIndex < 0) {
+            // childCapacity==0: genuine terminal, already marked. Otherwise all children
+            // are SOLVED_LOSS — this node is a proven win but backprop hasn't marked it
+            // yet (backprop only runs in Phase 2 after an eval round-trip). Mark it now
+            // so the worker's solved fast-path can backprop it and unblock the pipeline.
+            if (node->childCapacity > 0) {
+                SolvedStatus exp = SolvedStatus::UNSOLVED;
+                node->solvedStatus.compare_exchange_strong(
+                    exp, SolvedStatus::SOLVED_WIN,
+                    std::memory_order_release, std::memory_order_relaxed);
+            }
+            return node;
+        }
 
         assert(bestIndex < node->childCapacity && "bestIndex out of range");
         assert(node->moves != nullptr && "moves array must be allocated before selection");
