@@ -47,6 +47,24 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
             totalVisits += visits[i];
         }
 
+        // If any child is a proved win, boost its visit count to totalVisits so it
+        // dominates the policy target without erasing the signal from other moves.
+        // SOLVED_LOSS children are zeroed — the policy should never point toward a proven loss.
+        int solvedWinIdx = -1;
+        for (int i = 0; i < cap; i++) {
+            if (!root->children[i]) continue;
+            auto st = root->children[i]->solvedStatus.load(std::memory_order_acquire);
+            if (st == ParallelMCTS::SolvedStatus::SOLVED_WIN && solvedWinIdx < 0)
+                solvedWinIdx = i;
+            else if (st == ParallelMCTS::SolvedStatus::SOLVED_LOSS)
+                visits[i] = 0;
+        }
+        if (solvedWinIdx >= 0)
+            visits[solvedWinIdx] = totalVisits;
+        // Recompute totalVisits after any adjustments
+        totalVisits = 0;
+        for (int i = 0; i < cap; i++) totalVisits += visits[i];
+
         auto policyTensor = torch::zeros({B * B});
         if (totalVisits > 0) {
             auto acc = policyTensor.accessor<float, 1>();
@@ -62,7 +80,11 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f});
 
         int chosen = 0;
-        if (game.getMoveCount() >= cfg.explorationDropoff || totalVisits == 0) {
+        if (solvedWinIdx >= 0) {
+            // A proven win exists — always play it regardless of exploration mode.
+            // Sampling a different move here would corrupt the value target for this position.
+            chosen = solvedWinIdx;
+        } else if (game.getMoveCount() >= cfg.explorationDropoff || totalVisits == 0) {
             chosen = (int)(std::max_element(visits.begin(), visits.end()) - visits.begin());
         } else {
             std::uniform_int_distribution<int> dist(0, totalVisits - 1);

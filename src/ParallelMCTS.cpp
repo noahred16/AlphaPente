@@ -252,12 +252,25 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                 parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             } else {
                 // Queue mode: hand off to eval thread; backprop happens in Phase 2.
-                EvaluationRequest request;
-                request.node       = leaf;
-                request.gameState  = workerGame;
-                request.searchPath = searchPath;
-                if (!parent->evaluationQueue_->tryPush(request)) {
-                    // Queue full — return the slot so it can be retried
+                // Atomically claim the leaf so only one worker evaluates it.
+                // Without this, multiple workers select the same unexpanded leaf
+                // (it stays expanded=false until the batch round-trip completes),
+                // push it N times, and burn all iteration slots on ~49 nodes.
+                bool expected = false;
+                if (leaf->evaluated.compare_exchange_strong(
+                        expected, true,
+                        std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    EvaluationRequest request;
+                    request.node       = leaf;
+                    request.gameState  = workerGame;
+                    request.searchPath = searchPath;
+                    if (!parent->evaluationQueue_->tryPush(request)) {
+                        // Queue full — un-claim so another worker can retry later
+                        leaf->evaluated.store(false, std::memory_order_release);
+                        parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                    }
+                } else {
+                    // Another worker already claimed this leaf — return slot and move on
                     parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
                 }
             }
@@ -421,6 +434,26 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
 
     workerPool_->stop();
     if (config_.numEvalThreads > 0) evalPool_->stop();
+
+    // If search terminated early because a WIN was proved, credit the remaining
+    // iterations to that child so its visit count reflects how strongly we back it.
+    if (root_ && root_->isTerminal()) {
+        int32_t remaining = config_.maxIterations - totalIterations.load(std::memory_order_relaxed);
+        if (remaining > 0) {
+            for (int i = 0; i < root_->childCapacity; ++i) {
+                ThreadSafeNode *child = root_->children[i];
+                if (!child) continue;
+                if (child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN) {
+                    child->visits.fetch_add(remaining, std::memory_order_relaxed);
+                    // totalValue: each remaining iter would have backpropped +1.0f
+                    float prev = child->totalValue.load(std::memory_order_relaxed);
+                    child->totalValue.store(prev + static_cast<float>(remaining),
+                                           std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+    }
 
     return getBestMove();
 }
@@ -604,20 +637,30 @@ void ParallelMCTS::printStats(double wallTime, double /*cpuTime*/) const {
 void ParallelMCTS::printBestMoves(int n) const {
     if (!root_ || root_->childCapacity == 0) return;
 
-    // Collect and sort children by visit count descending
+    // Collect and sort: SOLVED_WIN first, then UNSOLVED by visits, SOLVED_LOSS last
     struct Entry {
         int index;
         int32_t visits;
+        SolvedStatus status;
     };
     std::vector<Entry> entries;
     entries.reserve(root_->childCapacity);
     for (int i = 0; i < root_->childCapacity; ++i) {
         const ThreadSafeNode *child = root_->children[i];
         if (!child) continue;
-        entries.push_back({i, child->visits.load(std::memory_order_relaxed)});
+        entries.push_back({i,
+                           child->visits.load(std::memory_order_relaxed),
+                           child->solvedStatus.load(std::memory_order_relaxed)});
     }
-    std::sort(entries.begin(), entries.end(),
-              [](const Entry &a, const Entry &b) { return a.visits > b.visits; });
+    std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+        auto rank = [](SolvedStatus s) {
+            return s == SolvedStatus::SOLVED_WIN  ? 0 :
+                   s == SolvedStatus::UNSOLVED     ? 1 : 2;
+        };
+        int ra = rank(a.status), rb = rank(b.status);
+        if (ra != rb) return ra < rb;
+        return a.visits > b.visits;
+    });
 
     int show = std::min(n, static_cast<int>(entries.size()));
 
