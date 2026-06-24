@@ -68,15 +68,30 @@ int main(int argc, char *argv[]) {
     int         stepsOverride = 0;  // 0 = auto
     bool        bootstrap     = false;
 
+    auto usage = [&](std::ostream &out) {
+        out <<
+            "Usage: train [-g game] [-t steps] [-b]\n"
+            "\n"
+            "Options:\n"
+            "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
+            "  -t  gradient steps (0 = auto from buffer)  (default: " << stepsOverride << ")\n"
+            "  -b  bootstrap mode — train from bootstrap.pt instead of buffer.pt\n"
+            "\n"
+            "Examples:\n"
+            "  # as called by train_loop.sh during self-play training\n"
+            "  ./train -g pente\n"
+            "\n"
+            "  # ad hoc: train with a fixed step budget\n"
+            "  ./train -g pente -t 500\n";
+    };
+
     int opt;
-    while ((opt = getopt(argc, argv, "g:t:b")) != -1) {
+    while ((opt = getopt(argc, argv, "g:t:bh")) != -1) {
         if      (opt == 'g') gameFlag      = optarg;
         else if (opt == 't') stepsOverride = std::stoi(optarg);
         else if (opt == 'b') bootstrap     = true;
-        else {
-            std::cerr << "Usage: train [-g game] [-t steps] [-b]\n";
-            return 1;
-        }
+        else if (opt == 'h') { usage(std::cout); return 0; }
+        else                 { usage(std::cerr); return 1; }
     }
 
     const std::string ckptDir    = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;

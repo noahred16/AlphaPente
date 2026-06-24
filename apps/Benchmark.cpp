@@ -93,58 +93,59 @@ static void appendResult(const std::string &csvPath,
 
 struct ArenaResult { int nnWins, hWins, draws; };
 
-static ArenaResult runArena(Evaluator *nnEval, int numGames, int simsPerMove,
-                            const PenteGame::Config &gameConfig) {
+static ArenaResult runArena(Evaluator *candidateEval, Evaluator *opponentEval,
+                             bool opponentIsNN, const std::string &opponentLabel,
+                             int numGames, int candidateSims, int opponentSims,
+                             const PenteGame::Config &gameConfig) {
     ArenaResult result{0, 0, 0};
 
-    ParallelMCTS::Config nnCfg, hCfg;
-    nnCfg.maxIterations      = simsPerMove;
-    nnCfg.explorationConstant = 1.7;
-    nnCfg.numWorkerThreads   = 6;
-    nnCfg.numEvalThreads     = 1;
-    nnCfg.arenaSize          = GameUtils::arenaSizeFromEnv();
-    nnCfg.evaluator          = nnEval;
+    ParallelMCTS::Config candCfg, oppCfg;
+    candCfg.maxIterations       = candidateSims;
+    candCfg.explorationConstant = 1.7;
+    candCfg.numWorkerThreads    = 6;
+    candCfg.numEvalThreads      = 1;
+    candCfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+    candCfg.evaluator           = candidateEval;
 
-    HeuristicEvaluator hEval;
-    hCfg.maxIterations       = simsPerMove;
-    hCfg.explorationConstant = 1.7;
-    hCfg.numWorkerThreads    = 6;
-    hCfg.numEvalThreads      = 0;
-    hCfg.arenaSize           = GameUtils::arenaSizeFromEnv();
-    hCfg.evaluator           = &hEval;
+    oppCfg.maxIterations        = opponentSims;
+    oppCfg.explorationConstant  = 1.7;
+    oppCfg.numWorkerThreads     = 6;
+    oppCfg.numEvalThreads       = opponentIsNN ? 1 : 0;
+    oppCfg.arenaSize            = GameUtils::arenaSizeFromEnv();
+    oppCfg.evaluator            = opponentEval;
 
     for (int g = 0; g < numGames; g++) {
-        bool nnIsBlack = (g % 2 == 0);
+        bool candIsBlack = (g % 2 == 0);
 
-        ParallelMCTS nnMcts(nnCfg), hMcts(hCfg);
+        ParallelMCTS candMcts(candCfg), oppMcts(oppCfg);
         PenteGame game(gameConfig);
         game.reset();
 
         while (!game.isGameOver()) {
             bool isBlackTurn = (game.getCurrentPlayer() == PenteGame::BLACK);
-            bool nnTurn      = (nnIsBlack == isBlackTurn);
-            auto &mcts       = nnTurn ? nnMcts : hMcts;
+            bool candTurn    = (candIsBlack == isBlackTurn);
+            auto &mcts       = candTurn ? candMcts : oppMcts;
 
             mcts.search(game);
             PenteGame::Move move = mcts.getBestMove();
             game.makeMove(move.x, move.y);
-            nnMcts.reuseSubtree(move);
-            hMcts.reuseSubtree(move);
+            candMcts.reuseSubtree(move);
+            oppMcts.reuseSubtree(move);
         }
 
         PenteGame::Player winner = game.getWinner();
-        bool nnWon = (nnIsBlack  && winner == PenteGame::BLACK) ||
-                     (!nnIsBlack && winner == PenteGame::WHITE);
-        bool draw  = (winner == PenteGame::NONE);
+        bool candWon = (candIsBlack  && winner == PenteGame::BLACK) ||
+                       (!candIsBlack && winner == PenteGame::WHITE);
+        bool draw    = (winner == PenteGame::NONE);
 
-        if      (draw)   result.draws++;
-        else if (nnWon)  result.nnWins++;
-        else             result.hWins++;
+        if      (draw)     result.draws++;
+        else if (candWon)  result.nnWins++;
+        else               result.hWins++;
 
-        std::string nnColor = nnIsBlack ? "B" : "W";
-        std::string outcome = draw ? "draw" : (nnWon ? "nn" : "heuristic");
+        std::string candColor = candIsBlack ? "B" : "W";
+        std::string outcome   = draw ? "draw" : (candWon ? "nn" : opponentLabel);
         std::cout << "  game " << std::setw(2) << (g + 1)
-                  << "  nn=" << nnColor
+                  << "  nn=" << candColor
                   << "  winner: " << outcome
                   << "  (nn " << result.nnWins << "/"
                   << (g + 1 - result.draws) << " decisive)\n";
@@ -180,6 +181,8 @@ int main(int argc, char *argv[]) {
     bool runArenaFlag     = false;
     int  arenaGames       = 10;
     int  arenaSims        = 1000;
+    int  opponentSims     = 0;   // 0 = same as arenaSims
+    std::string opponentPath = "";
 
     // Pre-scan for -g so we can build the default model path correctly
     for (int i = 1; i < argc - 1; i++)
@@ -195,15 +198,42 @@ int main(int argc, char *argv[]) {
         return std::filesystem::exists(rooted) ? rooted : path;
     };
 
+    auto usage = [&](std::ostream &out) {
+        out <<
+            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
+            "\n"
+            "Options:\n"
+            "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
+            "  -p  candidate model checkpoint              (default: latest in checkpoints/<game>/)\n"
+            "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
+            "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
+            "  -a  run arena match after the suite\n"
+            "  -G  arena game count                        (default: " << arenaGames << ")\n"
+            "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
+            "  -T  opponent sims per move                  (default: same as -S)\n"
+            "  -P  opponent model path                     (default: heuristic evaluator)\n"
+            "\n"
+            "Examples:\n"
+            "  # as called by train_loop.sh (NN at 400 sims vs heuristic at 100)\n"
+            "  ./benchmark -g pente -a -G 10 -S 400 -T 100\n"
+            "\n"
+            "  # ad hoc: pit the latest checkpoint against a roster model\n"
+            "  ./benchmark -g pente -a -G 20 -S 400 -P checkpoints/pente/roster/model_iter0030.pt\n";
+    };
+
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:aG:S:")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:aG:S:T:P:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
-        else if (opt == 'p') modelPath  = resolve(optarg);
-        else if (opt == 't') suitePath  = resolve(optarg);
-        else if (opt == 'o') outPath    = resolve(optarg);
+        else if (opt == 'p') modelPath    = resolve(optarg);
+        else if (opt == 't') suitePath    = resolve(optarg);
+        else if (opt == 'o') outPath      = resolve(optarg);
         else if (opt == 'a') runArenaFlag = true;
-        else if (opt == 'G') arenaGames = std::stoi(optarg);
-        else if (opt == 'S') arenaSims  = std::stoi(optarg);
+        else if (opt == 'G') arenaGames   = std::stoi(optarg);
+        else if (opt == 'S') arenaSims    = std::stoi(optarg);
+        else if (opt == 'T') opponentSims  = std::stoi(optarg);
+        else if (opt == 'P') opponentPath = resolve(optarg);
+        else if (opt == 'h') { usage(std::cout); return 0; }
+        else                 { usage(std::cerr); return 1; }
     }
 
     std::cout << "AlphaPente Benchmark\n"
@@ -286,18 +316,42 @@ int main(int argc, char *argv[]) {
             (gameFlag == "keryopente") ? PenteGame::Config::keryoPente() :
                                          PenteGame::Config::pente();
 
-        std::cout << "\n── Arena: NN vs Heuristic (" << arenaGames << " games, "
-                  << arenaSims << " sims/move) ──────────────────\n";
-        auto ar = runArena(nnEval.get(), arenaGames, arenaSims, gameConfig);
-        int decisive = ar.nnWins + ar.hWins;
-        double nnPct = decisive > 0 ? 100.0 * ar.nnWins / decisive : 0.0;
-        std::cout << "\nArena result: nn " << ar.nnWins
-                  << "  heuristic " << ar.hWins
-                  << "  draws " << ar.draws
-                  << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
+        HeuristicEvaluator heuristicArenaEval;
+        std::unique_ptr<NNEvaluator> opponentNNEval;
+        Evaluator    *opponentEvalPtr = &heuristicArenaEval;
+        bool          opponentIsNN   = false;
+        std::string   opponentLabel  = "heuristic";
+        bool          arenaReady     = true;
 
-        appendResult(outPath, relModelPath, "nn-vs-heuristic", "arena", ar.nnWins, arenaGames);
-        std::cout << "Appended arena result to " << outPath << "\n";
+        if (!opponentPath.empty()) {
+            if (std::filesystem::exists(opponentPath)) {
+                opponentNNEval  = std::make_unique<NNEvaluator>(opponentPath);
+                opponentEvalPtr = opponentNNEval.get();
+                opponentIsNN    = true;
+                opponentLabel   = std::filesystem::path(opponentPath).stem().string();
+            } else {
+                std::cout << "Opponent not found: " << opponentPath << " — skipping arena.\n";
+                arenaReady = false;
+            }
+        }
+
+        if (arenaReady) {
+            int oppSims = opponentSims > 0 ? opponentSims : arenaSims;
+            std::cout << "\n── Arena: nn vs " << opponentLabel
+                      << " (" << arenaGames << " games, nn=" << arenaSims
+                      << " opp=" << oppSims << " sims/move) ──────────────────\n";
+            auto ar = runArena(nnEval.get(), opponentEvalPtr, opponentIsNN, opponentLabel,
+                               arenaGames, arenaSims, oppSims, gameConfig);
+            int    decisive = ar.nnWins + ar.hWins;
+            double nnPct    = decisive > 0 ? 100.0 * ar.nnWins / decisive : 0.0;
+            std::cout << "\nArena result: nn " << ar.nnWins
+                      << "  " << opponentLabel << " " << ar.hWins
+                      << "  draws " << ar.draws
+                      << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
+
+            appendResult(outPath, relModelPath, "nn-vs-" + opponentLabel, "arena", ar.nnWins, arenaGames);
+            std::cout << "Appended arena result to " << outPath << "\n";
+        }
     }
 #endif
 

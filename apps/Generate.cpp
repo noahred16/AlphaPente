@@ -21,8 +21,29 @@ int main(int argc, char *argv[]) {
     int tailMoves        = 0;     // 0 = all moves
     bool augment         = false;
 
+    auto usage = [&](std::ostream &out) {
+        out <<
+            "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-a]\n"
+            "\n"
+            "Options:\n"
+            "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
+            "  -n  number of self-play games               (default: " << gamesPerIter << ")\n"
+            "  -s  MCTS simulations per move               (default: " << mctsSims << ")\n"
+            "  -e  evaluator: auto | heuristic | nn        (default: auto)\n"
+            "  -b  bootstrap mode — use heuristic, write to bootstrap.pt\n"
+            "  -t  keep only the last N moves per game     (default: all)\n"
+            "  -a  augment positions with 8 board symmetries\n"
+            "\n"
+            "Examples:\n"
+            "  # as called by train_loop.sh during self-play training\n"
+            "  ./generate -g pente -n 50 -s 400 -a\n"
+            "\n"
+            "  # ad hoc: bootstrap the buffer with heuristic-guided play\n"
+            "  ./generate -g pente -n 200 -s 200 -b\n";
+    };
+
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:a")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:ah")) != -1) {
         if      (opt == 'g') gameFlag     = optarg;
         else if (opt == 'n') gamesPerIter = std::stoi(optarg);
         else if (opt == 's') mctsSims     = std::stoi(optarg);
@@ -30,10 +51,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'b') bootstrap    = true;
         else if (opt == 't') tailMoves    = std::stoi(optarg);
         else if (opt == 'a') augment      = true;
-        else {
-            std::cerr << "Usage: generate [-g game] [-n games] [-s sims] [-e auto|heuristic|nn] [-b] [-t tail_moves] [-a]\n";
-            return 1;
-        }
+        else if (opt == 'h') { usage(std::cout); return 0; }
+        else                 { usage(std::cerr); return 1; }
     }
 
     if (bootstrap) evalFlag = "heuristic";

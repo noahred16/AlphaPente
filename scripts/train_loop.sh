@@ -9,19 +9,49 @@ GAMES=50
 SIMS=400
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
+ARENA=false
+ARENA_GAMES=10
 
-while getopts "n:s:i:g:" opt; do
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [-n games] [-s sims] [-i max_iters] [-g game] [-a]
+
+Options:
+  -n  self-play games per iteration        (default: $GAMES)
+  -s  MCTS simulations per move            (default: $SIMS)
+  -i  max iterations, 0 = run forever      (default: $MAX_ITERS)
+  -g  game: pente | gomoku | keryopente    (default: $GAME)
+  -a  run arena evaluation after each iteration
+
+Examples:
+  # standard self-play training
+  ./scripts/train_loop.sh -n 50 -s 400 -g pente
+
+  # with arena enabled (NN vs heuristic at 3 sim tiers + any roster models)
+  ./scripts/train_loop.sh -n 50 -s 400 -g pente -a
+
+  # quick smoke-test: 3 iterations, small game count
+  ./scripts/train_loop.sh -n 10 -s 100 -i 3 -g pente
+EOF
+}
+
+for arg in "$@"; do [[ "$arg" == "--help" ]] && { usage; exit 0; }; done
+
+while getopts "n:s:i:g:ah" opt; do
     case $opt in
         n) GAMES=$OPTARG ;;
         s) SIMS=$OPTARG ;;
         i) MAX_ITERS=$OPTARG ;;
         g) GAME=$OPTARG ;;
-        *) echo "Usage: $0 [-n games] [-s sims] [-i max_iters] [-g game]" >&2; exit 1 ;;
+        a) ARENA=true ;;
+        h) usage; exit 0 ;;
+        *) usage >&2; exit 1 ;;
     esac
 done
 
 BUILD_DIR="$(cd "$(dirname "$0")/../build" && pwd)"
-LOG_DIR="$(cd "$(dirname "$0")/.." && pwd)/logs"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/train_$(date +%Y%m%d_%H%M%S).log"
 
@@ -66,6 +96,27 @@ while true; do
 
     echo "── Benchmark ────────────────────────────────────────────────────" | tee -a "$LOG"
     ./benchmark -g "$GAME" 2>&1 | tee -a "$LOG"
+
+    if [[ "$ARENA" == true ]]; then
+        echo "" | tee -a "$LOG"
+        echo "── Arena ────────────────────────────────────────────────────────" | tee -a "$LOG"
+        for tier_sims in 100 400 1600; do
+            echo "  vs heuristic @ ${tier_sims} sims" | tee -a "$LOG"
+            ./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -T "$tier_sims" 2>&1 | tee -a "$LOG"
+            echo "" | tee -a "$LOG"
+        done
+        ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
+        if [[ -d "$ROSTER_DIR" ]]; then
+            shopt -s nullglob
+            for model in "$ROSTER_DIR"/*.pt; do
+                name=$(basename "$model" .pt)
+                echo "  vs roster: $name" | tee -a "$LOG"
+                ./benchmark -g "$GAME" -a -P "$model" -G "$ARENA_GAMES" -S "$SIMS" 2>&1 | tee -a "$LOG"
+                echo "" | tee -a "$LOG"
+            done
+            shopt -u nullglob
+        fi
+    fi
 
     ITER_ELAPSED=$(( $(date +%s) - ITER_START ))
     echo "" | tee -a "$LOG"
