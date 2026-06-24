@@ -221,7 +221,22 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
 
     try {
     while (running) {
-        // PHASE 1: Atomically claim an iteration slot — prevents over-selection
+        // PHASE 1: Claim an iteration slot and select a leaf.
+        //
+        // In queue mode, throttle submissions so virtual losses don't pile up before
+        // any backprop fires. With 1 worker and 6 eval threads the worker can exhaust
+        // all 800 slots in Phase 1 before a single result returns — every popular node
+        // then carries 30+ VLs, forcing near-uniform exploration and producing very soft
+        // policy targets. Capping in-flight at evaluationBatchSize keeps VLs bounded
+        // to one batch-worth while still keeping the eval pipeline fully fed.
+        bool claimSlot = true;
+        if (parent->config_.numEvalThreads > 0) {
+            int inFlight = parent->totalInProgress.load(std::memory_order_relaxed)
+                         - parent->totalIterations.load(std::memory_order_relaxed);
+            claimSlot = (inFlight < parent->config_.evaluationBatchSize);
+        }
+
+        if (claimSlot) {
         int slot = parent->totalInProgress.fetch_add(1, std::memory_order_relaxed);
         if (slot < maxIterations) {
             std::vector<ThreadSafeNode *> searchPath;
@@ -252,45 +267,66 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                 parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             } else {
                 // Queue mode: hand off to eval thread; backprop happens in Phase 2.
-                auto leafStatus = leaf->solvedStatus.load(std::memory_order_acquire);
-                if (leafStatus != SolvedStatus::UNSOLVED) {
-                    // Leaf is already proved (SOLVED_WIN/LOSS marked by select() or a prior
-                    // backprop). Backprop directly — no eval round-trip needed.
-                    // SOLVED_WIN: player who moved into leaf wins → value +1.0f.
-                    // SOLVED_LOSS: player who moved into leaf loses → value -1.0f.
-                    float value = (leafStatus == SolvedStatus::SOLVED_WIN) ? 1.0f : -1.0f;
-                    parent->backpropagate(leaf, value, searchPath);
-                    parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    // Atomically claim the leaf so only one worker evaluates it.
-                    // Without this, multiple workers select the same unexpanded leaf
-                    // (it stays expanded=false until the batch round-trip completes),
-                    // push it N times, and burn all iteration slots on ~49 nodes.
+                //
+                // Bug fix: newly-allocated terminal nodes have solvedStatus=UNSOLVED
+                // even though the game is already over. Without this check they would
+                // be sent to the NN evaluator, which returns an arbitrary float instead
+                // of ±1, corrupting the backpropagated value. Mirror the inline-mode
+                // isGameOver() fast-path here.
+                if (workerGame.isGameOver()) {
                     bool expected = false;
                     if (leaf->evaluated.compare_exchange_strong(
                             expected, true,
                             std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                        EvaluationRequest request;
-                        request.node       = leaf;
-                        request.gameState  = workerGame;
-                        request.searchPath = searchPath;
-                        if (!parent->evaluationQueue_->tryPush(request)) {
-                            // Queue full — un-claim so another worker can retry later
-                            leaf->evaluated.store(false, std::memory_order_release);
+                        parent->expand(leaf, workerGame, {});
+                    }
+                    parent->backpropagate(leaf, 1.0f, searchPath);
+                    parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    auto leafStatus = leaf->solvedStatus.load(std::memory_order_acquire);
+                    if (leafStatus != SolvedStatus::UNSOLVED) {
+                        // Leaf is already proved (SOLVED_WIN/LOSS marked by select() or a prior
+                        // backprop). Backprop directly — no eval round-trip needed.
+                        // SOLVED_WIN: player who moved into leaf wins → value +1.0f.
+                        // SOLVED_LOSS: player who moved into leaf loses → value -1.0f.
+                        float value = (leafStatus == SolvedStatus::SOLVED_WIN) ? 1.0f : -1.0f;
+                        parent->backpropagate(leaf, value, searchPath);
+                        parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        // Atomically claim the leaf so only one worker evaluates it.
+                        // Without this, multiple workers select the same unexpanded leaf
+                        // (it stays expanded=false until the batch round-trip completes),
+                        // push it N times, and burn all iteration slots on ~49 nodes.
+                        bool expected = false;
+                        if (leaf->evaluated.compare_exchange_strong(
+                                expected, true,
+                                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                            EvaluationRequest request;
+                            request.node       = leaf;
+                            request.gameState  = workerGame;
+                            request.searchPath = searchPath;
+                            if (!parent->evaluationQueue_->tryPush(request)) {
+                                // Queue full — un-claim so another worker can retry later
+                                leaf->evaluated.store(false, std::memory_order_release);
+                                parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                            }
+                        } else {
+                            // Another worker already claimed this leaf — return slot and move on
                             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
                         }
-                    } else {
-                        // Another worker already claimed this leaf — return slot and move on
-                        parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
                     }
                 }
             }
         } else {
             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
         }
+        } // claimSlot
 
-        // PHASE 2 (queue mode only): pull one backprop result per loop iteration
-        // so all workers share the backprop work rather than one worker draining all.
+        // PHASE 2 (queue mode only): pull one backprop result per loop iteration.
+        // Combined with the in-flight cap above this keeps VLs bounded: once the cap
+        // is hit Phase 1 stalls and the worker drains one result, dropping in-flight
+        // by 1 and unblocking Phase 1 again. Steady-state is 1 submit + 1 drain per
+        // two loop iterations — eval threads stay fed, VLs stay low.
         if (parent->config_.numEvalThreads > 0) {
             auto result = parent->backpropagationQueue_->tryPop();
             if (result.has_value()) {
