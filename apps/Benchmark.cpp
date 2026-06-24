@@ -179,19 +179,24 @@ int main(int argc, char *argv[]) {
     std::string suitePath = PROJECT_ROOT "/tests/open-three-suite.json";
     std::string outPath   = "";  // derived from gameFlag unless overridden
     bool runArenaFlag     = false;
+    bool runValueSuite    = false;
     int  arenaGames       = 10;
     int  arenaSims        = 1000;
     int  opponentSims     = 0;   // 0 = same as arenaSims
     int  suiteSims        = 0;   // 0 = raw policy, >0 = MCTS with N sims
     std::string opponentPath = "";
 
-    // Pre-scan for -g so we can build the default model path correctly
-    for (int i = 1; i < argc - 1; i++)
-        if (std::string(argv[i]) == "-g") gameFlag = argv[i + 1];
+    // Pre-scan for -g and -V so we can build default paths correctly
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "-g" && i + 1 < argc) gameFlag = argv[i + 1];
+        if (std::string(argv[i]) == "-V") runValueSuite = true;
+    }
 
     std::string ckptDir   = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
     std::string modelPath = latestCheckpoint(ckptDir);
     outPath = std::string(PROJECT_ROOT) + "/reports/" + gameFlag + "/benchmark.csv";
+    if (runValueSuite)
+        suitePath = std::string(PROJECT_ROOT) + "/tests/value-suite.json";
 
     auto resolve = [](const std::string &path) {
         if (std::filesystem::exists(path)) return path;
@@ -201,7 +206,7 @@ int main(int argc, char *argv[]) {
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-s sims] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
+            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-s sims] [-V] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -209,6 +214,7 @@ int main(int argc, char *argv[]) {
             "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
             "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
             "  -s  suite MCTS sims per position (0=raw policy) (default: " << suiteSims << ")\n"
+            "  -V  value suite: check value sign instead of top move (default suite: tests/value-suite.json)\n"
             "  -a  run arena match after the suite\n"
             "  -G  arena game count                        (default: " << arenaGames << ")\n"
             "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
@@ -222,17 +228,21 @@ int main(int argc, char *argv[]) {
             "  # suite with MCTS search instead of raw policy\n"
             "  ./benchmark -g pente -s 800\n"
             "\n"
+            "  # check value head sign accuracy\n"
+            "  ./benchmark -g pente -V\n"
+            "\n"
             "  # ad hoc: pit the latest checkpoint against a roster model\n"
             "  ./benchmark -g pente -a -G 20 -S 400 -P checkpoints/pente/roster/model_iter0030.pt\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:s:aG:S:T:P:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:VaG:S:T:P:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
         else if (opt == 'p') modelPath    = resolve(optarg);
         else if (opt == 't') suitePath    = resolve(optarg);
         else if (opt == 'o') outPath      = resolve(optarg);
         else if (opt == 's') suiteSims    = std::stoi(optarg);
+        else if (opt == 'V') { /* already handled above */ }
         else if (opt == 'a') runArenaFlag = true;
         else if (opt == 'G') arenaGames   = std::stoi(optarg);
         else if (opt == 'S') arenaSims    = std::stoi(optarg);
@@ -296,6 +306,8 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    float sumAbsValue = 0.0f;
+
     for (int i = 0; i < total; ++i) {
         const auto &tc = cases[i];
 
@@ -304,23 +316,30 @@ int main(int argc, char *argv[]) {
         for (const auto &mv : GameUtils::parseGameString(tc.state.c_str()))
             game.makeMove(mv.c_str());
 
-        std::string topMove;
+        if (runValueSuite) {
+            float value = evaluator->evaluateValue(game);
+            sumAbsValue += std::abs(value);
+            bool expectWin = (!tc.expected.empty() && tc.expected[0] == "win");
+            bool correct   = expectWin ? (value > 0.0f) : (value < 0.0f);
+            if (correct) ++passed;
+        } else {
+            std::string topMove;
 #ifdef WITH_TORCH
-        if (suiteMcts) {
-            suiteMcts->reset();
-            suiteMcts->search(game);
-            PenteGame::Move mv = suiteMcts->getBestMove();
-            topMove = GameUtils::displayMove(mv.x, mv.y);
-        } else
+            if (suiteMcts) {
+                suiteMcts->reset();
+                suiteMcts->search(game);
+                PenteGame::Move mv = suiteMcts->getBestMove();
+                topMove = GameUtils::displayMove(mv.x, mv.y);
+            } else
 #endif
-        {
-            auto policy = evaluator->evaluatePolicy(game);
-            if (!policy.empty())
-                topMove = GameUtils::displayMove(policy.front().first.x, policy.front().first.y);
+            {
+                auto policy = evaluator->evaluatePolicy(game);
+                if (!policy.empty())
+                    topMove = GameUtils::displayMove(policy.front().first.x, policy.front().first.y);
+            }
+            for (const auto &exp : tc.expected)
+                if (topMove == exp) { ++passed; break; }
         }
-
-        for (const auto &exp : tc.expected)
-            if (topMove == exp) { ++passed; break; }
 
         if ((i + 1) % 50 == 0 || i + 1 == total)
             std::cout << "  " << (i + 1) << "/" << total
@@ -330,6 +349,9 @@ int main(int argc, char *argv[]) {
     double pct = 100.0 * passed / total;
     std::cout << "\nResult: " << passed << "/" << total
               << "  (" << std::fixed << std::setprecision(1) << pct << "%)\n";
+    if (runValueSuite)
+        std::cout << "Mean |value|: " << std::fixed << std::setprecision(3)
+                  << (sumAbsValue / total) << "\n";
 
     // Use relative path in CSV (strip PROJECT_ROOT prefix if present)
     std::string relModelPath = modelPath;
@@ -338,6 +360,7 @@ int main(int argc, char *argv[]) {
         relModelPath = relModelPath.substr(projectRoot.size() + 1);
 
     std::string suiteName = std::filesystem::path(suitePath).stem().string();
+    if (runValueSuite) suiteName += "-value-sign";
     appendResult(outPath, relModelPath, evaluatorName, suiteName, passed, total);
     std::cout << "Appended to " << outPath << "\n";
 

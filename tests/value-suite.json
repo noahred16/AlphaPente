@@ -1,0 +1,122 @@
+[
+  {
+    "state": "1. K10 A1 2. L10 A2 3. M10 A3 4. N10 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. J10 A2 3. H10 A3 4. L10 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. K11 A2 3. K12 A3 4. K13 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. K9 A2 3. K8 A3 4. K7 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. L11 A2 3. M12 A3 4. N13 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. J9 A2 3. H8 A3 4. G7 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. J11 A2 3. H12 A3 4. G13 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. L9 A2 3. M8 A3 4. N7 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. J10 A2 3. L10 A3 4. M10 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 A1 2. K9 A2 3. K11 A3 4. K12 A4",
+    "expected": [
+      "win"
+    ]
+  },
+  {
+    "state": "1. K10 L7 2. A1 M7 3. A2 N7 4. A3 O7",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 G6 2. A1 H6 3. A2 J6 4. A3 K6",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 L5 2. A1 L6 3. A2 L7 4. A3 L8",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 J5 2. A1 J6 3. A2 J7 4. A3 J8",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 L7 2. A1 M8 3. A2 N9 4. A3 O10",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 M11 2. A1 N12 3. A2 O13 4. A3 P14",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 N11 2. A1 M12 3. A2 L13 4. A3 K14",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 O9 2. A1 N10 3. A2 M11 4. A3 L12",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 F5 2. A1 G6 3. A2 H7 4. A3 J8",
+    "expected": [
+      "loss"
+    ]
+  },
+  {
+    "state": "1. K10 N6 2. A1 M7 3. A2 L8 4. A3 K9",
+    "expected": [
+      "loss"
+    ]
+  }
+]
