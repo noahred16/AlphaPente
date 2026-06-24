@@ -10,8 +10,6 @@
 
 // How to run: ./pente "1. K10 L9 2. K12 M10" 100000 [-o <numOffsets>] [-n] [-s]
 int main(int argc, char *argv[]) {
-    std::cout << "Playing Pente..." << std::endl;
-
     int numOffsets = 16;
     int batchSize = 512;
     bool nonInteractive = false;
@@ -19,7 +17,7 @@ int main(int argc, char *argv[]) {
     bool useUniform = false;
     std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:h")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
@@ -27,7 +25,31 @@ int main(int argc, char *argv[]) {
         else if (opt == 'N') nnPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
         else if (opt == 'p') nnPath = optarg;
         else if (opt == 'b') batchSize = std::atoi(optarg);
+        else if (opt == 'h') {
+            std::cout <<
+                "Usage: pente [options] [\"move string\"] [iterations]\n"
+                "\n"
+                "  \"move string\"   PGN-style moves, e.g. \"1. K10 L9 2. K12 M10\"\n"
+                "  iterations      MCTS iterations (default: 100000)\n"
+                "\n"
+                "Options:\n"
+                "  -N              Use NN evaluator (checkpoints/pente/best_model.pt)\n"
+                "  -p <path>       Use NN evaluator at custom path\n"
+                "  -b <size>       Eval batch size (default: 512)\n"
+                "  -n              Non-interactive: run search once and exit\n"
+                "  -s              Use serial (single-threaded) MCTS\n"
+                "  -u              Use uniform random evaluator\n"
+                "  -o <n>          Number of move offsets for heuristic (default: 16)\n"
+                "  -h              Show this help\n"
+                "\n"
+                "Environment:\n"
+                "  NUM_THREADS     Worker threads for parallel MCTS (default: nproc)\n"
+                "  ARENA_SIZE_GB   Tree arena size in GB (default: 2)\n";
+            return 0;
+        }
     }
+
+    std::cout << "Playing Pente..." << std::endl;
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10 5. J12 L6 6. L5 K9 7. H11 K13 8. K11 K12 9. "
                                 "K11 M9 10. F9 E8 11. K14 K13 12. H13 G14 13. N9 M7 14. N6 K7 15. N10";
