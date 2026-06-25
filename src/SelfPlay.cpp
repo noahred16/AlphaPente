@@ -102,9 +102,11 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
 
     PenteGame::Player winner = game.getWinner();
     for (auto &ex : examples)
+        // Convention: value = +1 if the player who MOVED INTO this position wins
+        // (previous-player perspective), matching HeuristicEvaluator and MCTS backprop.
         ex.value = (winner == PenteGame::NONE) ? 0.0f
-                 : (ex.player == winner)        ? 1.0f
-                                                : -1.0f;
+                 : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
+                                                :  1.0f;  // current player lost → previous player won
 
     return examples;
 }

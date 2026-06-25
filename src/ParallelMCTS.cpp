@@ -310,13 +310,22 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                             request.gameState  = workerGame;
                             request.searchPath = searchPath;
                             if (!parent->evaluationQueue_->tryPush(request)) {
-                                // Queue full — un-claim so another worker can retry later
+                                // Queue full — un-claim and remove VLs applied during descent
                                 leaf->evaluated.store(false, std::memory_order_release);
                                 parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                                for (auto *n : searchPath)
+                                    if (n->virtualLosses.load(std::memory_order_relaxed) > 0)
+                                        parent->virtualLossManager_->removeVirtualLoss(n);
                             }
                         } else {
-                            // Another worker already claimed this leaf — return slot and move on
+                            // Another worker already claimed this leaf — release slot and
+                            // remove VLs applied during descent to prevent permanent VL leak.
+                            // With negative Q values (sign convention), leaked VLs dilute Q
+                            // toward 0, making bad moves appear better than good ones.
                             parent->totalInProgress.fetch_sub(1, std::memory_order_relaxed);
+                            for (auto *n : searchPath)
+                                if (n->virtualLosses.load(std::memory_order_relaxed) > 0)
+                                    parent->virtualLossManager_->removeVirtualLoss(n);
                         }
                     }
                 }
@@ -632,6 +641,7 @@ void ParallelMCTS::reset() {
     root_ = nullptr;
     nodeCount = 0;
     totalIterations = 0;
+    totalInProgress = 0;
 }
 
 void ParallelMCTS::clearTree() {

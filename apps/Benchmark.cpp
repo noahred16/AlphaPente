@@ -180,6 +180,7 @@ int main(int argc, char *argv[]) {
     std::string outPath   = "";  // derived from gameFlag unless overridden
     bool runArenaFlag     = false;
     bool runValueSuite    = false;
+    bool verbose          = false;
     int  arenaGames       = 10;
     int  arenaSims        = 1000;
     int  opponentSims     = 0;   // 0 = same as arenaSims
@@ -190,6 +191,7 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "-g" && i + 1 < argc) gameFlag = argv[i + 1];
         if (std::string(argv[i]) == "-V") runValueSuite = true;
+        if (std::string(argv[i]) == "-v") verbose = true;
     }
 
     std::string ckptDir   = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
@@ -236,13 +238,14 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:s:VaG:S:T:P:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
         else if (opt == 'p') modelPath    = resolve(optarg);
         else if (opt == 't') suitePath    = resolve(optarg);
         else if (opt == 'o') outPath      = resolve(optarg);
         else if (opt == 's') suiteSims    = std::stoi(optarg);
         else if (opt == 'V') { /* already handled above */ }
+        else if (opt == 'v') { /* already handled above */ }
         else if (opt == 'a') runArenaFlag = true;
         else if (opt == 'G') arenaGames   = std::stoi(optarg);
         else if (opt == 'S') arenaSims    = std::stoi(optarg);
@@ -319,8 +322,10 @@ int main(int argc, char *argv[]) {
         if (runValueSuite) {
             float value = evaluator->evaluateValue(game);
             sumAbsValue += std::abs(value);
+            // Convention: value is from previous-player perspective (+1 = mover wins).
+            // "win" = current player wins = previous player (mover) LOST → value < 0.
             bool expectWin = (!tc.expected.empty() && tc.expected[0] == "win");
-            bool correct   = expectWin ? (value > 0.0f) : (value < 0.0f);
+            bool correct   = expectWin ? (value < 0.0f) : (value > 0.0f);
             if (correct) ++passed;
         } else {
             std::string topMove;
@@ -337,11 +342,20 @@ int main(int argc, char *argv[]) {
                 if (!policy.empty())
                     topMove = GameUtils::displayMove(policy.front().first.x, policy.front().first.y);
             }
+            bool ok = false;
             for (const auto &exp : tc.expected)
-                if (topMove == exp) { ++passed; break; }
+                if (topMove == exp) { ok = true; break; }
+            if (ok) {
+                ++passed;
+            } else if (verbose) {
+                std::cout << "  FAIL [" << (i + 1) << "] state=" << tc.state
+                          << "  expected=";
+                for (const auto &e : tc.expected) std::cout << e << " ";
+                std::cout << " got=" << topMove << "\n";
+            }
         }
 
-        if ((i + 1) % 50 == 0 || i + 1 == total)
+        if (!verbose && ((i + 1) % 50 == 0 || i + 1 == total))
             std::cout << "  " << (i + 1) << "/" << total
                       << "  running: " << passed << "/" << (i + 1) << "\n";
     }
