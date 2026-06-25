@@ -154,161 +154,18 @@ static ArenaResult runArena(Evaluator *candidateEval, Evaluator *opponentEval,
     return result;
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+// ── Suite runner ──────────────────────────────────────────────────────────────
 
-static std::string latestCheckpoint(const std::string &ckptDir) {
-    std::string best;
-    int maxIter = 0;
-    if (std::filesystem::exists(ckptDir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(ckptDir)) {
-            const std::string stem = entry.path().stem().string();
-            if (stem.rfind("model_iter", 0) == 0) {
-                try {
-                    int n = std::stoi(stem.substr(10));
-                    if (n > maxIter) { maxIter = n; best = entry.path().string(); }
-                } catch (...) {}
-            }
-        }
-    }
-    if (!best.empty()) return best;
-    return ckptDir + "/best_model.pt";  // fallback before first training run
-}
+struct SuiteResult { int passed, total; float sumAbsValue; };
 
-int main(int argc, char *argv[]) {
-    std::string gameFlag  = "pente";
-    std::string suitePath = PROJECT_ROOT "/tests/open-three-suite.json";
-    std::string outPath   = "";  // derived from gameFlag unless overridden
-    bool runArenaFlag     = false;
-    bool runValueSuite    = false;
-    bool verbose          = false;
-    int  arenaGames       = 10;
-    int  arenaSims        = 1000;
-    int  opponentSims     = 0;   // 0 = same as arenaSims
-    int  suiteSims        = 0;   // 0 = raw policy, >0 = MCTS with N sims
-    std::string opponentPath = "";
-
-    // Pre-scan for -g and -V so we can build default paths correctly
-    for (int i = 1; i < argc; i++) {
-        if (std::string(argv[i]) == "-g" && i + 1 < argc) gameFlag = argv[i + 1];
-        if (std::string(argv[i]) == "-V") runValueSuite = true;
-        if (std::string(argv[i]) == "-v") verbose = true;
-    }
-
-    std::string ckptDir   = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
-    std::string modelPath = latestCheckpoint(ckptDir);
-    outPath = std::string(PROJECT_ROOT) + "/reports/" + gameFlag + "/benchmark.csv";
-    if (runValueSuite)
-        suitePath = std::string(PROJECT_ROOT) + "/tests/value-suite.json";
-
-    auto resolve = [](const std::string &path) {
-        if (std::filesystem::exists(path)) return path;
-        std::string rooted = std::string(PROJECT_ROOT) + "/" + path;
-        return std::filesystem::exists(rooted) ? rooted : path;
-    };
-
-    auto usage = [&](std::ostream &out) {
-        out <<
-            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-s sims] [-V] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
-            "\n"
-            "Options:\n"
-            "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
-            "  -p  candidate model checkpoint              (default: latest in checkpoints/<game>/)\n"
-            "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
-            "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
-            "  -s  suite MCTS sims per position (0=raw policy) (default: " << suiteSims << ")\n"
-            "  -V  value suite: check value sign instead of top move (default suite: tests/value-suite.json)\n"
-            "  -a  run arena match after the suite\n"
-            "  -G  arena game count                        (default: " << arenaGames << ")\n"
-            "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
-            "  -T  opponent sims per move                  (default: same as -S)\n"
-            "  -P  opponent model path                     (default: heuristic evaluator)\n"
-            "\n"
-            "Examples:\n"
-            "  # as called by train_loop.sh (NN at 400 sims vs heuristic at 100)\n"
-            "  ./benchmark -g pente -a -G 10 -S 400 -T 100\n"
-            "\n"
-            "  # suite with MCTS search instead of raw policy\n"
-            "  ./benchmark -g pente -s 800\n"
-            "\n"
-            "  # check value head sign accuracy\n"
-            "  ./benchmark -g pente -V\n"
-            "\n"
-            "  # ad hoc: pit the latest checkpoint against a roster model\n"
-            "  ./benchmark -g pente -a -G 20 -S 400 -P checkpoints/pente/roster/model_iter0030.pt\n";
-    };
-
-    int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:h")) != -1) {
-        if      (opt == 'g') { /* already handled above */ }
-        else if (opt == 'p') modelPath    = resolve(optarg);
-        else if (opt == 't') suitePath    = resolve(optarg);
-        else if (opt == 'o') outPath      = resolve(optarg);
-        else if (opt == 's') suiteSims    = std::stoi(optarg);
-        else if (opt == 'V') { /* already handled above */ }
-        else if (opt == 'v') { /* already handled above */ }
-        else if (opt == 'a') runArenaFlag = true;
-        else if (opt == 'G') arenaGames   = std::stoi(optarg);
-        else if (opt == 'S') arenaSims    = std::stoi(optarg);
-        else if (opt == 'T') opponentSims  = std::stoi(optarg);
-        else if (opt == 'P') opponentPath = resolve(optarg);
-        else if (opt == 'h') { usage(std::cout); return 0; }
-        else                 { usage(std::cerr); return 1; }
-    }
-
-    std::cout << "AlphaPente Benchmark\n"
-              << "  model : " << modelPath << "\n"
-              << "  suite : " << suitePath << "\n"
-              << "  output: " << outPath << "\n\n";
-
+static SuiteResult runSuiteCheck(Evaluator *evaluator, ParallelMCTS *suiteMcts,
+                                  const std::string &suitePath, bool valueMode, bool verbose) {
     auto cases = loadSuite(suitePath);
-    if (cases.empty()) {
-        std::cerr << "No test cases loaded.\n";
-        return 1;
-    }
+    if (cases.empty()) return {0, 0, 0.0f};
     std::cout << "Loaded " << cases.size() << " test cases\n\n";
 
-    HeuristicEvaluator heuristicEval;
-    Evaluator *evaluator = &heuristicEval;
-    std::string evaluatorName = "heuristic";
-
-#ifdef WITH_TORCH
-    std::unique_ptr<NNEvaluator> nnEval;
-    if (modelPath != "heuristic") {
-        if (std::filesystem::exists(modelPath)) {
-            nnEval = std::make_unique<NNEvaluator>(modelPath);
-            evaluator = nnEval.get();
-            evaluatorName = "nn";
-            std::cout << "Using NNEvaluator\n\n";
-        } else {
-            std::cout << "Model not found — falling back to HeuristicEvaluator\n\n";
-        }
-    } else {
-        std::cout << "Using HeuristicEvaluator\n\n";
-    }
-#else
-    std::cout << "LibTorch not available — using HeuristicEvaluator\n\n";
-#endif
-
-    int passed = 0;
-    int total  = static_cast<int>(cases.size());
-
-#ifdef WITH_TORCH
-    // Build MCTS instance once for reuse across cases (only when sims requested + NN available)
-    std::unique_ptr<ParallelMCTS> suiteMcts;
-    if (suiteSims > 0 && nnEval) {
-        ParallelMCTS::Config cfg;
-        cfg.maxIterations       = suiteSims;
-        cfg.explorationConstant = 1.7;
-        cfg.numWorkerThreads    = 6;
-        cfg.numEvalThreads      = 1;
-        cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
-        cfg.evaluator           = nnEval.get();
-        cfg.dirichletAlpha      = 0.0f;  // no noise for benchmarking
-        suiteMcts = std::make_unique<ParallelMCTS>(cfg);
-        evaluatorName = "nn@" + std::to_string(suiteSims);
-    }
-#endif
-
+    int   passed      = 0;
+    int   total       = static_cast<int>(cases.size());
     float sumAbsValue = 0.0f;
 
     for (int i = 0; i < total; ++i) {
@@ -319,7 +176,7 @@ int main(int argc, char *argv[]) {
         for (const auto &mv : GameUtils::parseGameString(tc.state.c_str()))
             game.makeMove(mv.c_str());
 
-        if (runValueSuite) {
+        if (valueMode) {
             float value = evaluator->evaluateValue(game);
             sumAbsValue += std::abs(value);
             // Convention: value is from previous-player perspective (+1 = mover wins).
@@ -360,22 +217,270 @@ int main(int argc, char *argv[]) {
                       << "  running: " << passed << "/" << (i + 1) << "\n";
     }
 
-    double pct = 100.0 * passed / total;
-    std::cout << "\nResult: " << passed << "/" << total
-              << "  (" << std::fixed << std::setprecision(1) << pct << "%)\n";
-    if (runValueSuite)
-        std::cout << "Mean |value|: " << std::fixed << std::setprecision(3)
-                  << (sumAbsValue / total) << "\n";
+    return {passed, total, sumAbsValue};
+}
 
-    // Use relative path in CSV (strip PROJECT_ROOT prefix if present)
+// ── main ──────────────────────────────────────────────────────────────────────
+
+static std::string latestCheckpoint(const std::string &ckptDir) {
+    std::string best;
+    int maxIter = 0;
+    if (std::filesystem::exists(ckptDir)) {
+        for (const auto &entry : std::filesystem::directory_iterator(ckptDir)) {
+            const std::string stem = entry.path().stem().string();
+            if (stem.rfind("model_iter", 0) == 0) {
+                try {
+                    int n = std::stoi(stem.substr(10));
+                    if (n > maxIter) { maxIter = n; best = entry.path().string(); }
+                } catch (...) {}
+            }
+        }
+    }
+    if (!best.empty()) return best;
+    return ckptDir + "/best_model.pt";  // fallback before first training run
+}
+
+int main(int argc, char *argv[]) {
+    std::string gameFlag  = "pente";
+    bool runValueSuite    = false;
+    bool verbose          = false;
+
+    // Pre-scan for -g, -V, -v so default paths are correct
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "-g" && i + 1 < argc) gameFlag = argv[i + 1];
+        if (std::string(argv[i]) == "-V") runValueSuite = true;
+        if (std::string(argv[i]) == "-v") verbose = true;
+    }
+
+    const std::string ckptDir        = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    std::string       modelPath      = latestCheckpoint(ckptDir);
+    std::string       outPath        = std::string(PROJECT_ROOT) + "/reports/" + gameFlag + "/benchmark.csv";
+    const std::string openThreePath  = std::string(PROJECT_ROOT) + "/tests/open-three-suite.json";
+    const std::string valueSuitePath = std::string(PROJECT_ROOT) + "/tests/value-suite.json";
+    std::string       suitePath      = runValueSuite ? valueSuitePath : openThreePath;
+
+    bool        runArenaFlag = false;
+    bool        fullMode     = true;  // disabled when any mode flag is given explicitly
+    int         arenaGames   = 10;
+    int         arenaSims    = 800;
+    int         opponentSims = 0;     // 0 = same as arenaSims
+    int         suiteSims    = 0;     // 0 = raw policy, >0 = MCTS with N sims
+    std::string opponentPath;
+
+    auto resolve = [](const std::string &path) {
+        if (std::filesystem::exists(path)) return path;
+        std::string rooted = std::string(PROJECT_ROOT) + "/" + path;
+        return std::filesystem::exists(rooted) ? rooted : path;
+    };
+
+    auto usage = [&](std::ostream &out) {
+        out <<
+            "Usage: benchmark [-g game] [-p model] [-t suite] [-o out] [-s sims] [-V] [-a] [-G games] [-S sims] [-T opp_sims] [-P opponent]\n"
+            "\n"
+            "Options:\n"
+            "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
+            "  -p  candidate model checkpoint              (default: latest in checkpoints/<game>/)\n"
+            "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
+            "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
+            "  -s  suite MCTS sims per position (0=raw policy) (default: " << suiteSims << ")\n"
+            "  -V  value suite: check value sign instead of top move (default suite: tests/value-suite.json)\n"
+            "  -a  run arena match after the suite\n"
+            "  -G  arena game count                        (default: " << arenaGames << ")\n"
+            "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
+            "  -T  opponent sims per move                  (default: same as -S)\n"
+            "  -P  opponent model path                     (default: heuristic evaluator)\n"
+            "\n"
+            "Default (no mode flags): full battery — policy suite (raw + MCTS@800), value\n"
+            "  suite, and arena vs heuristic@800/10000/100000.\n"
+            "\n"
+            "Examples:\n"
+            "  # full default battery\n"
+            "  ./benchmark -g pente\n"
+            "\n"
+            "  # suite with MCTS search instead of raw policy\n"
+            "  ./benchmark -g pente -s 800\n"
+            "\n"
+            "  # check value head sign accuracy\n"
+            "  ./benchmark -g pente -V\n"
+            "\n"
+            "  # arena: NN vs heuristic\n"
+            "  ./benchmark -g pente -a -G 10 -S 400 -T 100\n"
+            "\n"
+            "  # ad hoc: pit the latest checkpoint against a roster model\n"
+            "  ./benchmark -g pente -a -G 20 -S 400 -P checkpoints/pente/roster/model_iter0030.pt\n";
+    };
+
+    int opt;
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:h")) != -1) {
+        if      (opt == 'g') { /* already handled above */ }
+        else if (opt == 'p') modelPath    = resolve(optarg);
+        else if (opt == 't') { suitePath  = resolve(optarg); fullMode = false; }
+        else if (opt == 'o') outPath      = resolve(optarg);
+        else if (opt == 's') { suiteSims  = std::stoi(optarg); fullMode = false; }
+        else if (opt == 'V') fullMode     = false;
+        else if (opt == 'v') { /* already handled above */ }
+        else if (opt == 'a') { runArenaFlag = true; fullMode = false; }
+        else if (opt == 'G') arenaGames   = std::stoi(optarg);
+        else if (opt == 'S') arenaSims    = std::stoi(optarg);
+        else if (opt == 'T') opponentSims = std::stoi(optarg);
+        else if (opt == 'P') opponentPath = resolve(optarg);
+        else if (opt == 'h') { usage(std::cout); return 0; }
+        else                 { usage(std::cerr); return 1; }
+    }
+
+    std::cout << "AlphaPente Benchmark\n"
+              << "  model : " << modelPath << "\n"
+              << "  output: " << outPath << "\n\n";
+
+    // Compute relative model path for CSV once
     std::string relModelPath = modelPath;
-    std::string projectRoot  = PROJECT_ROOT;
+    const std::string projectRoot = PROJECT_ROOT;
     if (relModelPath.rfind(projectRoot, 0) == 0)
         relModelPath = relModelPath.substr(projectRoot.size() + 1);
 
+    // Load evaluator
+    HeuristicEvaluator heuristicEval;
+    Evaluator         *evaluator     = &heuristicEval;
+    std::string        evaluatorName = "heuristic";
+
+#ifdef WITH_TORCH
+    std::unique_ptr<NNEvaluator> nnEval;
+    if (modelPath != "heuristic") {
+        if (std::filesystem::exists(modelPath)) {
+            nnEval        = std::make_unique<NNEvaluator>(modelPath);
+            evaluator     = nnEval.get();
+            evaluatorName = "nn";
+            std::cout << "Using NNEvaluator\n\n";
+        } else {
+            std::cout << "Model not found — falling back to HeuristicEvaluator\n\n";
+        }
+    } else {
+        std::cout << "Using HeuristicEvaluator\n\n";
+    }
+#else
+    std::cout << "LibTorch not available — using HeuristicEvaluator\n\n";
+#endif
+
+    // ── Full benchmark battery (default) ─────────────────────────────────────
+    if (fullMode) {
+        const PenteGame::Config gameConfig =
+            (gameFlag == "gomoku")     ? PenteGame::Config::gomoku()     :
+            (gameFlag == "keryopente") ? PenteGame::Config::keryoPente() :
+                                          PenteGame::Config::pente();
+
+        auto printSuiteResult = [&](const SuiteResult &res, bool valueMode) {
+            double pct = 100.0 * res.passed / res.total;
+            std::cout << "Result: " << res.passed << "/" << res.total
+                      << "  (" << std::fixed << std::setprecision(1) << pct << "%)\n";
+            if (valueMode)
+                std::cout << "Mean |value|: " << std::fixed << std::setprecision(3)
+                          << (res.sumAbsValue / res.total) << "\n";
+        };
+
+        // 1. Policy suite — raw policy
+        std::cout << "── Policy suite: raw ─────────────────────────────────────────────\n";
+        {
+            auto res = runSuiteCheck(evaluator, nullptr, openThreePath, false, verbose);
+            if (res.total == 0) return 1;
+            printSuiteResult(res, false);
+            appendResult(outPath, relModelPath, evaluatorName, "open-three-suite", res.passed, res.total);
+            std::cout << "Appended to " << outPath << "\n";
+        }
+
+#ifdef WITH_TORCH
+        if (nnEval) {
+            // 2. Policy suite — MCTS 800 sims
+            std::cout << "\n── Policy suite: MCTS@800 ────────────────────────────────────────\n";
+            {
+                ParallelMCTS::Config cfg;
+                cfg.maxIterations       = 800;
+                cfg.explorationConstant = 1.7;
+                cfg.numWorkerThreads    = 6;
+                cfg.numEvalThreads      = 1;
+                cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+                cfg.evaluator           = nnEval.get();
+                cfg.dirichletAlpha      = 0.0f;
+                ParallelMCTS mcts800(cfg);
+                auto res = runSuiteCheck(nnEval.get(), &mcts800, openThreePath, false, verbose);
+                if (res.total == 0) return 1;
+                printSuiteResult(res, false);
+                appendResult(outPath, relModelPath, "nn@800", "open-three-suite", res.passed, res.total);
+                std::cout << "Appended to " << outPath << "\n";
+            }
+
+            // 3. Value suite
+            std::cout << "\n── Value suite ───────────────────────────────────────────────────\n";
+            {
+                auto res = runSuiteCheck(nnEval.get(), nullptr, valueSuitePath, true, verbose);
+                if (res.total == 0) return 1;
+                printSuiteResult(res, true);
+                appendResult(outPath, relModelPath, "nn", "value-suite-sign", res.passed, res.total);
+                std::cout << "Appended to " << outPath << "\n";
+            }
+
+            // 4-6. Arena: NN@800 vs heuristic at increasing sim counts
+            HeuristicEvaluator heuristicArenaEval;
+            const struct { int sims; const char *label; } arenaOpponents[] = {
+                {    800, "heuristic@800"    },
+                {  10000, "heuristic@10000"  },
+                { 100000, "heuristic@100000" },
+            };
+
+            for (const auto &opp : arenaOpponents) {
+                std::cout << "\n── Arena: nn@800 vs " << opp.label
+                          << " (" << arenaGames << " games) ────────────────────────\n";
+                auto ar = runArena(nnEval.get(), &heuristicArenaEval, false, opp.label,
+                                   arenaGames, 800, opp.sims, gameConfig);
+                int    decisive = ar.nnWins + ar.hWins;
+                double nnPct    = decisive > 0 ? 100.0 * ar.nnWins / decisive : 0.0;
+                std::cout << "\nArena result: nn " << ar.nnWins
+                          << "  " << opp.label << " " << ar.hWins
+                          << "  draws " << ar.draws
+                          << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
+                std::string arenaEval = "nn@800-vs-" + std::string(opp.label);
+                appendResult(outPath, relModelPath, arenaEval, "arena", ar.nnWins, arenaGames);
+                std::cout << "Appended to " << outPath << "\n";
+            }
+        }
+#endif
+        return 0;
+    }
+
+    // ── Single-mode run (explicit flags) ─────────────────────────────────────
+
+    std::cout << "  suite : " << suitePath << "\n\n";
+
+    ParallelMCTS *suiteMctsPtr = nullptr;
+#ifdef WITH_TORCH
+    std::unique_ptr<ParallelMCTS> suiteMcts;
+    if (suiteSims > 0 && nnEval) {
+        ParallelMCTS::Config cfg;
+        cfg.maxIterations       = suiteSims;
+        cfg.explorationConstant = 1.7;
+        cfg.numWorkerThreads    = 6;
+        cfg.numEvalThreads      = 1;
+        cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
+        cfg.evaluator           = nnEval.get();
+        cfg.dirichletAlpha      = 0.0f;  // no noise for benchmarking
+        suiteMcts    = std::make_unique<ParallelMCTS>(cfg);
+        suiteMctsPtr = suiteMcts.get();
+        evaluatorName = "nn@" + std::to_string(suiteSims);
+    }
+#endif
+
+    auto res = runSuiteCheck(evaluator, suiteMctsPtr, suitePath, runValueSuite, verbose);
+    if (res.total == 0) return 1;
+
+    double pct = 100.0 * res.passed / res.total;
+    std::cout << "\nResult: " << res.passed << "/" << res.total
+              << "  (" << std::fixed << std::setprecision(1) << pct << "%)\n";
+    if (runValueSuite)
+        std::cout << "Mean |value|: " << std::fixed << std::setprecision(3)
+                  << (res.sumAbsValue / res.total) << "\n";
+
     std::string suiteName = std::filesystem::path(suitePath).stem().string();
     if (runValueSuite) suiteName += "-value-sign";
-    appendResult(outPath, relModelPath, evaluatorName, suiteName, passed, total);
+    appendResult(outPath, relModelPath, evaluatorName, suiteName, res.passed, res.total);
     std::cout << "Appended to " << outPath << "\n";
 
 #ifdef WITH_TORCH
@@ -383,14 +488,14 @@ int main(int argc, char *argv[]) {
         PenteGame::Config gameConfig =
             (gameFlag == "gomoku")     ? PenteGame::Config::gomoku()     :
             (gameFlag == "keryopente") ? PenteGame::Config::keryoPente() :
-                                         PenteGame::Config::pente();
+                                          PenteGame::Config::pente();
 
         HeuristicEvaluator heuristicArenaEval;
         std::unique_ptr<NNEvaluator> opponentNNEval;
-        Evaluator    *opponentEvalPtr = &heuristicArenaEval;
-        bool          opponentIsNN   = false;
-        std::string   opponentLabel  = "heuristic";
-        bool          arenaReady     = true;
+        Evaluator   *opponentEvalPtr = &heuristicArenaEval;
+        bool         opponentIsNN   = false;
+        std::string  opponentLabel  = "heuristic";
+        bool         arenaReady     = true;
 
         if (!opponentPath.empty()) {
             if (std::filesystem::exists(opponentPath)) {
