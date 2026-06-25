@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
     spConfig.simulations      = mctsSims;
     spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
-    spConfig.dirichletEpsilon = 0.5f;
+    spConfig.dirichletEpsilon = 0.25f;
     spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 1;
     spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
 

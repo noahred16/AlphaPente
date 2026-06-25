@@ -31,7 +31,7 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     while (!game.isGameOver()) {
         if (game.getMoveCount() == cfg.explorationDropoff) {
             auto c = mcts.getConfig();
-            c.dirichletAlpha = 0.0f;
+            c.dirichletEpsilon = 0.0f;
             mcts.setConfig(c);
         }
         mcts.search(game);
