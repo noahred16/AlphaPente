@@ -336,10 +336,9 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
         } // claimSlot
 
         // PHASE 2 (queue mode only): pull one backprop result per loop iteration.
-        // Combined with the in-flight cap above this keeps VLs bounded: once the cap
-        // is hit Phase 1 stalls and the worker drains one result, dropping in-flight
-        // by 1 and unblocking Phase 1 again. Steady-state is 1 submit + 1 drain per
-        // two loop iterations — eval threads stay fed, VLs stay low.
+        // In single-worker mode the in-flight cap above stalls Phase 1 once the cap
+        // is hit, so the worker drains one result here and unblocks. In multi-worker
+        // mode N workers drain concurrently — no cap needed, eval threads stay fed.
         if (parent->config_.numEvalThreads > 0) {
             auto result = parent->backpropagationQueue_->tryPop();
             if (result.has_value()) {
