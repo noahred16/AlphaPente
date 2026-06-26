@@ -739,14 +739,18 @@ void ParallelMCTS::printBestMoves(int n) const {
         return std::string(1, col) + std::to_string(y + 1);
     };
 
+    double sqrtRootVisits = std::sqrt(static_cast<double>(root_->visits.load(std::memory_order_relaxed)));
+    double c = config_.explorationConstant;
+
     std::cout << "\n=== Top " << show << " Moves of " << entries.size() << " Considered ===\n";
     std::cout << std::setw(6)  << "Move"
               << std::setw(10) << "Visits"
               << std::setw(10) << "Prior"
               << std::setw(10) << "Avg Val"
+              << std::setw(10) << "PUCT"
               << std::setw(10) << "Status"
               << "\n";
-    std::cout << std::string(46, '-') << "\n";
+    std::cout << std::string(56, '-') << "\n";
 
     std::cout << std::fixed;
     for (int k = 0; k < show; ++k) {
@@ -756,18 +760,23 @@ void ParallelMCTS::printBestMoves(int n) const {
         double  avgVal = visits > 0
             ? child->totalValue.load(std::memory_order_relaxed) / visits
             : 0.0;
+        auto childStatus = child->solvedStatus.load(std::memory_order_relaxed);
         const char *status =
-            child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN  ? "WIN"  :
-            child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
+            childStatus == SolvedStatus::SOLVED_WIN  ? "WIN"  :
+            childStatus == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
+        double puct = childStatus == SolvedStatus::SOLVED_WIN  ?  std::numeric_limits<double>::infinity() :
+                      childStatus == SolvedStatus::SOLVED_LOSS ? -std::numeric_limits<double>::infinity() :
+                      avgVal + c * root_->priors[i] * sqrtRootVisits / (1.0 + visits);
 
         std::cout << std::setw(6)  << moveLabel(root_->moves[i].x, root_->moves[i].y)
                   << std::setw(10) << visits
                   << std::setw(10) << std::setprecision(3) << root_->priors[i]
                   << std::setw(10) << std::setprecision(3) << avgVal
+                  << std::setw(10) << std::setprecision(3) << puct
                   << std::setw(10) << status
                   << "\n";
     }
-    std::cout << std::string(46, '=') << "\n";
+    std::cout << std::string(56, '=') << "\n";
 }
 
 void ParallelMCTS::setConfig(const Config &config) {
