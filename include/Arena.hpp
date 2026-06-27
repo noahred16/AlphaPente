@@ -13,6 +13,15 @@
 class Arena {
   public:
     explicit Arena(size_t size) : size_(size), offset_(0), memory_(nullptr) {
+        size_t avail = effectiveMemLimitBytes();
+        if (avail > 0 && size_ > avail) {
+            std::fprintf(stderr,
+                "WARNING: Arena (%.1f GB) exceeds available RAM (%.1f GB). "
+                "May OOM-kill under load. Re-run scripts/detect_system_specs.sh "
+                "or lower ARENA_SIZE_GB.\n",
+                size_ / (1024.0 * 1024.0 * 1024.0),
+                avail / (1024.0 * 1024.0 * 1024.0));
+        }
         memory_ = static_cast<char *>(std::aligned_alloc(64, size_));
         if (!memory_) {
             std::fprintf(stderr, "FATAL: Failed to allocate arena of %.1f GB. "
@@ -65,6 +74,26 @@ class Arena {
     size_t size_;
     size_t offset_;
     char *memory_;
+
+    // Returns cgroup v2 limit (containers) or MemAvailable (bare metal), 0 on failure.
+    static size_t effectiveMemLimitBytes() {
+        FILE *f = std::fopen("/sys/fs/cgroup/memory.max", "r");
+        if (f) {
+            unsigned long long limit = 0;
+            int matched = std::fscanf(f, "%llu", &limit);
+            std::fclose(f);
+            if (matched == 1 && limit > 0) return static_cast<size_t>(limit);
+        }
+        f = std::fopen("/proc/meminfo", "r");
+        if (!f) return 0;
+        char line[128];
+        size_t avail = 0;
+        while (std::fgets(line, sizeof(line), f)) {
+            if (std::sscanf(line, "MemAvailable: %zu kB", &avail) == 1) break;
+        }
+        std::fclose(f);
+        return avail * 1024;
+    }
 };
 
 #endif // ARENA_HPP

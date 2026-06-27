@@ -349,7 +349,8 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
         }
 
         if (parent->totalIterations.load(std::memory_order_relaxed) >= maxIterations ||
-            root->isTerminal())
+            root->isTerminal() ||
+            parent->arenaExhausted_.load(std::memory_order_relaxed))
             break;
 
         std::this_thread::yield();
@@ -641,6 +642,7 @@ void ParallelMCTS::reset() {
     nodeCount = 0;
     totalIterations = 0;
     totalInProgress = 0;
+    arenaExhausted_.store(false, std::memory_order_relaxed);
 }
 
 void ParallelMCTS::clearTree() {
@@ -696,7 +698,10 @@ void ParallelMCTS::printStats(double wallTime, double /*cpuTime*/) const {
         double capacityMB = totalGB * 1024.0;
         std::cout << "Arena: " << std::fixed << std::setprecision(1)
                   << actualMB << " MB used / " << totalGB << " GB capacity ("
-                  << std::setprecision(1) << (100.0 * actualMB / capacityMB) << "%)\n";
+                  << std::setprecision(1) << (100.0 * actualMB / capacityMB) << "%)";
+        if (arenaExhausted_.load(std::memory_order_relaxed))
+            std::cout << " -- EXHAUSTED: search stopped early (raise ARENA_SIZE_GB)";
+        std::cout << "\n";
         if (nodes > 0)
             std::cout << "Avg bytes/node: " << static_cast<size_t>((slabConsumed + fallbackUsed) / nodes) << "\n";
     }
@@ -989,7 +994,10 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
 
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::allocateNode() {
     void *mem = allocateFromSlab(sizeof(ThreadSafeNode), alignof(ThreadSafeNode));
-    if (!mem) return nullptr;
+    if (!mem) {
+        arenaExhausted_.store(true, std::memory_order_relaxed);
+        return nullptr;
+    }
     auto *node = new (mem) ThreadSafeNode();
     nodeCount.fetch_add(1, std::memory_order_relaxed);
     return node;

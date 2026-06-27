@@ -323,6 +323,7 @@ class ParallelMCTS {
     std::atomic<int> totalIterations{0};   // completed backprops across all workers
     std::atomic<int> totalInProgress{0};   // selections claimed across all workers
     std::atomic<int> nodeCount{0};
+    std::atomic<bool> arenaExhausted_{false};
 
     mutable std::mutex arenaMutex_;  // Guards arena_ for slab refills and fallback allocation
 
