@@ -63,7 +63,17 @@ if [ "$LIBTORCH_CHANGED" = true ]; then
 fi
 mkdir -p build && cd build
 
-if cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$REPO_ROOT/libs/libtorch" -Wno-dev; then
+# Pass compute capability explicitly so PyTorch's cmake scripts don't need to
+# auto-detect it (auto-detection compiles a CUDA 20 test that fails on CMake < 3.30).
+CMAKE_EXTRA_ARGS=()
+if nvidia-smi &>/dev/null; then
+    COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    if [ -n "$COMPUTE_CAP" ]; then
+        CMAKE_EXTRA_ARGS+=("-DTORCH_CUDA_ARCH_LIST=${COMPUTE_CAP}")
+    fi
+fi
+
+if cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$REPO_ROOT/libs/libtorch" "${CMAKE_EXTRA_ARGS[@]}" -Wno-dev; then
     echo "cmake configured successfully."
     make -j"$(nproc)"
     echo "✅ Build completed."
