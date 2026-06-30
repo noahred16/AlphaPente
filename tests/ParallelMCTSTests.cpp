@@ -157,6 +157,49 @@ TEST_CASE("EvalPool processes request and pushes result to backprop queue") {
     CHECK(!results[0].policy.empty());
 }
 
+TEST_CASE("reuseSubtree preserves child visit counts across searches") {
+    PenteGame game(PenteGame::Config::pente());
+    game.reset();
+    game.makeMove("K10");
+
+    HeuristicEvaluator evaluator;
+    ParallelMCTS::Config config;
+    config.numWorkerThreads = 2;
+    config.numEvalThreads = 0;
+    config.maxIterations = 200;
+    config.warmupIterations = 0;
+    config.evaluator = &evaluator;
+
+    ParallelMCTS mcts(config);
+    mcts.search(game);
+
+    PenteGame::Move best = mcts.getBestMove();
+    REQUIRE(best.x >= 0);
+
+    // Find the visit count of the best child before reuse
+    const auto *root = mcts.getRoot();
+    int rootVisits = root->visits.load();
+    int childVisits = 0;
+    for (int i = 0; i < root->childCapacity; ++i) {
+        if (root->moves[i].x == best.x && root->moves[i].y == best.y && root->children[i]) {
+            childVisits = root->children[i]->visits.load();
+            break;
+        }
+    }
+    REQUIRE(childVisits > 0);
+
+    // Reuse: root_ pivots to the best child without touching the arena
+    mcts.reuseSubtree(best);
+    game.makeMove(best.x, best.y);
+
+    // getTotalVisits() immediately reflects the child's prior visit count
+    REQUIRE(mcts.getTotalVisits() == childVisits);
+
+    // Undo restores the original root
+    REQUIRE(mcts.undoSubtree());
+    REQUIRE(mcts.getTotalVisits() == rootVisits);
+}
+
 TEST_CASE("Benchmark: parallel speedup across worker counts") {
     PenteGame game(PenteGame::Config::pente());
     game.reset();

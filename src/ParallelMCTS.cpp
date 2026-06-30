@@ -666,6 +666,7 @@ void ParallelMCTS::reset() {
     std::lock_guard<std::mutex> lock(treeLock);
     if (arena_) arena_->reset();
     workerSlabs_.clear();  // slabs are views into arena_; cleared with it
+    reusePath_.clear();
     root_ = nullptr;
     nodeCount = 0;
     totalIterations = 0;
@@ -677,14 +678,28 @@ void ParallelMCTS::clearTree() {
     reset();
 }
 
-void ParallelMCTS::reuseSubtree(const PenteGame::Move &) {
-    // Parallel MCTS doesn't walk the tree to find a subtree; just reset so the
-    // next search() call starts fresh from the updated game state.
+void ParallelMCTS::reuseSubtree(const PenteGame::Move &move) {
+    if (!root_) return;
+
+    for (int i = 0; i < root_->childCapacity; ++i) {
+        if (root_->moves[i].x == move.x && root_->moves[i].y == move.y) {
+            ThreadSafeNode *child = root_->children[i];
+            if (child) {
+                reusePath_.push_back(root_);
+                root_ = child;
+                return;
+            }
+            break;
+        }
+    }
+    // Child not found or not yet visited — start fresh.
     reset();
 }
 
 bool ParallelMCTS::undoSubtree() {
-    reset();
+    if (reusePath_.empty()) return false;
+    root_ = reusePath_.back();
+    reusePath_.pop_back();
     return true;
 }
 
@@ -858,6 +873,7 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
                 if (!child) return node;  // arena full, treat as leaf
                 child->move = move;
                 child->player = game.getCurrentPlayer();
+                child->positionHash = game.getHash();
                 node->children[bestIndex] = child;
             }
         }

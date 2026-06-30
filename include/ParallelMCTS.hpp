@@ -317,6 +317,7 @@ class ParallelMCTS {
     std::unique_ptr<EvalPool> evalPool_;
 
     ThreadSafeNode *root_ = nullptr;
+    std::vector<ThreadSafeNode *> reusePath_;  // history of roots for undoSubtree()
     mutable std::mutex treeLock;
     mutable std::mt19937 rng_;
 
