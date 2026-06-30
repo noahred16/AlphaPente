@@ -480,6 +480,34 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         injectDirichletNoise();
     tl_slab = nullptr;
 
+    // Warmup: establish visit-count ordering single-threaded before workers start.
+    // Prevents all threads from racing on identically-scored unvisited children.
+    if (config_.warmupIterations > 0) {
+        tl_slab = &workerSlabs_[0];
+        int warmup = std::min(config_.warmupIterations, config_.maxIterations);
+        for (int i = 0; i < warmup; i++) {
+            std::vector<ThreadSafeNode *> searchPath;
+            PenteGame warmupGame;
+            warmupGame.syncFrom(initialGame_);
+            warmupGame.reseed(rng_());
+            searchPath.push_back(root_);
+            ThreadSafeNode *leaf = select(root_, warmupGame, searchPath);
+
+            float value;
+            if (warmupGame.isGameOver()) {
+                value = 1.0f;
+            } else {
+                value = config_.evaluator->evaluateValue(warmupGame);
+            }
+            auto policy = config_.evaluator->evaluatePolicy(warmupGame);
+            expand(leaf, warmupGame, policy);
+            backpropagate(leaf, value, searchPath);
+            totalInProgress.fetch_add(1, std::memory_order_relaxed);
+            totalIterations.fetch_add(1, std::memory_order_relaxed);
+        }
+        tl_slab = nullptr;
+    }
+
     if (config_.numEvalThreads > 0) evalPool_->start();
     workerPool_->start();
 

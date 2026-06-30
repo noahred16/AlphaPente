@@ -126,6 +126,9 @@ int main(int argc, char *argv[]) {
         config.evaluationBatchSize = batchSize;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = evaluator;
+        config.seed = 42;
+        // config.warmupIterations = std::min(100000, mctsIterations / 20);
+        config.warmupIterations = 100000;
 
         ParallelMCTS mcts(config);
         if (nonInteractive)
