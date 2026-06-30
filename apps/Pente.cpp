@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
     int mc = game.getMoveCount();
     double explorationConstant = mc <= 10 ? 2.5 : mc <= 18 ? 1.8 : 1.414;
     std::cout << "Exploration constant: " << explorationConstant
-              << " (move " << mc << ")\n";
+              << " (move " << mc << ")\n" << std::flush;
 
     HeuristicEvaluator heuristicEvaluator;
     UniformEvaluator uniformEvaluator;

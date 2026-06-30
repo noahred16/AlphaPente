@@ -21,6 +21,12 @@ struct CrashContext {
     bool active = false;
 } g_crashCtx;
 
+struct ParallelCrashContext {
+    ParallelMCTS *mcts = nullptr;
+    std::chrono::high_resolution_clock::time_point wallStart;
+    bool active = false;
+} g_parallelCrashCtx;
+
 void printCrashSummary() {
     if (!g_crashCtx.active || !g_crashCtx.mcts) return;
     auto wallEnd = std::chrono::high_resolution_clock::now();
@@ -37,6 +43,26 @@ void crashSignalHandler(int sig) {
     const char *msg = "\n[Signal] Printing search summary before exit:\n";
     if (write(STDERR_FILENO, msg, 48) < 0) {}  // best-effort, ignore errors in signal handler
     printCrashSummary();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void printParallelCrashSummary() {
+    if (!g_parallelCrashCtx.active || !g_parallelCrashCtx.mcts) return;
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - g_parallelCrashCtx.wallStart).count();
+    g_parallelCrashCtx.mcts->stopWorkerThreads();
+    g_parallelCrashCtx.mcts->stopEvalThreads();
+    g_parallelCrashCtx.mcts->printStats(wallElapsed);
+    g_parallelCrashCtx.mcts->printBestMoves(5);
+    PenteGame::Move best = g_parallelCrashCtx.mcts->getBestMove();
+    std::cout << "MCTS selected move: " << GameUtils::displayMove(best.x, best.y) << std::endl;
+}
+
+void parallelCrashSignalHandler(int sig) {
+    const char *msg = "\n[Signal] Printing search summary before exit:\n";
+    if (write(STDERR_FILENO, msg, 48) < 0) {}
+    printParallelCrashSummary();
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -215,7 +241,17 @@ std::string GameUtils::formatWithCommas(int value) {
 
 void GameUtils::runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game) {
     auto wallStart = std::chrono::high_resolution_clock::now();
+
+    g_parallelCrashCtx = {&mcts, wallStart, true};
+    signal(SIGTERM, parallelCrashSignalHandler);
+    signal(SIGINT,  parallelCrashSignalHandler);
+
     PenteGame::Move bestMove = mcts.search(game);
+
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT,  SIG_DFL);
+    g_parallelCrashCtx.active = false;
+
     auto wallEnd = std::chrono::high_resolution_clock::now();
     double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
 
