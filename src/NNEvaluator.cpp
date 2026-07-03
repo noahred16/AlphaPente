@@ -17,14 +17,12 @@ struct NNEvaluator::Impl {
     torch::ScalarType dtype{torch::kFloat};
 
     Impl() {
-        at::globalContext().setUserEnabledNNPACK(false);
         model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
         model->eval();
         model->to(device);
     }
 
     explicit Impl(const std::string &path) {
-        at::globalContext().setUserEnabledNNPACK(false);
         model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
         torch::load(model, path);
         model->eval();

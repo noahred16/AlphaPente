@@ -18,7 +18,15 @@ if [ ! -f "$REPO_ROOT/.env" ]; then
 fi
 
 # Detect GPU and pick matching libtorch variant
-if nvidia-smi &>/dev/null; then
+# On macOS, PyTorch doesn't ship a cxx11-abi libtorch; use the macOS-native zip instead.
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+if [[ "$OS" == "Darwin" ]]; then
+    VARIANT="cpu"
+    LIBTORCH_URL="__wheel__"
+    echo "macOS detected — will extract libtorch from PyTorch wheel"
+elif nvidia-smi &>/dev/null; then
     CUDA_VER=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
     # Blackwell (sm_120+) requires CUDA 12.8+ wheels; older GPUs use cu121
     if [ "${CUDA_VER}" -ge 120 ] 2>/dev/null; then
@@ -40,18 +48,34 @@ fi
 mkdir -p "$REPO_ROOT/libs" && cd "$REPO_ROOT/libs"
 
 LIBTORCH_CHANGED=false
-if [ -d libtorch ] && grep -q "$VARIANT" libtorch/build-version 2>/dev/null; then
+if [ -d libtorch ] && [ "$(cat libtorch/.variant 2>/dev/null)" = "$VARIANT" ]; then
     echo "✅ libtorch ($VARIANT) already installed. Skipping download."
 else
     LIBTORCH_CHANGED=true
     if [ -d libtorch ]; then
-        echo "Removing mismatched libtorch ($(cat libtorch/build-version 2>/dev/null || echo unknown))..."
+        echo "Removing mismatched libtorch..."
         rm -rf libtorch
     fi
-    echo "Downloading libtorch ($VARIANT)..."
-    wget "$LIBTORCH_URL" -O libtorch.zip
-    unzip libtorch.zip
-    rm libtorch.zip
+
+    if [[ "$LIBTORCH_URL" == "__wheel__" ]]; then
+        PYTHON=$(command -v python3 || command -v python)
+        echo "Downloading PyTorch wheel via pip..."
+        "$PYTHON" -m pip download torch --no-deps -d tmp_whl_dl -q
+        WHL=$(ls tmp_whl_dl/torch-*.whl 2>/dev/null | head -1)
+        if [[ -z "$WHL" ]]; then
+            echo "ERROR: pip download failed — no wheel found"
+            exit 1
+        fi
+        unzip -q "$WHL" -d tmp_torch
+        mv tmp_torch/torch ./libtorch
+        rm -rf tmp_torch tmp_whl_dl
+    else
+        echo "Downloading libtorch ($VARIANT)..."
+        wget "$LIBTORCH_URL" -O libtorch.zip
+        unzip libtorch.zip
+        rm libtorch.zip
+    fi
+    echo "$VARIANT" > libtorch/.variant
     echo "✅ libtorch installed."
 fi
 
@@ -63,19 +87,25 @@ if [ "$LIBTORCH_CHANGED" = true ]; then
 fi
 mkdir -p build && cd build
 
+CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release -Wno-dev)
+if [ -d "$REPO_ROOT/libs/libtorch" ]; then
+    CMAKE_ARGS+=(-DCMAKE_PREFIX_PATH="$REPO_ROOT/libs/libtorch")
+fi
+
 # Pass compute capability explicitly so PyTorch's cmake scripts don't need to
 # auto-detect it (auto-detection compiles a CUDA 20 test that fails on CMake < 3.30).
-CMAKE_EXTRA_ARGS=()
 if nvidia-smi &>/dev/null; then
     COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
     if [ -n "$COMPUTE_CAP" ]; then
-        CMAKE_EXTRA_ARGS+=("-DTORCH_CUDA_ARCH_LIST=${COMPUTE_CAP}")
+        CMAKE_ARGS+=("-DTORCH_CUDA_ARCH_LIST=${COMPUTE_CAP}")
     fi
 fi
 
-if cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$REPO_ROOT/libs/libtorch" "${CMAKE_EXTRA_ARGS[@]}" -Wno-dev; then
+MAKE_JOBS=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+
+if cmake .. "${CMAKE_ARGS[@]}"; then
     echo "cmake configured successfully."
-    make -j"$(nproc)"
+    make -j"$MAKE_JOBS"
     echo "✅ Build completed."
 else
     echo "cmake failed — see output above."
