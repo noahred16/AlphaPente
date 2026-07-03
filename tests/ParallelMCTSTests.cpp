@@ -167,7 +167,6 @@ TEST_CASE("reuseSubtree preserves child visit counts across searches") {
     config.numWorkerThreads = 2;
     config.numEvalThreads = 0;
     config.maxIterations = 200;
-    config.warmupIterations = 0;
     config.evaluator = &evaluator;
 
     ParallelMCTS mcts(config);

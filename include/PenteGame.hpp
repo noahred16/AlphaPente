@@ -186,7 +186,6 @@ class PenteGame {
 
     // For MCTS
     Move getRandomPromisingMove() const;
-    void reseed(uint32_t seed) { rng_.seed(seed); }
     PenteGame clone() const;
     void syncFrom(const PenteGame &other);
     uint64_t computeHash() const;

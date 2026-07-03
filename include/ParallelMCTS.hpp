@@ -54,10 +54,6 @@ class ParallelMCTS {
         float dirichletAlpha   = 0.0f;
         float dirichletEpsilon = 0.25f;
 
-        // Single-threaded warmup iterations run before parallel workers start.
-        // Breaks prior symmetry so threads don't race on equal-scoring children.
-        int warmupIterations = 0;
-
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
