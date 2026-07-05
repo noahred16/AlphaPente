@@ -199,7 +199,8 @@ TEST_CASE("reuseSubtree preserves child visit counts across searches") {
     REQUIRE(mcts.getTotalVisits() == rootVisits);
 }
 
-TEST_CASE("Benchmark: parallel speedup across worker counts") {
+// Slow (compares many worker configs) - skipped by default, run with --no-skip
+TEST_CASE("Benchmark: parallel speedup across worker counts" * doctest::skip()) {
     PenteGame game(PenteGame::Config::pente());
     game.reset();
 
@@ -286,7 +287,8 @@ public:
     evaluateBatch(const std::vector<PenteGame> &games) override { return local().evaluateBatch(games); }
 };
 
-TEST_CASE("Benchmark: NN eval throughput across thread configs") {
+// Slow (compares many thread configs) - skipped by default, run with --no-skip
+TEST_CASE("Benchmark: NN eval throughput across thread configs" * doctest::skip()) {
     PenteGame game(PenteGame::Config::pente());
     game.reset();
 

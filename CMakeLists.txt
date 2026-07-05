@@ -136,7 +136,11 @@ add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
     tests/ParallelMCTSTests.cpp
-    tests/SelfPlayTests.cpp
     tests/AugmentTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
+
+# Slow: runs full self-play games through a real NNEvaluator. Separate binary
+# so `./unit_tests` stays fast; run these explicitly with `./selfplay_tests`.
+add_executable(selfplay_tests tests/SelfPlayTests.cpp)
+target_link_libraries(selfplay_tests PRIVATE pente_core)

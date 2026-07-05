@@ -3,24 +3,9 @@
 #ifdef WITH_TORCH
 
 #include "PenteGame.hpp"
-#include <iostream>
 #include <torch/torch.h>
 
 static constexpr int B = PenteGame::BOARD_SIZE;
-
-// Print a window of the board centered around the action (rows 4-13, cols 6-13).
-static void printBoard(const torch::Tensor &planes) {
-    auto acc = planes.accessor<float, 3>();
-    std::cout << "   ";
-    for (int c = 6; c <= 13; c++) std::cout << c % 10;
-    std::cout << "\n";
-    for (int r = 4; r <= 13; r++) {
-        std::cout << (r < 10 ? " " : "") << r << " ";
-        for (int c = 6; c <= 13; c++)
-            std::cout << (acc[0][r][c] > 0.5f ? "X" : ".");
-        std::cout << "\n";
-    }
-}
 
 static torch::Tensor applyTransform(const torch::Tensor &planes, int flip, int rot) {
     auto t = flip ? torch::flip(planes, {2}) : planes;
@@ -36,13 +21,9 @@ TEST_CASE("Augmentation symmetries - L shape K10 L9 L7") {
     planes[0][6][10] = 1.0f;  // L7
 
     std::vector<torch::Tensor> all8;
-    int idx = 0;
     for (int flip = 0; flip < 2; flip++) {
         for (int rot = 0; rot < 4; rot++) {
-            auto t = applyTransform(planes, flip, rot);
-            all8.push_back(t);
-            std::cout << "\n[" << idx++ << "] flip=" << flip << " rot=" << rot << "\n";
-            printBoard(t);
+            all8.push_back(applyTransform(planes, flip, rot));
         }
     }
 

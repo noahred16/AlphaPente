@@ -9,6 +9,12 @@ cd build
 make unit_tests && ./unit_tests
 ```
 
+`SelfPlayTests.cpp` is built as a separate `selfplay_tests` executable, not part of `unit_tests` — each test case runs a full self-play game through a real `NNEvaluator` and is slow (~30s+ each). Run it explicitly when you need it:
+
+```bash
+make selfplay_tests && ./selfplay_tests
+```
+
 ## Command Line Flags
 
 | Flag | Description |
@@ -56,7 +62,7 @@ make unit_tests && ./unit_tests
        tests/YourTests.cpp  # Add here
    )
    ```
-3. Only `BitBoardTests.cpp` should have `#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`
+3. Only `BitBoardTests.cpp` should have `#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN` (each separate test executable needs exactly one file with this define — `SelfPlayTests.cpp` has its own since it builds as its own binary)
 
 ## Writing Tests
 
