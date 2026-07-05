@@ -267,6 +267,44 @@ cd /path/to/AlphaPente
 ./scripts/reset_training.sh [-g pente]
 ```
 
+### Moving checkpoints between machines
+
+`checkpoints/` is gitignored (files are multi-GB, too big for GitHub). When switching to a
+new machine, the files worth carrying over are:
+
+- `checkpoints/pente/bootstrap.pt` — the bootstrap replay buffer (multi-GB)
+- `checkpoints/pente/best_model.pt` — the current best model checkpoint
+- `checkpoints/pente/roster/*.pt`  — promoted historical models used for arena comparisons (if any)
+
+Use `rsync` (resumable, unlike `scp`, which matters for the multi-GB bootstrap file) with your
+usual SSH alias (e.g. `vast-rtx3060` from `~/.ssh/config`). Whichever path has the `hostalias:`
+prefix is remote; the other is local to wherever you run the command.
+
+**Starting a new session — push saved files onto the fresh instance:**
+
+```bash
+ssh vast-rtx3060 "mkdir -p /root/repos/AlphaPente/checkpoints/pente"
+
+rsync -avP --stats -e ssh \
+  ./checkpoints/pente/best_model.pt \
+  ./checkpoints/pente/bootstrap.pt \
+  ./checkpoints/pente/roster \
+  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/
+```
+
+**Retiring an old instance — pull files down before it disappears:**
+
+```bash
+rsync -avP --stats -e ssh \
+  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/best_model.pt \
+  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/bootstrap.pt \
+  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/roster \
+  ./checkpoints/pente/
+```
+
+Update the alias's `HostName`/`Port` in `~/.ssh/config` before tearing down the old instance —
+once it's gone, so is the SSH endpoint.
+
 ## Unit Tests
 
 Run all unit tests:

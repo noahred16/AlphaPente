@@ -105,9 +105,8 @@ NNEvaluator::evaluate(const PenteGame &game) {
     std::sort(policy.begin(), policy.end(),
               [](const auto &a, const auto &b) { return a.second > b.second; });
 
-    // Negate: NN is trained with current-player convention (+1 = I win),
-    // but MCTS backprop expects previous-player convention (+1 = mover wins).
-    return {policy, -valueTensor.item<float>()};
+    // NN is trained on previous-player (mover) perspective — matches MCTS backprop directly.
+    return {policy, valueTensor.item<float>()};
 }
 
 std::vector<std::pair<std::vector<std::pair<PenteGame::Move, float>>, float>>
@@ -160,7 +159,7 @@ NNEvaluator::evaluateBatch(const std::vector<PenteGame> &games) {
         std::sort(policy.begin(), policy.end(),
                   [](const auto &a, const auto &b) { return a.second > b.second; });
 
-        results.emplace_back(std::move(policy), -values[i][0].item<float>());
+        results.emplace_back(std::move(policy), values[i][0].item<float>());
     }
 
     return results;
