@@ -99,6 +99,7 @@ add_library(pente_core
     src/GameUtils.cpp
     src/Evaluator.cpp
     src/Zobrist.cpp
+    src/RenjuRules.cpp
 )
 
 if(TORCH_FOUND)
@@ -138,6 +139,7 @@ add_executable(unit_tests
     tests/PenteGameTests.cpp
     tests/ParallelMCTSTests.cpp
     tests/AugmentTests.cpp
+    tests/RenjuTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
 
