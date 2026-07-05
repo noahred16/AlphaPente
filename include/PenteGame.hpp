@@ -25,13 +25,15 @@ class PenteGame {
         bool keryoRules = false;     // Keryo: true (3-stone captures)
         bool capturesEnabled = true; // Gomoku: false
         bool tournamentRule = true;  // 3rd move restriction
-        uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
+        int boardSize = 19;          // logical play area, centered within the physical BOARD_SIZE grid
         int numOffsets = 16;
+        uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
         static Config gomoku() { return Config{10, false, false, false}; }
         static Config keryoPente() { return Config{15, true, true, true}; }
+        static Config renju() { return Config{10, false, false, false, 15}; }
     };
 
     enum Player : uint8_t { NONE = 0, BLACK = 1, WHITE = 2 };
@@ -80,6 +82,10 @@ class PenteGame {
 
     size_t encodePos(int x, int y) const { return static_cast<size_t>(y * BOARD_SIZE + x); }
 
+    // Logical play area is a square of config_.boardSize centered within the physical BOARD_SIZE grid.
+    int minIdx() const { return (BOARD_SIZE - config_.boardSize) / 2; }
+    int maxIdx() const { return BOARD_SIZE - minIdx(); } // exclusive
+
     // Add a legal move - O(1). Called when captured stones are returned to the board.
     void setLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
@@ -109,7 +115,7 @@ class PenteGame {
         // Handle offsets
         for (int i = 0; i < config_.numOffsets; i++) {
             int nx = x + dirs[i][0], ny = y + dirs[i][1];
-            if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE) {
+            if (nx >= minIdx() && nx < maxIdx() && ny >= minIdx() && ny < maxIdx()) {
                 if (!blackStones.getBitUnchecked(nx, ny) && !whiteStones.getBitUnchecked(nx, ny)) {
                     size_t npos = encodePos(nx, ny);
                     if (promisingMoveIndex[npos] == INVALID_INDEX) {

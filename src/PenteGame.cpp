@@ -244,7 +244,7 @@ void PenteGame::patchPromisingMovesAfterCaptures(const BitBoard &capturedBits) {
 }
 
 bool PenteGame::isLegalMove(int x, int y) const {
-    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) {
+    if (x < minIdx() || x >= maxIdx() || y < minIdx() || y >= maxIdx()) {
         return false;
     }
 
@@ -350,7 +350,15 @@ std::vector<PenteGame::Move> PenteGame::getPromisingMoves(int distance) const {
     // Remove occupied squares
     nearby = nearby & ~occupied;
 
-    return nearby.getSetPositions<Move>();
+    std::vector<Move> moves = nearby.getSetPositions<Move>();
+    if (minIdx() > 0) {
+        moves.erase(std::remove_if(moves.begin(), moves.end(),
+                                    [this](const Move &m) {
+                                        return m.x < minIdx() || m.x >= maxIdx() || m.y < minIdx() || m.y >= maxIdx();
+                                    }),
+                    moves.end());
+    }
+    return moves;
 }
 
 PenteGame::Move PenteGame::getRandomPromisingMove() const {
