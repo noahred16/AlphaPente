@@ -296,9 +296,7 @@ rsync -avP --stats -e ssh \
 
 ```bash
 rsync -avP --stats -e ssh \
-  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/best_model.pt \
-  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/bootstrap.pt \
-  vast-rtx3060:/root/repos/AlphaPente/checkpoints/pente/roster \
+  vast-rtx3060:'/root/repos/AlphaPente/checkpoints/pente/best_model.pt /root/repos/AlphaPente/checkpoints/pente/bootstrap.pt /root/repos/AlphaPente/checkpoints/pente/roster' \
   ./checkpoints/pente/
 ```
 
