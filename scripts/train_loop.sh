@@ -143,7 +143,7 @@ while true; do
             opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
             if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
                 promote=false
-                echo "  → did not beat $name — skipping promotion" | tee -a "$LOG"
+                echo "  → did not beat $name — not added to roster (training continues unaffected)" | tee -a "$LOG"
                 break
             fi
         done

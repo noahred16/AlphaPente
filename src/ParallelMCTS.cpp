@@ -266,7 +266,7 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                 }
 
                 auto  policy = parent->config_.evaluator->evaluatePolicy(workerGame);
-                parent->expand(leaf, workerGame, policy);
+                parent->expand(leaf, workerGame, value, policy);
                 parent->backpropagate(leaf, value, searchPath);
                 parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             } else {
@@ -282,7 +282,7 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
                     if (leaf->evaluated.compare_exchange_strong(
                             expected, true,
                             std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                        parent->expand(leaf, workerGame, {});
+                        parent->expand(leaf, workerGame, 1.0f, {});
                     }
                     parent->backpropagate(leaf, 1.0f, searchPath);
                     parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
@@ -342,7 +342,7 @@ void ParallelMCTS::WorkerPool::workerThreadMain(int workerId) {
         if (parent->config_.numEvalThreads > 0) {
             auto result = parent->backpropagationQueue_->tryPop();
             if (result.has_value()) {
-                parent->expand(result->node, result->gameState, result->policy);
+                parent->expand(result->node, result->gameState, result->value, result->policy);
                 parent->backpropagate(result->node, result->value, result->searchPath);
                 parent->totalIterations.fetch_add(1, std::memory_order_relaxed);
             }
@@ -858,7 +858,7 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
     return node;
 }
 
-void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
+void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game, float value,
                           const std::vector<std::pair<PenteGame::Move, float>> &policy) {
     if (node->expanded.load(std::memory_order_acquire)) return;
 
@@ -897,6 +897,11 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game,
         // Convention: SOLVED_WIN means the last mover won (a win from the parent's perspective).
         node->value = 1.0f;
         node->solvedStatus.store(SolvedStatus::SOLVED_WIN, std::memory_order_release);
+    } else {
+        // Record this node's own value estimate (previous-mover-perspective, matching
+        // evaluateValue's convention) so selectBestMoveIndex can use it as first-play
+        // urgency for this node's still-unvisited children.
+        node->value = value;
     }
     node->evaluated.store(true, std::memory_order_relaxed);
     node->expanded.store(true, std::memory_order_release);
@@ -969,11 +974,22 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     int32_t parentVisits = node->visits.load(std::memory_order_relaxed);
     double sqrtParentVisits = std::sqrt(static_cast<double>(parentVisits));
 
+    // First-play urgency: an unvisited child has no Q estimate yet. A flat 0.0
+    // default is only reasonable when real Q-values cluster near 0; in a position
+    // that's bad for the mover (every real child Q strongly negative, e.g. "block
+    // this threat or lose"), 0.0 looks artificially better than the correctly-
+    // discovered best move once that move's exploration bonus decays from repeated
+    // visits — so search keeps chasing brand-new losing moves instead of committing
+    // to the best one, and the effect worsens as parentVisits grows. Seed with the
+    // parent's own value estimate instead (negated: node->value is in the previous-
+    // mover's perspective, i.e. the opponent of node's own mover).
+    double fpu = -static_cast<double>(node->value);
+
     int bestIndex = -1;
     double bestValue = -std::numeric_limits<double>::infinity();
 
     // Score all children (visited and unvisited) in one pass.
-    // Unvisited (null) children contribute exploitation=0 so their exploration
+    // Unvisited (null) children contribute exploitation=fpu so their exploration
     // term drives selection until they are visited — correct AlphaZero PUCT.
     for (int i = 0; i < cap; ++i) {
         ThreadSafeNode *child = node->children[i];
@@ -982,7 +998,7 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
         double  exploitation;
         if (child == nullptr) {
             effectiveVisits = 0;
-            exploitation    = 0.0;
+            exploitation    = fpu;
         } else {
             effectiveVisits = virtualLossManager_->getEffectiveVisits(child);
             auto childStatus = child->solvedStatus.load(std::memory_order_acquire);
@@ -991,7 +1007,7 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
             } else if (childStatus == SolvedStatus::SOLVED_LOSS) {
                 exploitation = -std::numeric_limits<double>::infinity();
             } else {
-                exploitation = (effectiveVisits == 0) ? 0.0 :
+                exploitation = (effectiveVisits == 0) ? fpu :
                     static_cast<double>(child->totalValue.load(std::memory_order_relaxed)) / effectiveVisits;
             }
         }

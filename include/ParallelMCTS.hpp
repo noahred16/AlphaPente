@@ -262,7 +262,8 @@ class ParallelMCTS {
   private:
     // MCTS phases
     ThreadSafeNode *select(ThreadSafeNode *node, PenteGame &game, std::vector<ThreadSafeNode *> &searchPath);
-    void expand(ThreadSafeNode *node, const PenteGame &game, const std::vector<std::pair<PenteGame::Move, float>> &policy);
+    void expand(ThreadSafeNode *node, const PenteGame &game, float value,
+                const std::vector<std::pair<PenteGame::Move, float>> &policy);
     void backpropagate(ThreadSafeNode *node, float value, std::vector<ThreadSafeNode *> &searchPath);
 
     // Helper methods
