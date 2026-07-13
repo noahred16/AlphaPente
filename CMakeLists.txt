@@ -140,6 +140,7 @@ add_executable(unit_tests
     tests/ParallelMCTSTests.cpp
     tests/AugmentTests.cpp
     tests/RenjuTests.cpp
+    tests/SelfPlayPolicyTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
 

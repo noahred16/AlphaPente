@@ -25,6 +25,14 @@ struct SelfPlayConfig {
     int   numEvalThreads     = 1;
 };
 
+// Build the policy-target visit counts from raw root-child visits. If a proven
+// winning child exists it takes all the mass (at least 1 visit, even when the
+// search recorded none — e.g. the root arrived already solved). Other children,
+// including proven losses, keep their raw counts: PUCT stops visiting a child
+// once it is proven lost, and in a lost position the raw distribution is the
+// best-resistance target.
+std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx);
+
 // Run one self-play game. Returns one SelfPlayExample per move made.
 // Values are filled retroactively from the game outcome.
 std::vector<SelfPlayExample> runGame(Evaluator &eval,

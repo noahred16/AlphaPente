@@ -8,8 +8,8 @@ set -euo pipefail
 GAME="${1:-pente}"
 BATCHES=5
 GAMES_PER_BATCH=100
-SIMS=25000
-TAIL=20
+SIMS=50000
+TAIL=999
 
 echo "Bootstrap generation"
 echo "  game   : $GAME"

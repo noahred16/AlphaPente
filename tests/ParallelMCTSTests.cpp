@@ -1,4 +1,3 @@
-#include "doctest.h"
 #include "Evaluator.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
@@ -11,6 +10,14 @@
 #include <torch/torch.h>
 #include <unordered_map>
 #endif
+
+// doctest must come AFTER the torch-dependent headers: the c10 logging header
+// (pulled in via Evaluator.hpp when WITH_TORCH is set) defines its own CHECK
+// macro, which silently shadows doctest's CHECK and turns assertions into no-ops.
+#ifdef CHECK
+#undef CHECK
+#endif
+#include "doctest.h"
 
 TEST_CASE("search returns a valid move after completing all iterations") {
     PenteGame game(PenteGame::Config::pente());

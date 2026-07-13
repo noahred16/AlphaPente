@@ -6,6 +6,16 @@
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include <algorithm>
+#include <cassert>
+
+std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx) {
+    if (solvedWinIdx >= 0) {
+        int total = 0;
+        for (int v : visits) total += v;
+        visits[solvedWinIdx] = std::max(total, 1);
+    }
+    return visits;
+}
 
 std::vector<SelfPlayExample> runGame(Evaluator &eval,
                                       const PenteGame::Config &gameConfig,
@@ -40,30 +50,24 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         int cap          = static_cast<int>(root->childCapacity);
 
         std::vector<int> visits(cap, 0);
-        int totalVisits = 0;
-        for (int i = 0; i < cap; i++) {
-            if (root->children[i])
-                visits[i] = root->children[i]->visits.load();
-            totalVisits += visits[i];
-        }
-
-        // If any child is a proved win, boost its visit count to totalVisits so it
-        // dominates the policy target without erasing the signal from other moves.
-        // SOLVED_LOSS children are zeroed — the policy should never point toward a proven loss.
         int solvedWinIdx = -1;
         for (int i = 0; i < cap; i++) {
             if (!root->children[i]) continue;
-            auto st = root->children[i]->solvedStatus.load(std::memory_order_acquire);
-            if (st == ParallelMCTS::SolvedStatus::SOLVED_WIN && solvedWinIdx < 0)
+            visits[i] = root->children[i]->visits.load();
+            if (solvedWinIdx < 0 &&
+                root->children[i]->solvedStatus.load(std::memory_order_acquire) ==
+                    ParallelMCTS::SolvedStatus::SOLVED_WIN)
                 solvedWinIdx = i;
-            else if (st == ParallelMCTS::SolvedStatus::SOLVED_LOSS)
-                visits[i] = 0;
         }
-        if (solvedWinIdx >= 0)
-            visits[solvedWinIdx] = totalVisits;
-        // Recompute totalVisits after any adjustments
-        totalVisits = 0;
+
+        visits = policyTargetVisits(std::move(visits), solvedWinIdx);
+        int totalVisits = 0;
         for (int i = 0; i < cap; i++) totalVisits += visits[i];
+
+        // Should not happen: search always records visits unless it ran zero
+        // iterations (e.g. arena exhausted). If violated, the recorded policy
+        // target is all-zero and the chosen move arbitrary.
+        assert(totalVisits > 0 && "search recorded no root visits");
 
         auto policyTensor = torch::zeros({B * B});
         if (totalVisits > 0) {
