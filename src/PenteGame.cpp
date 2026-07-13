@@ -321,7 +321,7 @@ int PenteGame::countConsecutive(const BitBoard &stones, int x, int y, int dx, in
     int nx = x + dx;
     int ny = y + dy;
 
-    while (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE && stones.getBit(nx, ny)) {
+    while (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE && stones.getBitUnchecked(nx, ny)) {
         count++;
         nx += dx;
         ny += dy;
@@ -420,12 +420,22 @@ float PenteGame::evaluateMove(Move move) const {
     // Scoring weights
     constexpr float DEFAULT_SCORE = 1.0f;
     constexpr float CAPTURE_SCORE = 6.0f;
-    constexpr float BLOCK_CAPTURE_SCORE = 4.0f;
     constexpr float CREATE_OPEN_THREE_SCORE = 15.0f;
-    constexpr float BLOCK_OPEN_THREE_SCORE = 20.0f;
-    constexpr float VULNERABLE_MOVE_PENALTY = -20.0f;
     constexpr float CREATE_FIVE_THREAT_SCORE = 20.0f;
-    constexpr float BLOCK_FIVE_THREAT_SCORE = 20.0f;
+    // Blocking a threat is worth more than making the equivalent threat yourself -
+    // one consistent multiplier instead of independently-tuned block/create pairs
+    // (the old BLOCK_CAPTURE_SCORE=4 < CAPTURE_SCORE=6 was backwards).
+    constexpr float DEFENSE_WEIGHT = 1.33f;
+    constexpr float BLOCK_CAPTURE_SCORE = CAPTURE_SCORE * DEFENSE_WEIGHT;
+    constexpr float BLOCK_OPEN_THREE_SCORE = CREATE_OPEN_THREE_SCORE * DEFENSE_WEIGHT;
+    constexpr float BLOCK_FIVE_THREAT_SCORE = CREATE_FIVE_THREAT_SCORE * DEFENSE_WEIGHT;
+    constexpr float VULNERABLE_MOVE_PENALTY = -20.0f;
+    // Two or more forcing threats from one stone are usually unstoppable (the
+    // opponent can only answer one), so reward that above the plain linear sum.
+    constexpr float FORK_BONUS = 30.0f;
+    // Matches the immediate-win sentinel used below for five-in-a-row.
+    constexpr float CAPTURE_WIN_SCORE = 200.0f;
+    constexpr float CAPTURE_URGENT_BONUS = 40.0f; // one capture away from winning/losing by captures
 
     int x = move.x;
     int y = move.y;
@@ -729,9 +739,42 @@ float PenteGame::evaluateMove(Move move) const {
     score += createFiveThreatCount * CREATE_FIVE_THREAT_SCORE;
     score += blockFiveThreatCount * BLOCK_FIVE_THREAT_SCORE;
 
-    // Apply penalty if this move is vulnerable to capture
+    // Fork bonus: two-plus forcing threats created by one stone (e.g. a double
+    // open three) can't both be answered by the opponent's next move.
+    if (createOpenThreeCount + createFiveThreatCount >= 2) {
+        score += FORK_BONUS;
+    }
+
+    // Scale capture scoring by proximity to the actual capture-win threshold
+    // instead of a flat per-capture bonus.
+    int myCaptures = (currentPlayer == BLACK) ? blackCaptures : whiteCaptures;
+    int oppCaptures = (currentPlayer == BLACK) ? whiteCaptures : blackCaptures;
+
+    if (captureCount > 0) {
+        int stonesAfter = myCaptures + captureCount * 2;
+        if (stonesAfter >= config_.capturesToWin) {
+            return CAPTURE_WIN_SCORE; // this capture wins the game outright
+        }
+        if (stonesAfter >= config_.capturesToWin - 2) {
+            score += CAPTURE_URGENT_BONUS;
+        }
+    }
+    if (blockCaptureCount > 0) {
+        int oppStonesIfUnblocked = oppCaptures + 2;
+        if (oppStonesIfUnblocked >= config_.capturesToWin) {
+            return CAPTURE_WIN_SCORE; // must block or the opponent wins by capture next
+        }
+        if (oppStonesIfUnblocked >= config_.capturesToWin - 2) {
+            score += CAPTURE_URGENT_BONUS;
+        }
+    }
+
+    // Apply penalty if this move is vulnerable to capture; scale it up sharply
+    // if letting the opponent take it would hand them the capture win.
     if (isVulnerableMove) {
-        score += VULNERABLE_MOVE_PENALTY;
+        int oppStonesIfCaptured = oppCaptures + 2;
+        score += (oppStonesIfCaptured >= config_.capturesToWin) ? VULNERABLE_MOVE_PENALTY * 10.0f
+                                                                 : VULNERABLE_MOVE_PENALTY;
     }
 
     // return max of 1 and score;

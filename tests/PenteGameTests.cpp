@@ -134,7 +134,7 @@ TEST_CASE("PenteGame evaluateMove detects block") {
     // Pattern: my my opp = BLOCK!
 
     PenteGame::Move blockMove(9, 5);  // K6
-    CHECK(game.evaluateMove(blockMove) == 5.0f);  // 1 + 1 block * 4 = 5
+    CHECK(game.evaluateMove(blockMove) == doctest::Approx(8.98f));  // 1 + 1 block * (6 * 1.33) = 8.98
 }
 
 TEST_CASE("PenteGame evaluateMove creates solid open three") {
@@ -189,8 +189,8 @@ TEST_CASE("PenteGame evaluateMove detects block of open three") {
     // Black at L10 or L14 blocks
 
     PenteGame::Move blockMove(10, 9);  // L10
-    // Score: 1 (default) + 20 (block open three) + 15 (creates open three K10-L10-M10) = 36
-    CHECK(game.evaluateMove(blockMove) == 36.0f);
+    // Score: 1 (default) + 19.95 (block open three, 15 * 1.33) + 15 (creates open three K10-L10-M10) = 35.95
+    CHECK(game.evaluateMove(blockMove) == doctest::Approx(35.95f));
 }
 
 TEST_CASE("PenteGame evaluateMove verifies capture pattern") {

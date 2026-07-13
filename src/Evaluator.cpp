@@ -116,13 +116,16 @@ std::vector<std::pair<PenteGame::Move, float>> HeuristicEvaluator::evaluatePolic
 
     int non_zero_scores = 0;
 
+    // Loop-invariant: doesn't depend on the candidate move, hoist out of the loop below.
+    bool tournamentThirdMove = (game.getMoveCount() == 2 && game.getConfig().tournamentRule);
+
     float totalScore = 0.0f;
     // evaluateMove uses promising moves to skip over bad moves
     for (const auto &move : legalMoves) {
         float score;
         // if tournament rule and game move num is 3 and move is in the restricted area score is 0, otherwise evaluate normally.
         // TODO selection needs to account for tournament rule
-        if (game.getMoveCount() == 2 && game.getConfig().tournamentRule) {
+        if (tournamentThirdMove) {
             if (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 2 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 2) {
                 score = 0.0f;
             } else if (std::abs(move.x - PenteGame::BOARD_SIZE / 2) <= 3 && std::abs(move.y - PenteGame::BOARD_SIZE / 2) <= 3) {
