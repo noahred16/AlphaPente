@@ -8,14 +8,32 @@ C++ implementation of AlphaZero for the game of Pente. Pente is an amusing two-p
 
 
 ## Setup
-
+The setup script installs torch dependency and detects your system gpu and install the corresponding torch version in the lib dir. 
+It also detects the number of threads and free RAM and creates a .env file. You can adjust this to use more or less RAM or CPU threads. 
 ```bash
 cd ~/repos/AlphaPente
-mkdir -p libs && cd libs
-# CPU-only, cxx11 ABI (matches GCC 11.5 fine)
-wget https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-latest.zip
-unzip libtorch-cxx11-abi-shared-with-deps-latest.zip
+bash setup.sh
+cat .env  # to see the specs used
+
+# to load model weight from HuggingFace (requires hf auth login)
+hf auth login
+bash init_models.sh
+
 ```
+
+
+
+
+## Python scripts setup (temp)
+
+```bash
+python -m venv ~/.venvs/py312
+source ~/.venvs/py312/bin/activate
+pip install --upgrade pip
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install numpy
+```
+
 
 
 ## Usage

@@ -14,6 +14,75 @@ for name in ("bootstrap", "buffer"):
     for key, t in buf.items():
         print(f"  {key:<8} {tuple(t.shape)}  {t.dtype}")
 
+# ── Metadata: game count and prefix diversity ───────────────────────────────
+# Where the randomness comes from (scripts/bootstrap_generate.sh →
+# apps/Generate.cpp → src/SelfPlay.cpp): for the first 15 moves
+# (explorationDropoff) the move is SAMPLED proportional to MCTS visit counts
+# (temperature 1) and Dirichlet(alpha=0.3) noise is mixed into the root prior
+# at epsilon=0.25; from move 15 on, noise is off and play is argmax (unless a
+# proven win exists, which is always played). So all game diversity comes from
+# the first 15 plies.
+
+def stone_counts(states):
+    ident = states[::8]  # identity augmentation is every 8th sample
+    return (ident[:, 0].sum((1, 2)) + ident[:, 1].sum((1, 2))).int().tolist()
+
+# Within a game a move changes the stone count by 1 - 2*captured_stones
+# (+1, -1, -3, ...); any other delta, or an empty board, starts a new game
+# record. Records can be tail-trimmed (generate -t), so some start mid-game.
+# (Approximate: a boundary between two trimmed records can look like a legal
+# delta by coincidence.)
+def segment_games(stones):
+    games, start = [], 0
+    for j in range(1, len(stones)):
+        d = stones[j] - stones[j - 1]
+        if stones[j] == 0 or d > 1 or (d - 1) % 2 != 0:
+            games.append((start, j))
+            start = j
+    games.append((start, len(stones)))
+    return games  # (begin, end) position-index ranges
+
+def analyze(name):
+    buf = load_buffer(f"checkpoints/pente/{name}.pt")
+    states, values = buf["states"], buf["values"]
+    stones = stone_counts(states)
+    games = segment_games(stones)
+    full = [(b, e) for b, e in games if stones[b] == 0]
+    lengths = sorted(e - b for b, e in games)
+    print(f"\n{name}: {states.size(0)} samples = {len(stones)} positions"
+          f" (x8 symmetries) = {len(games)} games"
+          f" ({len(full)} full, {len(games) - len(full)} tail-trimmed)")
+    print(f"  record lengths: min {lengths[0]}, median {lengths[len(lengths) // 2]}, max {lengths[-1]}")
+
+    if not full:
+        print("  (no full games — skipping outcome and diversity stats)")
+        return
+
+    # Outcome from the empty-board value of each full game. Value convention
+    # (SelfPlay.cpp): +1 = the player who moved INTO the position wins, so at
+    # the empty board -1 = first player won, +1 = second player won.
+    w = [values[b * 8].item() for b, _ in full]
+    p1 = sum(v < -0.5 for v in w)
+    p2 = sum(v > 0.5 for v in w)
+    print(f"  outcomes over {len(w)} full games  P1/P2/draw: {p1}/{p2}/{len(w) - p1 - p2}")
+
+    # Prefix diversity: distinct positions after N moves, over full games.
+    # raw = exact board+captures; mod-sym = up to the 8 board symmetries (min
+    # hash over the stored augmentations) — mirrored/rotated games produce the
+    # same 8 augmented training samples, so mod-sym is the honest count.
+    print(f"  distinct positions after N moves:")
+    print(f"    {'move':>4} {'games':>6} {'raw':>6} {'mod-sym':>8}")
+    for d in (1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 40):
+        reach = [b + d for b, e in full if b + d < e]
+        if not reach:
+            break
+        raw = {states[p * 8].numpy().tobytes() for p in reach}
+        canon = {min(states[p * 8 + k].numpy().tobytes() for k in range(8)) for p in reach}
+        print(f"    {d:>4} {len(reach):>6} {len(raw):>6} {len(canon):>8}")
+
+for name in ("bootstrap", "buffer"):
+    analyze(name)
+
 # Peek at the first few bootstrap samples.
 # states[i] planes: 0=my stones, 1=opp stones, 2=empty, 3=my caps/max, 4=opp caps/max
 # planes and policy are indexed [y][x]; policy flat index = y*19 + x (see NNEvaluator.cpp)
