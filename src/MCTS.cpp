@@ -349,6 +349,19 @@ MCTS::Node *MCTS::expand(Node *node, PenteGame &game) {
         node->priors[i] = policy[i].second;
     }
 
+#ifndef NDEBUG
+    // selectBestMoveIndex's progressive widening (see "priors are in order from highest to
+    // lowest" below) silently degrades if this ever breaks -- no crash, just weaker search --
+    // so check it explicitly here rather than relying on that to be noticed.
+    // Widening's frontier check permanently stops advancing nextPriorIdx the first time it sees
+    // a non-positive prior, so only the positive-score prefix is ever reachable and needs a true
+    // order; the evaluator intentionally leaves the <=0 tail unsorted, so stop checking there.
+    for (int i = 1; i < policyCount && node->priors[i] > 0.0f; i++) {
+        assert(node->priors[i] <= node->priors[i - 1] &&
+               "evaluator's policy must be sorted best-first among positive-score moves for progressive widening");
+    }
+#endif
+
     // Rotate physical moves to canonical coordinates so transpositions share the same move list
     if (useCanonical) {
         const auto &zob = Zobrist::instance();
@@ -444,6 +457,15 @@ int MCTS::selectBestMoveIndex(Node *node, const PenteGame &game, int currentSym)
         // Policy may return more moves than childCapacity (e.g. all legal vs capped promising).
         // Take only the first childCapacity moves; evaluatePolicy sorts best-first so these are top-K.
         int count = std::min(priorsSize, childCapSize);
+
+        // As of the current evaluators (Uniform/Heuristic/NN), evaluatePolicy always returns
+        // exactly one entry per legal move and childCapacity is sized to that same legal-move
+        // count at expand time -- so priorsSize == childCapSize and this never truncates.
+        // HeuristicEvaluator::evaluatePolicy no longer sorts its output (dead cost while this
+        // holds). If childCapacity is ever capped below the full policy size, this assert will
+        // fire: fix it by sorting/partial-sorting movePriors by score *here*, where the real
+        // cutoff is known, rather than making evaluatePolicy pay for it unconditionally.
+        assert(count == priorsSize && "childCapacity below full policy size requires sorted evaluatePolicy output");
 
         for (int i = 0; i < count; i++) {
             node->moves[i] = movePriors[i].first;
