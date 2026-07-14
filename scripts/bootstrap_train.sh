@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Train on pre-generated bootstrap data, benchmarking after each step.
+# Train on pre-generated bootstrap data, benchmarking after each cycle.
 # Run from anywhere in the repo.
-# Usage: ./scripts/bootstrap_train.sh [-g game] [-r rounds] [-n trains_per_round]
+# Usage: ./scripts/bootstrap_train.sh [-g game] [-n cycles] [-a arena_every] [-s benchmark_arena_sims]
 
 set -euo pipefail
 
 GAME="pente"
-ROUNDS=6
-TRAINS_PER_ROUND=5
+CYCLES=10
+ARENA_EVERY=5          # run the full battery (incl. 3-tier heuristic arena) every N cycles; 0 = never mid-loop
 BENCHMARK_ARENA_SIMS=800
 
-while getopts "g:r:n:s:" opt; do
+while getopts "g:n:a:s:" opt; do
     case $opt in
         g) GAME=$OPTARG ;;
-        r) ROUNDS=$OPTARG ;;
-        n) TRAINS_PER_ROUND=$OPTARG ;;
+        n) CYCLES=$OPTARG ;;
+        a) ARENA_EVERY=$OPTARG ;;
         s) BENCHMARK_ARENA_SIMS=$OPTARG ;;
-        *) echo "Usage: $0 [-g game] [-r rounds] [-n trains_per_round] [-s benchmark_arena_sims]" >&2; exit 1 ;;
+        *) echo "Usage: $0 [-g game] [-n cycles] [-a arena_every] [-s benchmark_arena_sims]" >&2; exit 1 ;;
     esac
 done
 
@@ -29,13 +29,14 @@ cd "$BUILD_DIR"
 
 echo "Bootstrap training"      | tee "$LOG"
 echo "  game  : $GAME"         | tee -a "$LOG"
-echo "  rounds: $ROUNDS x $TRAINS_PER_ROUND trains" | tee -a "$LOG"
+echo "  cycles: $CYCLES (full battery every $ARENA_EVERY)" | tee -a "$LOG"
 echo "  arena sims: $BENCHMARK_ARENA_SIMS"                  | tee -a "$LOG"
 echo "  log   : $LOG"          | tee -a "$LOG"
 echo "  start : $(date)"       | tee -a "$LOG"
 echo ""                        | tee -a "$LOG"
 
 START=$(date +%s)
+LAST_CYCLE_WAS_FULL=false
 
 cleanup() {
     ELAPSED=$(( $(date +%s) - START ))
@@ -44,28 +45,39 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-for round in $(seq 1 "$ROUNDS"); do
+for cycle in $(seq 1 "$CYCLES"); do
     echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-    echo "Round $round / $ROUNDS  —  $(date)"                          | tee -a "$LOG"
+    echo "Cycle $cycle / $CYCLES  —  $(date)"                          | tee -a "$LOG"
     echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
-    for step in $(seq 1 "$TRAINS_PER_ROUND"); do
-        echo "── Train step $step / $TRAINS_PER_ROUND ──────────────────────────────" | tee -a "$LOG"
-        ./train -g "$GAME" -b 2>&1 | tee -a "$LOG"
-        echo "" | tee -a "$LOG"
+    echo "── Train ────────────────────────────────────────────────────────" | tee -a "$LOG"
+    ./train -g "$GAME" -b 2>&1 | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
 
-        echo "── Benchmark ────────────────────────────────────────────────────" | tee -a "$LOG"
+    if (( ARENA_EVERY > 0 && cycle % ARENA_EVERY == 0 )); then
+        echo "── Benchmark (full battery) ────────────────────────────────────────" | tee -a "$LOG"
         ./benchmark -g "$GAME" 2>&1 | tee -a "$LOG"
-        echo "" | tee -a "$LOG"
-    done
+        LAST_CYCLE_WAS_FULL=true
+    else
+        echo "── Benchmark (quick: policy + value sign) ──────────────────────────" | tee -a "$LOG"
+        ./benchmark -g "$GAME" -s 0 2>&1 | tee -a "$LOG"
+        ./benchmark -g "$GAME" -V 2>&1 | tee -a "$LOG"
+        LAST_CYCLE_WAS_FULL=false
+    fi
+    echo "" | tee -a "$LOG"
 done
 
-echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-echo "Final arena: NN vs heuristic" | tee -a "$LOG"
-echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-./benchmark -g "$GAME" -a -S "$BENCHMARK_ARENA_SIMS" 2>&1 | tee -a "$LOG"
-echo "" | tee -a "$LOG"
+if [[ "$LAST_CYCLE_WAS_FULL" == true ]]; then
+    echo "Last cycle already ran the full battery (3-tier heuristic arena) — skipping redundant final arena." | tee -a "$LOG"
+else
+    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+    echo "Final arena: NN vs heuristic" | tee -a "$LOG"
+    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+    ./benchmark -g "$GAME" -a -S "$BENCHMARK_ARENA_SIMS" 2>&1 | tee -a "$LOG"
+    echo "" | tee -a "$LOG"
+fi
+
 echo "All done!  $(date)" | tee -a "$LOG"
 ELAPSED=$(( $(date +%s) - START ))
 echo "Total time: ${ELAPSED}s" | tee -a "$LOG"
