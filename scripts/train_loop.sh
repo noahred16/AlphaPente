@@ -91,8 +91,11 @@ while true; do
     ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" -a 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
-    ./train -g "$GAME" 2>&1 | tee -a "$LOG"
+    train_out=$(./train -g "$GAME" 2>&1)
+    echo "$train_out" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
+    promoted=true
+    echo "$train_out" | grep -q "PROMOTED" || promoted=false
 
     echo "── Benchmark (raw policy) ───────────────────────────────────────" | tee -a "$LOG"
     ./benchmark -g "$GAME" -s 0 2>&1 | tee -a "$LOG"
@@ -122,37 +125,42 @@ while true; do
     fi
 
     # ── Roster promotion ─────────────────────────────────────────────────
-    ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
-    CURRENT_MODEL=$(ls -t "$ROOT_DIR/checkpoints/$GAME/model_iter"*.pt 2>/dev/null | head -1)
+    if [[ "$promoted" == false ]]; then
+        echo "" | tee -a "$LOG"
+        echo "── Roster promotion skipped — validation gate rejected this iteration (best_model.pt unchanged) ──" | tee -a "$LOG"
+    else
+        ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
+        CURRENT_MODEL=$(ls -t "$ROOT_DIR/checkpoints/$GAME/model_iter"*.pt 2>/dev/null | head -1)
 
-    if [[ -n "$CURRENT_MODEL" ]]; then
-        mkdir -p "$ROSTER_DIR"
-        shopt -s nullglob
-        roster_models=("$ROSTER_DIR"/*.pt)
-        shopt -u nullglob
+        if [[ -n "$CURRENT_MODEL" ]]; then
+            mkdir -p "$ROSTER_DIR"
+            shopt -s nullglob
+            roster_models=("$ROSTER_DIR"/*.pt)
+            shopt -u nullglob
 
-        promote=true
-        for model in "${roster_models[@]}"; do
-            [[ "$(basename "$model")" == "$(basename "$CURRENT_MODEL")" ]] && continue
-            name=$(basename "$model" .pt)
-            echo "" | tee -a "$LOG"
-            echo "── Roster check: $name ──────────────────────────────────────────" | tee -a "$LOG"
-            arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -P "$model" 2>&1)
-            echo "$arena_out" | tee -a "$LOG"
-            nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
-            opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
-            if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
-                promote=false
-                echo "  → did not beat $name — not added to roster (training continues unaffected)" | tee -a "$LOG"
-                break
+            promote=true
+            for model in "${roster_models[@]}"; do
+                [[ "$(basename "$model")" == "$(basename "$CURRENT_MODEL")" ]] && continue
+                name=$(basename "$model" .pt)
+                echo "" | tee -a "$LOG"
+                echo "── Roster check: $name ──────────────────────────────────────────" | tee -a "$LOG"
+                arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -P "$model" 2>&1)
+                echo "$arena_out" | tee -a "$LOG"
+                nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
+                opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
+                if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
+                    promote=false
+                    echo "  → did not beat $name — not added to roster (training continues unaffected)" | tee -a "$LOG"
+                    break
+                fi
+            done
+
+            if [[ "$promote" == true ]]; then
+                model_name=$(basename "$CURRENT_MODEL")
+                cp "$CURRENT_MODEL" "$ROSTER_DIR/$model_name"
+                echo "" | tee -a "$LOG"
+                echo "★ New roster member: $model_name" | tee -a "$LOG"
             fi
-        done
-
-        if [[ "$promote" == true ]]; then
-            model_name=$(basename "$CURRENT_MODEL")
-            cp "$CURRENT_MODEL" "$ROSTER_DIR/$model_name"
-            echo "" | tee -a "$LOG"
-            echo "★ New roster member: $model_name" | tee -a "$LOG"
         fi
     fi
 

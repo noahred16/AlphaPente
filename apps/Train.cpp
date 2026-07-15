@@ -2,11 +2,65 @@
 
 #include "NNModel.hpp"
 #include "TrainCommon.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <numeric>
+#include <random>
 #include <torch/torch.h>
 #include <unistd.h>
+
+// Fixed seed: baseline and candidate must be scored on the identical held-out
+// split within one run for the promotion gate to be a fair comparison.
+static std::pair<ReplayBuffer, ReplayBuffer> splitBuffer(const ReplayBuffer &buf, double valFraction) {
+    int64_t n    = buf.size();
+    int64_t valN = std::max<int64_t>(1, (int64_t)(n * valFraction));
+
+    std::vector<int64_t> idx(n);
+    std::iota(idx.begin(), idx.end(), 0);
+    std::mt19937_64 rng(1234);
+    std::shuffle(idx.begin(), idx.end(), rng);
+
+    auto idxTensor = torch::from_blob(idx.data(), {n}, torch::kInt64).clone();
+    auto valIdx    = idxTensor.slice(0, 0, valN);
+    auto trainIdx  = idxTensor.slice(0, valN, n);
+
+    auto sel = [](const torch::Tensor &t, const torch::Tensor &i) { return t.index_select(0, i); };
+    ReplayBuffer trainBuf{sel(buf.states, trainIdx), sel(buf.captures, trainIdx),
+                          sel(buf.policies, trainIdx), sel(buf.values, trainIdx)};
+    ReplayBuffer valBuf{sel(buf.states, valIdx), sel(buf.captures, valIdx),
+                        sel(buf.policies, valIdx), sel(buf.values, valIdx)};
+    return {trainBuf, valBuf};
+}
+
+static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::Device device) {
+    torch::NoGradGuard noGrad;
+    model->to(device);
+    model->eval();
+
+    int64_t n = val.size();
+    if (n == 0) return 0.0;
+
+    double  totalLoss  = 0.0;
+    int64_t numBatches = 0;
+    for (int64_t start = 0; start < n; start += BATCH_SIZE) {
+        int64_t end = std::min<int64_t>(start + BATCH_SIZE, n);
+
+        auto states   = val.states.slice(0, start, end).to(device);
+        auto captures = val.captures.slice(0, start, end).to(device);
+        auto policies = val.policies.slice(0, start, end).to(device);
+        auto values   = val.values.slice(0, start, end).to(device);
+
+        auto [logPolicy, valuePred] = model->forward(states, captures);
+        auto pLoss = -(policies * logPolicy).sum(1).mean();
+        auto vLoss = torch::mse_loss(valuePred, values);
+        totalLoss += (pLoss + VALUE_LOSS_WEIGHT * vLoss).item<double>();
+        numBatches++;
+    }
+    return totalLoss / numBatches;
+}
 
 static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSteps,
                        torch::Device device) {
@@ -112,19 +166,39 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    auto [trainBuf, valBuf] = splitBuffer(buf, VAL_FRACTION);
+
     int gradientSteps = stepsOverride > 0
         ? stepsOverride
-        : std::max(MIN_GRAD_STEPS, (int)(buf.size() / BATCH_SIZE));
+        : std::max(MIN_GRAD_STEPS, (int)(trainBuf.size() / BATCH_SIZE));
 
-    std::cout << "── Training (" << gradientSteps << " steps) ──────────────────────────\n";
+    std::cout << "── Training (" << gradientSteps << " steps, " << valBuf.size()
+              << " positions held out for validation) ──────────────────────────\n";
 
     torch::Device device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU);
     std::cout << "  device: " << device << "\n\n";
 
     AlphaNet model(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
-    if (std::filesystem::exists(bestPath))
+    bool hasBaseline = std::filesystem::exists(bestPath);
+    if (hasBaseline)
         torch::load(model, bestPath);
-    trainModel(model, buf, gradientSteps, device);
+
+    double baselineValLoss = hasBaseline
+        ? computeValLoss(model, valBuf, device)
+        : std::numeric_limits<double>::infinity();
+
+    trainModel(model, trainBuf, gradientSteps, device);
+
+    double candidateValLoss = computeValLoss(model, valBuf, device);
+    bool promote = !hasBaseline || candidateValLoss <= baselineValLoss * VAL_GATE_TOLERANCE;
+
+    std::cout << "\n── Validation gate ─────────────────────────────────────────────\n";
+    if (hasBaseline)
+        std::cout << "  baseline val loss : " << baselineValLoss << "\n"
+                  << "  candidate val loss: " << candidateValLoss << "\n";
+    else
+        std::cout << "  no baseline yet — promoting unconditionally\n";
+    std::cout << "  → " << (promote ? "PROMOTED" : "REJECTED — best_model.pt unchanged") << "\n";
 
     int iterNum = nextIterNumber(ckptDir);
     char iterSuffix[8];
@@ -133,11 +207,11 @@ int main(int argc, char *argv[]) {
 
     model->to(torch::kCPU);
     torch::save(model, iterPath);
-    torch::save(model, bestPath);
+    if (promote) torch::save(model, bestPath);
 
     std::cout << "\n── Saved ────────────────────────────────────────────────────────\n"
-              << "  " << iterPath << "\n"
-              << "  " << bestPath << "\n";
+              << "  " << iterPath << (promote ? "" : "  (not promoted)") << "\n";
+    if (promote) std::cout << "  " << bestPath << "\n";
 
     return 0;
 }

@@ -17,7 +17,7 @@ struct SelfPlayExample {
 
 struct SelfPlayConfig {
     int   simulations        = 100;
-    int   explorationDropoff = 15;   // moves after which Dirichlet noise and temp sampling are disabled
+    int   explorationDropoff = 8;    // moves after which Dirichlet noise and temp sampling are disabled
     float explorationC       = 3.0f;
     float dirichletAlpha     = 0.3f;
     float dirichletEpsilon   = 0.25f;

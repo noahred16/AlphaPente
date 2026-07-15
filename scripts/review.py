@@ -83,7 +83,7 @@ def analyze(name):
 for name in ("bootstrap", "buffer"):
     analyze(name)
 
-# Peek at the first few bootstrap samples.
+# Peek at the first few buffer samples.
 # states[i] planes: 0=my stones, 1=opp stones, 2=empty, 3=my caps/max, 4=opp caps/max
 # planes and policy are indexed [y][x]; policy flat index = y*19 + x (see NNEvaluator.cpp)
 COLS = "ABCDEFGHJKLMNOPQRST"  # Pente notation skips 'I'
@@ -92,46 +92,39 @@ def move_name(idx):
     y, x = divmod(idx, 19)
     return f"{COLS[x]}{y + 1}"
 
-bootstrap = load_buffer("checkpoints/pente/bootstrap.pt")
 # each position is stored as 8 consecutive symmetry augmentations, so sample
-# index = position * 8 walks the buffer one position at a time. Note: games are
-# stored as tails only (generate -t 20 keeps the last 20 moves per game), so a
-# record can start mid-game. A legal move adds 1 stone (minus 2 per capture);
-# any other stone-count delta means we've crossed into the next game's record.
-prev_stones = None
-num_of_games = 80 
-for pos in range(num_of_games):
-    i = pos * 8
-    state = bootstrap["states"][i]
-    caps = bootstrap["captures"][i]
-    value = bootstrap["values"][i].item()
-    policy = bootstrap["policies"][i]
+# index = position * 8 walks the buffer one position at a time. Reuses
+# stone_counts/segment_games (defined above) to find the last game's record
+# rather than re-deriving boundaries here.
+def print_game(name):
+    buf = load_buffer(f"checkpoints/pente/{name}.pt")
+    stones_all = stone_counts(buf["states"])
+    begin, end = segment_games(stones_all)[-1]
+    full = stones_all[begin] == 0
+    tag = "" if full else ", tail-trimmed — starts mid-game"
+    print(f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────")
 
-    # # for the first one, lets print the raw values just to catch a feel. 
-    # if pos == 10 or pos == 14:
-    #     print(f"Raw state:\n{state}")
-    #     print(f"Raw captures: {caps}")
-    #     print(f"Raw value: {value}")
-    #     print(f"Raw policy: {policy}")
+    for pos in range(begin, end):
+        i = pos * 8
+        state = buf["states"][i]
+        caps = buf["captures"][i]
+        value = buf["values"][i].item()
+        policy = buf["policies"][i]
+        stones = stones_all[pos]
 
-    stones = int(state[0].sum() + state[1].sum())
-    if prev_stones is not None:
-        diff = stones - prev_stones
-        if diff > 1 or (diff - 1) % 2 != 0:
-            print(f"\n(end of first game record after {pos} positions — next record starts mid-game)")
-            break
-    prev_stones = stones
+        print(f"\n=== position {pos - begin + 1} ({stones} stones) ===  (X = to-move, O = opponent)")
+        for y in range(18, -1, -1):
+            row = " ".join("X" if state[0, y, x] else "O" if state[1, y, x] else "." for x in range(19))
+            print(f"{y + 1:>2} {row}")
+        print("   " + " ".join(COLS))
+        print(f"captures (my, opp): {caps.tolist()}   value: {value:+.3f}")
 
-    print(f"\n=== position {pos + 1} ({stones} stones) ===  (X = to-move, O = opponent)")
-    for y in range(18, -1, -1):
-        row = "".join("X" if state[0, y, x] else "O" if state[1, y, x] else "." for x in range(19))
-        print(f"{y + 1:>2} {row}")
-    print("   " + COLS)
-    print(f"captures (my, opp): {caps.tolist()}   value: {value:+.3f}")
+        top = policy.topk(5)
+        moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
+        print(f"top policy moves: {moves}")
 
-    top = policy.topk(5)
-    moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
-    print(f"top policy moves: {moves}")
+for name in ("bootstrap", "buffer"):
+    print_game(name)
 
 # Verify the all-zero policy rows: a valid policy target should sum to 1,
 # but some positions appear to have no visit distribution at all.

@@ -12,6 +12,8 @@ static constexpr int   MIN_GRAD_STEPS    = 200;
 static constexpr float LR                = 0.01f;
 static constexpr float WEIGHT_DECAY      = 1e-4f;
 static constexpr float VALUE_LOSS_WEIGHT = 1.0f;
+static constexpr double VAL_FRACTION       = 0.05;  // held out from training, used to gate best_model.pt promotion
+static constexpr double VAL_GATE_TOLERANCE = 1.02;  // candidate must not regress val loss by more than this factor
 
 struct ReplayBuffer {
     torch::Tensor states;    // [N, 5, 19, 19]  — my stones, opp stones, empty, my_captures/max (const), opp_captures/max (const)
