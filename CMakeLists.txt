@@ -143,6 +143,7 @@ add_executable(unit_tests
     tests/SelfPlayPolicyTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
+target_include_directories(unit_tests PRIVATE apps)  # TrainCommon.hpp for AugmentTests
 
 # Slow: runs full self-play games through a real NNEvaluator. Separate binary
 # so `./unit_tests` stays fast; run these explicitly with `./selfplay_tests`.

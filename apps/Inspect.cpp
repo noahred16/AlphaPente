@@ -2,6 +2,7 @@
 #include "NNModel.hpp"
 #include "PenteGame.hpp"
 #include "GameUtils.hpp"
+#include "TrainCommon.hpp"
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
@@ -148,13 +149,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    torch::serialize::InputArchive ar;
-    ar.load_from(bufPath);
-    torch::Tensor states, captures, policies, values;
-    ar.read("states",   states);
-    ar.read("captures", captures);
-    ar.read("policies", policies);
-    ar.read("values",   values);
+    auto buf = loadBuffer(bufPath);
+    auto states   = decodeStates(buf.states, buf.captures);
+    auto captures = buf.captures;
+    auto policies = buf.policies.to(torch::kFloat);
+    auto values   = buf.values;
 
     int64_t total = states.size(0);
     std::cout << "Buffer: " << total << " positions\n";

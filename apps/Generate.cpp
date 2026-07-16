@@ -19,11 +19,10 @@ int main(int argc, char *argv[]) {
     int mctsSims         = 20000;
     bool bootstrap       = false;
     int tailMoves        = 0;     // 0 = all moves
-    bool augment         = false;
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-a]\n"
+            "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -32,25 +31,23 @@ int main(int argc, char *argv[]) {
             "  -e  evaluator: auto | heuristic | nn        (default: auto)\n"
             "  -b  bootstrap mode — use heuristic, write to bootstrap.pt\n"
             "  -t  keep only the last N moves per game     (default: all)\n"
-            "  -a  augment positions with 8 board symmetries\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
-            "  ./generate -g pente -n 50 -s 400 -a\n"
+            "  ./generate -g pente -n 50 -s 400\n"
             "\n"
             "  # ad hoc: bootstrap the buffer with heuristic-guided play\n"
             "  ./generate -g pente -n 200 -s 200 -b\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:ah")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:h")) != -1) {
         if      (opt == 'g') gameFlag     = optarg;
         else if (opt == 'n') gamesPerIter = std::stoi(optarg);
         else if (opt == 's') mctsSims     = std::stoi(optarg);
         else if (opt == 'e') evalFlag     = optarg;
         else if (opt == 'b') bootstrap    = true;
         else if (opt == 't') tailMoves    = std::stoi(optarg);
-        else if (opt == 'a') augment      = true;
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -86,8 +83,7 @@ int main(int argc, char *argv[]) {
               << "  games    : " << gamesPerIter  << "\n"
               << "  sims     : " << mctsSims       << "\n"
               << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
-              << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n"
-              << "  augment  : " << (augment ? "yes (8x)" : "no") << "\n\n";
+              << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n\n";
 
     if (!useHeuristic)
         torch::set_num_threads(1);  // 1w/6e: each eval thread runs its own forward pass
@@ -153,44 +149,15 @@ int main(int argc, char *argv[]) {
     }
 
     double totalSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    int preAugPositions = totalPositions;
     std::cout << "\n  total: " << std::fixed << std::setprecision(1) << totalSecs << "s"
               << "  avg/game: " << std::setprecision(1) << totalSecs / gamesPerIter << "s"
               << "  avg/pos: "  << std::setprecision(3) << (totalPositions > 0 ? totalSecs / totalPositions : 0.0) << "s\n";
 
-    if (augment) {
-        std::vector<torch::Tensor> augPlanes, augCaptures, augPolicies, augValues;
-        augPlanes.reserve(allPlanes.size() * 8);
-        augCaptures.reserve(allCaptures.size() * 8);
-        augPolicies.reserve(allPolicies.size() * 8);
-        augValues.reserve(allValues.size() * 8);
-
-        constexpr int B = PenteGame::BOARD_SIZE;
-        for (int i = 0; i < (int)allPlanes.size(); i++) {
-            auto pol2d = allPolicies[i].view({B, B});
-            for (int flip = 0; flip < 2; flip++) {
-                auto p   = flip ? torch::flip(allPlanes[i], {2})   : allPlanes[i];
-                auto pol = flip ? torch::flip(pol2d,        {1})   : pol2d;
-                for (int rot = 0; rot < 4; rot++) {
-                    augPlanes.push_back(rot > 0 ? torch::rot90(p,   rot, {1, 2}) : p);
-                    augPolicies.push_back((rot > 0 ? torch::rot90(pol, rot, {0, 1}) : pol).flatten());
-                    augCaptures.push_back(allCaptures[i]);
-                    augValues.push_back(allValues[i]);
-                }
-            }
-        }
-        allPlanes   = std::move(augPlanes);
-        allCaptures = std::move(augCaptures);
-        allPolicies = std::move(augPolicies);
-        allValues   = std::move(augValues);
-        totalPositions = (int)allPlanes.size();
-        std::cout << "  augmented: " << preAugPositions << " → " << totalPositions
-                  << " positions (8x)\n";
-    }
-
-    auto newStates   = torch::stack(allPlanes,   0);
+    // Store compactly: stone planes only as uint8, policies as float16
+    // (decodeStates reconstructs the full 5-plane float input at train time).
+    auto newStates   = torch::stack(allPlanes,   0).slice(1, 0, 2).to(torch::kU8).contiguous();
     auto newCaptures = torch::stack(allCaptures, 0);
-    auto newPolicies = torch::stack(allPolicies, 0);
+    auto newPolicies = torch::stack(allPolicies, 0).to(torch::kHalf);
     auto newValues   = torch::stack(allValues,   0).unsqueeze(1);
 
     std::cout << "\n── " << (bootstrap ? "Bootstrap" : "Buffer")

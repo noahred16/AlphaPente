@@ -88,7 +88,7 @@ while true; do
     echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
-    ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" -a 2>&1 | tee -a "$LOG"
+    ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
     train_out=$(./train -g "$GAME" 2>&1)

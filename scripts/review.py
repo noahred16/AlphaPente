@@ -24,8 +24,7 @@ for name in ("bootstrap", "buffer"):
 # the first 15 plies.
 
 def stone_counts(states):
-    ident = states[::8]  # identity augmentation is every 8th sample
-    return (ident[:, 0].sum((1, 2)) + ident[:, 1].sum((1, 2))).int().tolist()
+    return (states[:, 0].sum((1, 2)) + states[:, 1].sum((1, 2))).int().tolist()
 
 # Within a game a move changes the stone count by 1 - 2*captured_stones
 # (+1, -1, -3, ...); any other delta, or an empty board, starts a new game
@@ -42,15 +41,22 @@ def segment_games(stones):
     games.append((start, len(stones)))
     return games  # (begin, end) position-index ranges
 
+# The 8 board symmetries of one position (they're applied at train time now,
+# not stored, so diversity-mod-symmetry has to compute them here).
+def sym8(t):  # [C, 19, 19] tensor
+    for flip in (False, True):
+        base = t.flip(2) if flip else t
+        for rot in range(4):
+            yield torch.rot90(base, rot, dims=(1, 2)) if rot else base
+
 def analyze(name):
     buf = load_buffer(f"checkpoints/pente/{name}.pt")
-    states, values = buf["states"], buf["values"]
+    states, captures, values = buf["states"], buf["captures"], buf["values"]
     stones = stone_counts(states)
     games = segment_games(stones)
     full = [(b, e) for b, e in games if stones[b] == 0]
     lengths = sorted(e - b for b, e in games)
-    print(f"\n{name}: {states.size(0)} samples = {len(stones)} positions"
-          f" (x8 symmetries) = {len(games)} games"
+    print(f"\n{name}: {len(stones)} positions = {len(games)} games"
           f" ({len(full)} full, {len(games) - len(full)} tail-trimmed)")
     print(f"  record lengths: min {lengths[0]}, median {lengths[len(lengths) // 2]}, max {lengths[-1]}")
 
@@ -61,30 +67,34 @@ def analyze(name):
     # Outcome from the empty-board value of each full game. Value convention
     # (SelfPlay.cpp): +1 = the player who moved INTO the position wins, so at
     # the empty board -1 = first player won, +1 = second player won.
-    w = [values[b * 8].item() for b, _ in full]
+    w = [values[b].item() for b, _ in full]
     p1 = sum(v < -0.5 for v in w)
     p2 = sum(v > 0.5 for v in w)
     print(f"  outcomes over {len(w)} full games  P1/P2/draw: {p1}/{p2}/{len(w) - p1 - p2}")
 
     # Prefix diversity: distinct positions after N moves, over full games.
     # raw = exact board+captures; mod-sym = up to the 8 board symmetries (min
-    # hash over the stored augmentations) — mirrored/rotated games produce the
-    # same 8 augmented training samples, so mod-sym is the honest count.
+    # hash over the computed symmetries) — mirrored/rotated games train the
+    # same after augmentation, so mod-sym is the honest count.
     print(f"  distinct positions after N moves:")
     print(f"    {'move':>4} {'games':>6} {'raw':>6} {'mod-sym':>8}")
     for d in (1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 40):
         reach = [b + d for b, e in full if b + d < e]
         if not reach:
             break
-        raw = {states[p * 8].numpy().tobytes() for p in reach}
-        canon = {min(states[p * 8 + k].numpy().tobytes() for k in range(8)) for p in reach}
+        raw = {states[p].numpy().tobytes() + captures[p].numpy().tobytes()
+               for p in reach}
+        canon = {min(s.contiguous().numpy().tobytes() for s in sym8(states[p]))
+                 + captures[p].numpy().tobytes()
+                 for p in reach}
         print(f"    {d:>4} {len(reach):>6} {len(raw):>6} {len(canon):>8}")
 
 for name in ("bootstrap", "buffer"):
     analyze(name)
 
-# Peek at the first few buffer samples.
-# states[i] planes: 0=my stones, 1=opp stones, 2=empty, 3=my caps/max, 4=opp caps/max
+# Peek at the last game record in each buffer.
+# states[i] planes (compact uint8 format): 0=my stones, 1=opp stones
+# (empty + capture planes are reconstructed at train time, see TrainCommon.hpp)
 # planes and policy are indexed [y][x]; policy flat index = y*19 + x (see NNEvaluator.cpp)
 COLS = "ABCDEFGHJKLMNOPQRST"  # Pente notation skips 'I'
 
@@ -92,10 +102,9 @@ def move_name(idx):
     y, x = divmod(idx, 19)
     return f"{COLS[x]}{y + 1}"
 
-# each position is stored as 8 consecutive symmetry augmentations, so sample
-# index = position * 8 walks the buffer one position at a time. Reuses
-# stone_counts/segment_games (defined above) to find the last game's record
-# rather than re-deriving boundaries here.
+# Positions are stored once, in game order (symmetries applied at train time).
+# Reuses stone_counts/segment_games (defined above) to find the last game's
+# record rather than re-deriving boundaries here.
 def print_game(name):
     buf = load_buffer(f"checkpoints/pente/{name}.pt")
     stones_all = stone_counts(buf["states"])
@@ -105,11 +114,10 @@ def print_game(name):
     print(f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────")
 
     for pos in range(begin, end):
-        i = pos * 8
-        state = buf["states"][i]
-        caps = buf["captures"][i]
-        value = buf["values"][i].item()
-        policy = buf["policies"][i]
+        state = buf["states"][pos]
+        caps = buf["captures"][pos]
+        value = buf["values"][pos].item()
+        policy = buf["policies"][pos]
         stones = stones_all[pos]
 
         print(f"\n=== position {pos - begin + 1} ({stones} stones) ===  (X = to-move, O = opponent)")
@@ -129,10 +137,10 @@ for name in ("bootstrap", "buffer"):
 # Verify the all-zero policy rows: a valid policy target should sum to 1,
 # but some positions appear to have no visit distribution at all.
 for name in ("bootstrap", "buffer"):
-    pol = load_buffer(f"checkpoints/pente/{name}.pt")["policies"]
+    pol = load_buffer(f"checkpoints/pente/{name}.pt")["policies"].float()
     sums = pol.sum(1)
     zero_rows = (sums == 0).nonzero().flatten()
-    ok_rows = ((sums - 1).abs() < 1e-4).sum().item()
+    ok_rows = ((sums - 1).abs() < 1e-2).sum().item()  # fp16 storage rounds each entry
     n = pol.size(0)
     print(f"\n{name}: {n} rows — sum≈1: {ok_rows}, all-zero: {zero_rows.numel()} "
           f"({100.0 * zero_rows.numel() / n:.1f}%), other: {n - ok_rows - zero_rows.numel()}")
@@ -140,7 +148,7 @@ for name in ("bootstrap", "buffer"):
         first = zero_rows[0].item()
         row = pol[first]
         assert row.count_nonzero() == 0, "expected exactly zero everywhere"
-        print(f"first zero row is sample {first} (position {first // 8}): "
+        print(f"first zero row is position {first}: "
               f"min={row.min().item()}, max={row.max().item()}, nonzero={row.count_nonzero().item()}")
         print("raw 19x19 policy of that sample:")
         print(row.view(19, 19))

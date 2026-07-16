@@ -48,9 +48,9 @@ static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::De
     for (int64_t start = 0; start < n; start += BATCH_SIZE) {
         int64_t end = std::min<int64_t>(start + BATCH_SIZE, n);
 
-        auto states   = val.states.slice(0, start, end).to(device);
         auto captures = val.captures.slice(0, start, end).to(device);
-        auto policies = val.policies.slice(0, start, end).to(device);
+        auto states   = decodeStates(val.states.slice(0, start, end).to(device), captures);
+        auto policies = val.policies.slice(0, start, end).to(device, torch::kFloat);
         auto values   = val.values.slice(0, start, end).to(device);
 
         auto [logPolicy, valuePred] = model->forward(states, captures);
@@ -87,10 +87,13 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
     for (int step = 0; step < gradientSteps; step++) {
         auto idx = torch::randint(0, n, {BATCH_SIZE}, torch::kInt64).to(device);
 
-        auto bStates   = states.index_select(0, idx);
+        auto bStones   = states.index_select(0, idx);
         auto bCaptures = captures.index_select(0, idx);
         auto bPolicies = policies.index_select(0, idx);
         auto bValues   = values.index_select(0, idx);
+        augmentBatch(bStones, bCaptures, bPolicies, bValues);
+        auto bStates = decodeStates(bStones, bCaptures);
+        bPolicies    = bPolicies.to(torch::kFloat);
 
         optimizer.zero_grad();
         auto [logPolicy, valuePred] = model->forward(bStates, bCaptures);
