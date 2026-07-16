@@ -80,8 +80,13 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
             }
         }
 
+        int32_t rootVisits = root->visits.load(std::memory_order_relaxed);
+        float rootQ = rootVisits > 0
+            ? static_cast<float>(root->totalValue.load(std::memory_order_relaxed) / rootVisits)
+            : 0.0f;
+
         auto [planes, captures] = NNEvaluator::gameToTensors(game);
-        examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f});
+        examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f, rootQ});
 
         int chosen = 0;
         if (solvedWinIdx >= 0) {
@@ -105,12 +110,16 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     }
 
     PenteGame::Player winner = game.getWinner();
-    for (auto &ex : examples)
-        // Convention: value = +1 if the player who MOVED INTO this position wins
+    for (auto &ex : examples) {
+        // Convention: z = +1 if the player who MOVED INTO this position wins
         // (previous-player perspective), matching HeuristicEvaluator and MCTS backprop.
-        ex.value = (winner == PenteGame::NONE) ? 0.0f
-                 : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
-                                                :  1.0f;  // current player lost → previous player won
+        // ex.rootValue was captured in the same perspective at search time, so no sign
+        // adjustment is needed to blend the two.
+        float z = (winner == PenteGame::NONE) ? 0.0f
+                : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
+                                               :  1.0f;  // current player lost → previous player won
+        ex.value = cfg.valueBlendAlpha * z + (1.0f - cfg.valueBlendAlpha) * ex.rootValue;
+    }
 
     return examples;
 }

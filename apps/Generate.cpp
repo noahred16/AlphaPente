@@ -93,6 +93,7 @@ int main(int argc, char *argv[]) {
     spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.25f;
+    spConfig.valueBlendAlpha  = 0.5f;
     spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 1;
     spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
 

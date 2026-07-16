@@ -9,26 +9,25 @@ GAMES=200
 SIMS=800
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
-ARENA=false
+ARENA=true
 ARENA_GAMES=10
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [-n games] [-s sims] [-i max_iters] [-g game] [-a]
+Usage: $(basename "$0") [-n games] [-s sims] [-i max_iters] [-g game]
 
 Options:
   -n  self-play games per iteration        (default: $GAMES)
   -s  MCTS simulations per move            (default: $SIMS)
   -i  max iterations, 0 = run forever      (default: $MAX_ITERS)
   -g  game: pente | gomoku | keryopente    (default: $GAME)
-  -a  run arena evaluation after each iteration
+
+Each iteration runs an arena evaluation (NN vs heuristic at 3 sim tiers +
+any roster models) in addition to the promotion gates.
 
 Examples:
   # standard self-play training
   ./scripts/train_loop.sh -n 50 -s 800 -g pente
-
-  # with arena enabled (NN vs heuristic at 3 sim tiers + any roster models)
-  ./scripts/train_loop.sh -n 50 -s 800 -g pente -a
 
   # quick smoke-test: 3 iterations, small game count
   ./scripts/train_loop.sh -n 10 -s 100 -i 3 -g pente
@@ -37,13 +36,12 @@ EOF
 
 for arg in "$@"; do [[ "$arg" == "--help" ]] && { usage; exit 0; }; done
 
-while getopts "n:s:i:g:ah" opt; do
+while getopts "n:s:i:g:h" opt; do
     case $opt in
         n) GAMES=$OPTARG ;;
         s) SIMS=$OPTARG ;;
         i) MAX_ITERS=$OPTARG ;;
         g) GAME=$OPTARG ;;
-        a) ARENA=true ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
     esac
@@ -91,6 +89,10 @@ while true; do
     ./generate -g "$GAME" -n "$GAMES" -s "$SIMS" 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
+    CKPT_DIR="$ROOT_DIR/checkpoints/$GAME"
+    PREV_BEST="$CKPT_DIR/best_model.pt.prev"
+    cp "$CKPT_DIR/best_model.pt" "$PREV_BEST"
+
     train_out=$(./train -g "$GAME" 2>&1)
     echo "$train_out" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
@@ -124,10 +126,30 @@ while true; do
         fi
     fi
 
+    # ── Promotion arena: val-loss gate passing isn't enough on its own — it's
+    # measured against a held-out slice of the model's own tiny recent self-play
+    # buffer, which can keep looking "improved" even while real playing strength
+    # regresses. Require an actual arena win over the previous best_model.pt too.
+    if [[ "$promoted" == true ]]; then
+        echo "" | tee -a "$LOG"
+        echo "── Promotion arena: candidate vs previous best_model.pt ────────────" | tee -a "$LOG"
+        arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -P "$PREV_BEST" 2>&1)
+        echo "$arena_out" | tee -a "$LOG"
+        nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
+        opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
+        if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
+            cp "$PREV_BEST" "$CKPT_DIR/best_model.pt"
+            promoted=false
+            echo "  → candidate did not beat previous best_model.pt ($nn_wins-$opp_wins) — reverted, best_model.pt unchanged" | tee -a "$LOG"
+        else
+            echo "  → candidate beat previous best_model.pt ($nn_wins-$opp_wins) — promotion confirmed" | tee -a "$LOG"
+        fi
+    fi
+
     # ── Roster promotion ─────────────────────────────────────────────────
     if [[ "$promoted" == false ]]; then
         echo "" | tee -a "$LOG"
-        echo "── Roster promotion skipped — validation gate rejected this iteration (best_model.pt unchanged) ──" | tee -a "$LOG"
+        echo "── Roster promotion skipped — this iteration was not promoted (best_model.pt unchanged) ──" | tee -a "$LOG"
     else
         ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
         CURRENT_MODEL=$(ls -t "$ROOT_DIR/checkpoints/$GAME/model_iter"*.pt 2>/dev/null | head -1)

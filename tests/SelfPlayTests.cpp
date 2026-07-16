@@ -44,14 +44,25 @@ TEST_CASE("SelfPlay - policy tensor is a valid probability distribution") {
     }
 }
 
-TEST_CASE("SelfPlay - value targets are valid game outcomes") {
+TEST_CASE("SelfPlay - value targets are a bounded blend of outcome and root Q") {
     NNEvaluator eval;
     std::mt19937 rng(42);
-    auto examples = runGame(eval, PenteGame::Config::pente(), fastConfig(), rng);
+    auto cfg = fastConfig();
+    auto examples = runGame(eval, PenteGame::Config::pente(), cfg, rng);
 
     REQUIRE(!examples.empty());
-    for (const auto &ex : examples)
-        CHECK((ex.value == -1.0f || ex.value == 0.0f || ex.value == 1.0f));
+    for (const auto &ex : examples) {
+        // value = alpha*z + (1-alpha)*rootValue, and both z and rootValue lie in
+        // [-1, 1], so the blend must too.
+        CHECK(ex.value >= -1.0f);
+        CHECK(ex.value <= 1.0f);
+
+        // Back out the implied z and check it's one of the three valid outcomes.
+        float impliedZ = (ex.value - (1.0f - cfg.valueBlendAlpha) * ex.rootValue) / cfg.valueBlendAlpha;
+        CHECK((std::abs(impliedZ - 1.0f) < 1e-4f ||
+               std::abs(impliedZ) < 1e-4f ||
+               std::abs(impliedZ + 1.0f) < 1e-4f));
+    }
 }
 
 TEST_CASE("SelfPlay - players alternate each move") {
@@ -67,28 +78,34 @@ TEST_CASE("SelfPlay - players alternate each move") {
     CHECK(examples[0].player == PenteGame::BLACK);
 }
 
-TEST_CASE("SelfPlay - value is consistent within each player across the game") {
+TEST_CASE("SelfPlay - implied outcome is consistent within each player across the game") {
     NNEvaluator eval;
     std::mt19937 rng(42);
-    auto examples = runGame(eval, PenteGame::Config::pente(), fastConfig(), rng);
+    auto cfg = fastConfig();
+    auto examples = runGame(eval, PenteGame::Config::pente(), cfg, rng);
 
     REQUIRE(!examples.empty());
 
-    // Every example for the same player must have the same value
-    // (outcome doesn't change per move — it's a single game result)
-    float bVal = examples[0].value;
-    float wVal = (examples.size() > 1) ? examples[1].value : bVal;
+    // The outcome component (z) doesn't change per move — it's a single game
+    // result — but ex.value itself now varies per move since it's blended with
+    // that position's own root Q. Back out z per example and check that.
+    auto impliedZ = [&](const SelfPlayExample &ex) {
+        return (ex.value - (1.0f - cfg.valueBlendAlpha) * ex.rootValue) / cfg.valueBlendAlpha;
+    };
+
+    float bVal = impliedZ(examples[0]);
+    float wVal = (examples.size() > 1) ? impliedZ(examples[1]) : bVal;
 
     for (const auto &ex : examples) {
         if (ex.player == PenteGame::BLACK)
-            CHECK(ex.value == bVal);
+            CHECK(std::abs(impliedZ(ex) - bVal) < 1e-4f);
         else
-            CHECK(ex.value == wVal);
+            CHECK(std::abs(impliedZ(ex) - wVal) < 1e-4f);
     }
 
-    // If there's a winner, values must be opposite (+1/-1)
-    if (bVal != 0.0f)
-        CHECK(bVal == -wVal);
+    // If there's a winner, outcomes must be opposite (+1/-1)
+    if (std::abs(bVal) > 1e-4f)
+        CHECK(std::abs(bVal + wVal) < 1e-4f);
 }
 
 TEST_CASE("SelfPlay - board planes have correct shape and binary values") {
