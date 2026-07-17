@@ -6,7 +6,7 @@
 set -euo pipefail
 
 GAMES=200
-SIMS=800
+SIMS=1600
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
 ARENA=false  # informational only (3-tier heuristic + full roster sweep every iteration);
@@ -24,8 +24,8 @@ Options:
   -i  max iterations, 0 = run forever      (default: $MAX_ITERS)
   -g  game: pente | gomoku | keryopente    (default: $GAME)
 
-Each iteration runs an arena evaluation (NN vs heuristic at 3 sim tiers +
-any roster models) in addition to the promotion gates.
+Each iteration runs a promotion arena (candidate vs previous best_model.pt)
+after training; roster growth/checks are not part of the self-play loop.
 
 Examples:
   # standard self-play training
@@ -155,45 +155,6 @@ while true; do
             echo "  → candidate did not reach 45% vs previous best_model.pt ($nn_wins-$opp_wins) — reverted, best_model.pt unchanged" | tee -a "$LOG"
         else
             echo "  → candidate reached $(( decisive > 0 ? nn_wins * 100 / decisive : 0 ))% vs previous best_model.pt ($nn_wins-$opp_wins) — promotion confirmed" | tee -a "$LOG"
-        fi
-    fi
-
-    # ── Roster promotion ─────────────────────────────────────────────────
-    if [[ "$promoted" == false ]]; then
-        echo "" | tee -a "$LOG"
-        echo "── Roster promotion skipped — this iteration was not promoted (best_model.pt unchanged) ──" | tee -a "$LOG"
-    else
-        ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
-
-        if [[ -n "$CANDIDATE" ]]; then
-            mkdir -p "$ROSTER_DIR"
-            shopt -s nullglob
-            roster_models=("$ROSTER_DIR"/*.pt)
-            shopt -u nullglob
-
-            promote=true
-            for model in "${roster_models[@]}"; do
-                [[ "$(basename "$model")" == "$(basename "$CANDIDATE")" ]] && continue
-                name=$(basename "$model" .pt)
-                echo "" | tee -a "$LOG"
-                echo "── Roster check: $name ──────────────────────────────────────────" | tee -a "$LOG"
-                arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$ARENA_SIMS" -P "$model" -p "$CANDIDATE" 2>&1)
-                echo "$arena_out" | tee -a "$LOG"
-                nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
-                opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
-                if [[ -z "$nn_wins" || "$nn_wins" -lt "$opp_wins" ]]; then
-                    promote=false
-                    echo "  → did not beat $name — not added to roster (training continues unaffected)" | tee -a "$LOG"
-                    break
-                fi
-            done
-
-            if [[ "$promote" == true ]]; then
-                model_name=$(basename "$CANDIDATE")
-                cp "$CANDIDATE" "$ROSTER_DIR/$model_name"
-                echo "" | tee -a "$LOG"
-                echo "★ New roster member: $model_name" | tee -a "$LOG"
-            fi
         fi
     fi
 
