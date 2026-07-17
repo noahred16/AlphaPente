@@ -30,7 +30,7 @@ struct SelfPlayConfig {
     // maximally-confident target regardless of how far it is from the decisive endgame;
     // blending in the position's own search estimate tempers that for early/uncertain
     // positions. See KataGo/AlphaZero-descendant value target design.
-    float valueBlendAlpha    = 0.5f;
+    float valueBlendAlpha    = 0.6f;
 };
 
 // Build the policy-target visit counts from raw root-child visits. If a proven

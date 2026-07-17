@@ -88,12 +88,18 @@ int main(int argc, char *argv[]) {
     if (!useHeuristic)
         torch::set_num_threads(1);  // 1w/6e: each eval thread runs its own forward pass
 
+    // Separate knobs so bootstrap (heuristic, no NN root Q worth trusting yet)
+    // and self-play (NN-guided root Q) can diverge later even though they
+    // start at the same value.
+    constexpr float kBootstrapValueBlendAlpha = 0.6f;
+    constexpr float kSelfPlayValueBlendAlpha  = 0.6f;
+
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
     spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.25f;
-    spConfig.valueBlendAlpha  = 0.5f;
+    spConfig.valueBlendAlpha  = bootstrap ? kBootstrapValueBlendAlpha : kSelfPlayValueBlendAlpha;
     spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 1;
     spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
 

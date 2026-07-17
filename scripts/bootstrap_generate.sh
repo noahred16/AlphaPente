@@ -6,8 +6,8 @@
 set -euo pipefail
 
 GAME="${1:-pente}"
-BATCHES=10
-GAMES_PER_BATCH=100
+BATCHES=1
+GAMES_PER_BATCH=1
 SIMS=25000
 TAIL=999
 

@@ -8,7 +8,7 @@ def load_buffer(path):
     ar = torch.jit.load(path)
     return {name: getattr(ar, name) for name in ("states", "captures", "policies", "values")}
 
-for name in ("bootstrap", "buffer"):
+for name in ("bootstrap",):
     buf = load_buffer(f"checkpoints/pente/{name}.pt")
     print(f"{name}:")
     for key, t in buf.items():
@@ -89,7 +89,7 @@ def analyze(name):
                  for p in reach}
         print(f"    {d:>4} {len(reach):>6} {len(raw):>6} {len(canon):>8}")
 
-for name in ("bootstrap", "buffer"):
+for name in ("bootstrap",):
     analyze(name)
 
 # Peek at the last game record in each buffer.
@@ -131,12 +131,12 @@ def print_game(name):
         moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
         print(f"top policy moves: {moves}")
 
-for name in ("bootstrap", "buffer"):
+for name in ("bootstrap",):
     print_game(name)
 
 # Verify the all-zero policy rows: a valid policy target should sum to 1,
 # but some positions appear to have no visit distribution at all.
-for name in ("bootstrap", "buffer"):
+for name in ("bootstrap",):
     pol = load_buffer(f"checkpoints/pente/{name}.pt")["policies"].float()
     sums = pol.sum(1)
     zero_rows = (sums == 0).nonzero().flatten()
