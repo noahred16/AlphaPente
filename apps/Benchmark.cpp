@@ -222,8 +222,13 @@ static SuiteResult runSuiteCheck(Evaluator *evaluator, ParallelMCTS *suiteMcts,
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
-static std::string latestCheckpoint(const std::string &ckptDir) {
-    std::string best;
+// Default candidate: the promoted best_model.pt. Falls back to the latest
+// trained model_iterNNNN.pt only if no model has been promoted yet.
+static std::string defaultCheckpoint(const std::string &ckptDir) {
+    std::string bestPath = ckptDir + "/best_model.pt";
+    if (std::filesystem::exists(bestPath)) return bestPath;
+
+    std::string latest;
     int maxIter = 0;
     if (std::filesystem::exists(ckptDir)) {
         for (const auto &entry : std::filesystem::directory_iterator(ckptDir)) {
@@ -231,13 +236,12 @@ static std::string latestCheckpoint(const std::string &ckptDir) {
             if (stem.rfind("model_iter", 0) == 0) {
                 try {
                     int n = std::stoi(stem.substr(10));
-                    if (n > maxIter) { maxIter = n; best = entry.path().string(); }
+                    if (n > maxIter) { maxIter = n; latest = entry.path().string(); }
                 } catch (...) {}
             }
         }
     }
-    if (!best.empty()) return best;
-    return ckptDir + "/best_model.pt";  // fallback before first training run
+    return latest.empty() ? bestPath : latest;
 }
 
 int main(int argc, char *argv[]) {
@@ -253,7 +257,7 @@ int main(int argc, char *argv[]) {
     }
 
     const std::string ckptDir        = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
-    std::string       modelPath      = latestCheckpoint(ckptDir);
+    std::string       modelPath      = defaultCheckpoint(ckptDir);
     std::string       outPath        = std::string(PROJECT_ROOT) + "/reports/" + gameFlag + "/benchmark.csv";
     const std::string openThreePath  = std::string(PROJECT_ROOT) + "/tests/open-three-suite.json";
     const std::string valueSuitePath = std::string(PROJECT_ROOT) + "/tests/value-suite.json";
@@ -265,6 +269,7 @@ int main(int argc, char *argv[]) {
     int         arenaSims    = 800;
     int         opponentSims = 0;     // 0 = same as arenaSims
     int         suiteSims    = 0;     // 0 = raw policy, >0 = MCTS with N sims
+    float       suiteExplorationC = 1.7f;  // exploration constant for the MCTS suite search
     std::string opponentPath;
 
     auto resolve = [](const std::string &path) {
@@ -279,10 +284,11 @@ int main(int argc, char *argv[]) {
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
-            "  -p  candidate model checkpoint              (default: latest in checkpoints/<game>/)\n"
+            "  -p  candidate model checkpoint              (default: best_model.pt in checkpoints/<game>/)\n"
             "  -t  test suite JSON path                    (default: tests/open-three-suite.json)\n"
             "  -o  CSV output path                         (default: reports/<game>/benchmark.csv)\n"
             "  -s  suite MCTS sims per position (0=raw policy) (default: " << suiteSims << ")\n"
+            "  -C  exploration constant for the MCTS suite search (default: " << suiteExplorationC << ")\n"
             "  -V  value suite: check value sign instead of top move (default suite: tests/value-suite.json)\n"
             "  -a  run arena match after the suite\n"
             "  -G  arena game count                        (default: " << arenaGames << ")\n"
@@ -311,9 +317,10 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:C:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
         else if (opt == 'p') modelPath    = resolve(optarg);
+        else if (opt == 'C') suiteExplorationC = std::stof(optarg);
         else if (opt == 't') { suitePath  = resolve(optarg); fullMode = false; }
         else if (opt == 'o') outPath      = resolve(optarg);
         else if (opt == 's') { suiteSims  = std::stoi(optarg); fullMode = false; }
@@ -394,7 +401,7 @@ int main(int argc, char *argv[]) {
             {
                 ParallelMCTS::Config cfg;
                 cfg.maxIterations       = 800;
-                cfg.explorationConstant = 1.7;
+                cfg.explorationConstant = suiteExplorationC;
                 cfg.numWorkerThreads    = 6;
                 cfg.numEvalThreads      = 1;
                 cfg.arenaSize           = GameUtils::arenaSizeFromEnv();
@@ -456,7 +463,7 @@ int main(int argc, char *argv[]) {
     if (suiteSims > 0 && nnEval) {
         ParallelMCTS::Config cfg;
         cfg.maxIterations       = suiteSims;
-        cfg.explorationConstant = 1.7;
+        cfg.explorationConstant = suiteExplorationC;
         cfg.numWorkerThreads    = 6;
         cfg.numEvalThreads      = 1;
         cfg.arenaSize           = GameUtils::arenaSizeFromEnv();

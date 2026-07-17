@@ -9,6 +9,8 @@ GAME="pente"
 CYCLES=10
 ARENA_EVERY=5          # run the full battery (incl. 3-tier heuristic arena) every N cycles; 0 = never mid-loop
 BENCHMARK_ARENA_SIMS=800
+PROMOTION_ARENA_GAMES=40  # games played vs previous best_model.pt to confirm each val-gate promotion
+PROMOTION_ARENA_SIMS=400  # lower than BENCHMARK_ARENA_SIMS to afford more games at similar total compute
 
 while getopts "g:n:a:s:" opt; do
     case $opt in
@@ -21,7 +23,10 @@ while getopts "g:n:a:s:" opt; do
 done
 
 BUILD_DIR="$(cd "$(dirname "$0")/../build" && pwd)"
-LOG_DIR="$(cd "$(dirname "$0")/.." && pwd)/logs"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
+CKPT_DIR="$ROOT_DIR/checkpoints/$GAME"
+PREV_BEST="$CKPT_DIR/best_model.pt.prev"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/bootstrap_train_$(date +%Y%m%d_%H%M%S).log"
 
@@ -51,18 +56,52 @@ for cycle in $(seq 1 "$CYCLES"); do
     echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 
+    had_baseline=false
+    if [[ -f "$CKPT_DIR/best_model.pt" ]]; then
+        had_baseline=true
+        cp "$CKPT_DIR/best_model.pt" "$PREV_BEST"
+    fi
+
     echo "── Train ────────────────────────────────────────────────────────" | tee -a "$LOG"
-    ./train -g "$GAME" -b 2>&1 | tee -a "$LOG"
+    train_out=$(./train -g "$GAME" -b 2>&1)
+    echo "$train_out" | tee -a "$LOG"
     echo "" | tee -a "$LOG"
+    promoted=true
+    echo "$train_out" | grep -q "PROMOTED" || promoted=false
+
+    # Benchmark the model this cycle just trained, not necessarily
+    # best_model.pt (which now defaults for ./benchmark, but may still be a
+    # previous cycle's model if this candidate isn't promoted below).
+    CANDIDATE=$(ls -t "$CKPT_DIR/model_iter"*.pt 2>/dev/null | head -1)
+
+    # ── Promotion arena: the val-loss gate is measured against a held-out
+    # slice of this same static bootstrap buffer, so it can't tell memorizing
+    # that buffer apart from actually playing better. Require an arena win
+    # over the previous best_model.pt too before keeping the promotion.
+    if [[ "$promoted" == true && "$had_baseline" == true ]]; then
+        echo "── Promotion arena: candidate vs previous best_model.pt ────────────" | tee -a "$LOG"
+        arena_out=$(./benchmark -g "$GAME" -a -G "$PROMOTION_ARENA_GAMES" -S "$PROMOTION_ARENA_SIMS" -P "$PREV_BEST" -p "$CANDIDATE" 2>&1)
+        echo "$arena_out" | tee -a "$LOG"
+        nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
+        opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
+        if [[ -z "$nn_wins" || "$nn_wins" -lt "$opp_wins" ]]; then
+            cp "$PREV_BEST" "$CKPT_DIR/best_model.pt"
+            promoted=false
+            echo "  → candidate did not beat previous best_model.pt ($nn_wins-$opp_wins) — reverted, best_model.pt unchanged" | tee -a "$LOG"
+        else
+            echo "  → candidate beat previous best_model.pt ($nn_wins-$opp_wins) — promotion confirmed" | tee -a "$LOG"
+        fi
+        echo "" | tee -a "$LOG"
+    fi
 
     if (( ARENA_EVERY > 0 && cycle % ARENA_EVERY == 0 )); then
         echo "── Benchmark (full battery) ────────────────────────────────────────" | tee -a "$LOG"
-        ./benchmark -g "$GAME" 2>&1 | tee -a "$LOG"
+        ./benchmark -g "$GAME" -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
         LAST_CYCLE_WAS_FULL=true
     else
         echo "── Benchmark (quick: policy + value sign) ──────────────────────────" | tee -a "$LOG"
-        ./benchmark -g "$GAME" -s 0 2>&1 | tee -a "$LOG"
-        ./benchmark -g "$GAME" -V 2>&1 | tee -a "$LOG"
+        ./benchmark -g "$GAME" -s 0 -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
+        ./benchmark -g "$GAME" -V -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
         LAST_CYCLE_WAS_FULL=false
     fi
     echo "" | tee -a "$LOG"

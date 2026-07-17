@@ -41,6 +41,12 @@ class GameUtils {
 
     // Read NUM_THREADS from env var or .env file; aborts if unset or invalid.
     static int numThreadsFromEnv();
+
+    // PUCT exploration constant, scaled down as the game progresses: a wide-open
+    // early/tactical position needs more exploitation-focused search to
+    // concentrate a limited sim budget on forcing lines, vs. a settled late-game
+    // position where broader exploration is cheaper to afford.
+    static double explorationConstantForMoveCount(int moveCount);
 };
 
 #endif // GAMEUTILS_HPP

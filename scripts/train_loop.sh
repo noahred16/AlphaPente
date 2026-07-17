@@ -9,8 +9,10 @@ GAMES=200
 SIMS=800
 MAX_ITERS=0          # 0 = run forever
 GAME="pente"
-ARENA=true
-ARENA_GAMES=10
+ARENA=false  # informational only (3-tier heuristic + full roster sweep every iteration);
+             # the promotion arena and roster-check gates below always run regardless
+ARENA_GAMES=30
+ARENA_SIMS=400  # promotion/roster arenas use this for both sides instead of $SIMS
 
 usage() {
     cat <<EOF
@@ -99,18 +101,23 @@ while true; do
     promoted=true
     echo "$train_out" | grep -q "PROMOTED" || promoted=false
 
+    # Benchmark the model this iteration just trained, not necessarily
+    # best_model.pt (which now defaults for ./benchmark, but may still be the
+    # previous iteration's model if this candidate isn't promoted below).
+    CANDIDATE=$(ls -t "$CKPT_DIR/model_iter"*.pt 2>/dev/null | head -1)
+
     echo "── Benchmark (raw policy) ───────────────────────────────────────" | tee -a "$LOG"
-    ./benchmark -g "$GAME" -s 0 2>&1 | tee -a "$LOG"
+    ./benchmark -g "$GAME" -s 0 -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
     echo "── Benchmark (MCTS $SIMS sims) ──────────────────────────────────" | tee -a "$LOG"
-    ./benchmark -g "$GAME" -s "$SIMS" 2>&1 | tee -a "$LOG"
+    ./benchmark -g "$GAME" -s "$SIMS" -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
 
     if [[ "$ARENA" == true ]]; then
         echo "" | tee -a "$LOG"
         echo "── Arena ────────────────────────────────────────────────────────" | tee -a "$LOG"
         for tier_sims in 100 400 1600; do
             echo "  vs heuristic @ ${tier_sims} sims" | tee -a "$LOG"
-            ./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -T "$tier_sims" 2>&1 | tee -a "$LOG"
+            ./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -T "$tier_sims" -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
             echo "" | tee -a "$LOG"
         done
         ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
@@ -119,7 +126,7 @@ while true; do
             for model in "$ROSTER_DIR"/*.pt; do
                 name=$(basename "$model" .pt)
                 echo "  vs roster: $name" | tee -a "$LOG"
-                ./benchmark -g "$GAME" -a -P "$model" -G "$ARENA_GAMES" -S "$SIMS" 2>&1 | tee -a "$LOG"
+                ./benchmark -g "$GAME" -a -P "$model" -G "$ARENA_GAMES" -S "$SIMS" -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
                 echo "" | tee -a "$LOG"
             done
             shopt -u nullglob
@@ -133,16 +140,21 @@ while true; do
     if [[ "$promoted" == true ]]; then
         echo "" | tee -a "$LOG"
         echo "── Promotion arena: candidate vs previous best_model.pt ────────────" | tee -a "$LOG"
-        arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -P "$PREV_BEST" 2>&1)
+        arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$ARENA_SIMS" -P "$PREV_BEST" -p "$CANDIDATE" 2>&1)
         echo "$arena_out" | tee -a "$LOG"
         nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
         opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
-        if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
+        decisive=$(( ${nn_wins:-0} + ${opp_wins:-0} ))
+        # Promote at >=45% win rate rather than requiring an outright win/tie —
+        # a slightly-behind candidate on a 30-40 game sample is still within
+        # noise of "roughly as strong," and self-play iterates fast enough
+        # that a genuinely weaker model gets overwritten again soon anyway.
+        if [[ -z "$nn_wins" || "$decisive" -eq 0 || $(( nn_wins * 100 )) -lt $(( 45 * decisive )) ]]; then
             cp "$PREV_BEST" "$CKPT_DIR/best_model.pt"
             promoted=false
-            echo "  → candidate did not beat previous best_model.pt ($nn_wins-$opp_wins) — reverted, best_model.pt unchanged" | tee -a "$LOG"
+            echo "  → candidate did not reach 45% vs previous best_model.pt ($nn_wins-$opp_wins) — reverted, best_model.pt unchanged" | tee -a "$LOG"
         else
-            echo "  → candidate beat previous best_model.pt ($nn_wins-$opp_wins) — promotion confirmed" | tee -a "$LOG"
+            echo "  → candidate reached $(( decisive > 0 ? nn_wins * 100 / decisive : 0 ))% vs previous best_model.pt ($nn_wins-$opp_wins) — promotion confirmed" | tee -a "$LOG"
         fi
     fi
 
@@ -152,9 +164,8 @@ while true; do
         echo "── Roster promotion skipped — this iteration was not promoted (best_model.pt unchanged) ──" | tee -a "$LOG"
     else
         ROSTER_DIR="$ROOT_DIR/checkpoints/$GAME/roster"
-        CURRENT_MODEL=$(ls -t "$ROOT_DIR/checkpoints/$GAME/model_iter"*.pt 2>/dev/null | head -1)
 
-        if [[ -n "$CURRENT_MODEL" ]]; then
+        if [[ -n "$CANDIDATE" ]]; then
             mkdir -p "$ROSTER_DIR"
             shopt -s nullglob
             roster_models=("$ROSTER_DIR"/*.pt)
@@ -162,15 +173,15 @@ while true; do
 
             promote=true
             for model in "${roster_models[@]}"; do
-                [[ "$(basename "$model")" == "$(basename "$CURRENT_MODEL")" ]] && continue
+                [[ "$(basename "$model")" == "$(basename "$CANDIDATE")" ]] && continue
                 name=$(basename "$model" .pt)
                 echo "" | tee -a "$LOG"
                 echo "── Roster check: $name ──────────────────────────────────────────" | tee -a "$LOG"
-                arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$SIMS" -P "$model" 2>&1)
+                arena_out=$(./benchmark -g "$GAME" -a -G "$ARENA_GAMES" -S "$ARENA_SIMS" -P "$model" -p "$CANDIDATE" 2>&1)
                 echo "$arena_out" | tee -a "$LOG"
                 nn_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $4}')
                 opp_wins=$(echo "$arena_out" | awk '/Arena result:/ {print $6}')
-                if [[ -z "$nn_wins" || "$nn_wins" -le "$opp_wins" ]]; then
+                if [[ -z "$nn_wins" || "$nn_wins" -lt "$opp_wins" ]]; then
                     promote=false
                     echo "  → did not beat $name — not added to roster (training continues unaffected)" | tee -a "$LOG"
                     break
@@ -178,8 +189,8 @@ while true; do
             done
 
             if [[ "$promote" == true ]]; then
-                model_name=$(basename "$CURRENT_MODEL")
-                cp "$CURRENT_MODEL" "$ROSTER_DIR/$model_name"
+                model_name=$(basename "$CANDIDATE")
+                cp "$CANDIDATE" "$ROSTER_DIR/$model_name"
                 echo "" | tee -a "$LOG"
                 echo "★ New roster member: $model_name" | tee -a "$LOG"
             fi

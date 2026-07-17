@@ -115,6 +115,10 @@ int GameUtils::numThreadsFromEnv() {
     std::exit(1);
 }
 
+double GameUtils::explorationConstantForMoveCount(int moveCount) {
+    return moveCount <= 10 ? 2.5 : moveCount <= 18 ? 1.8 : 1.414;
+}
+
 size_t GameUtils::arenaSizeFromEnv(size_t defaultGb) {
     const char *val = std::getenv("ARENA_SIZE_GB");
     if (val && std::strlen(val) > 0) {

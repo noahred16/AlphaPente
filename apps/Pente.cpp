@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
 
     // Scale exploration constant based on game phase
     int mc = game.getMoveCount();
-    double explorationConstant = mc <= 10 ? 2.5 : mc <= 18 ? 1.8 : 1.414;
+    double explorationConstant = GameUtils::explorationConstantForMoveCount(mc);
     std::cout << "Exploration constant: " << explorationConstant
               << " (move " << mc << ")\n" << std::flush;
 

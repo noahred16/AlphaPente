@@ -2,6 +2,7 @@
 
 #include "SelfPlay.hpp"
 #include "Evaluator.hpp"
+#include "GameUtils.hpp"
 #include "NNModel.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
@@ -30,7 +31,6 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     mctsConfig.numWorkerThreads   = cfg.numWorkerThreads;
     mctsConfig.numEvalThreads     = cfg.numEvalThreads;
     mctsConfig.seed               = static_cast<uint32_t>(rng());
-    mctsConfig.explorationConstant = cfg.explorationC;
     mctsConfig.dirichletAlpha     = cfg.dirichletAlpha;
     mctsConfig.dirichletEpsilon   = cfg.dirichletEpsilon;
     ParallelMCTS mcts(mctsConfig);
@@ -39,11 +39,14 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     std::vector<SelfPlayExample> examples;
 
     while (!game.isGameOver()) {
-        if (game.getMoveCount() == cfg.explorationDropoff) {
-            auto c = mcts.getConfig();
-            c.dirichletEpsilon = 0.0f;
-            mcts.setConfig(c);
-        }
+        // Both scale with game phase: exploration constant tapers continuously
+        // (see GameUtils::explorationConstantForMoveCount — matches the pente
+        // app's tuning), while Dirichlet noise is a one-time on/off switch at
+        // explorationDropoff.
+        auto c = mcts.getConfig();
+        c.explorationConstant = GameUtils::explorationConstantForMoveCount(game.getMoveCount());
+        c.dirichletEpsilon    = (game.getMoveCount() >= cfg.explorationDropoff) ? 0.0f : cfg.dirichletEpsilon;
+        mcts.setConfig(c);
         mcts.search(game);
 
         const auto *root = mcts.getRoot();

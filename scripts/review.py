@@ -1,6 +1,21 @@
 # purpose of this script is to do a quick review of the shapes of these pente training sets: bootstrap and buffer.
+#
+# usage: review.py [bu|bo]
+#   (no arg)  review both bootstrap and buffer
+#   bu        review buffer only
+#   bo        review bootstrap only
+
+import sys
 
 import torch
+
+_MODES = {"bu": ("buffer",), "bo": ("bootstrap",)}
+if len(sys.argv) > 1:
+    if sys.argv[1] not in _MODES:
+        sys.exit(f"usage: {sys.argv[0]} [bu|bo]")
+    BUFFERS = _MODES[sys.argv[1]]
+else:
+    BUFFERS = ("bootstrap", "buffer")
 
 # Files are written by LibTorch's OutputArchive (see apps/TrainCommon.hpp),
 # so load them as jit modules and read the named tensors.
@@ -8,7 +23,7 @@ def load_buffer(path):
     ar = torch.jit.load(path)
     return {name: getattr(ar, name) for name in ("states", "captures", "policies", "values")}
 
-for name in ("bootstrap",):
+for name in BUFFERS:
     buf = load_buffer(f"checkpoints/pente/{name}.pt")
     print(f"{name}:")
     for key, t in buf.items():
@@ -89,7 +104,7 @@ def analyze(name):
                  for p in reach}
         print(f"    {d:>4} {len(reach):>6} {len(raw):>6} {len(canon):>8}")
 
-for name in ("bootstrap",):
+for name in BUFFERS:
     analyze(name)
 
 # Peek at the last game record in each buffer.
@@ -102,6 +117,26 @@ def move_name(idx):
     y, x = divmod(idx, 19)
     return f"{COLS[x]}{y + 1}"
 
+# No move history is stored, but it can be recovered: a state's plane 0 is
+# always "to-move"'s stones and plane 1 "opponent"'s, so identity flips every
+# ply. The stone just placed is exactly the one in plane 1 of pos+1 that
+# wasn't already in plane 0 of pos (everything else there is the mover's own
+# older stones, carried over minus whatever this move captured).
+def infer_moves(states, begin, end):
+    moves = []
+    for pos in range(begin, end - 1):
+        diff = (states[pos + 1, 1].int() - states[pos, 0].int()).flatten()
+        idx = (diff == 1).nonzero()
+        moves.append(move_name(idx[0].item()) if idx.numel() else "?")
+    return moves
+
+# Round-numbered notation, e.g. "1. K10 L9 2. K12 M10" (see CLAUDE.md). Pente's
+# first move is always the center (K10), so for full games moves[0] is
+# reliably player 1's opener and the alternation below lines up correctly.
+def format_moves(moves):
+    pairs = (f"{i // 2 + 1}. " + " ".join(moves[i:i + 2]) for i in range(0, len(moves), 2))
+    return " ".join(pairs)
+
 # Positions are stored once, in game order (symmetries applied at train time).
 # Reuses stone_counts/segment_games (defined above) to find the last game's
 # record rather than re-deriving boundaries here.
@@ -112,6 +147,8 @@ def print_game(name):
     full = stones_all[begin] == 0
     tag = "" if full else ", tail-trimmed — starts mid-game"
     print(f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────")
+
+    move_history = infer_moves(buf["states"], begin, end)
 
     for pos in range(begin, end):
         state = buf["states"][pos]
@@ -125,18 +162,19 @@ def print_game(name):
             row = " ".join("X" if state[0, y, x] else "O" if state[1, y, x] else "." for x in range(19))
             print(f"{y + 1:>2} {row}")
         print("   " + " ".join(COLS))
+        print(f"moves: {format_moves(move_history[:pos - begin]) or '(none yet)'}")
         print(f"captures (my, opp): {caps.tolist()}   value: {value:+.3f}")
 
         top = policy.topk(5)
         moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
         print(f"top policy moves: {moves}")
 
-for name in ("bootstrap",):
+for name in BUFFERS:
     print_game(name)
 
 # Verify the all-zero policy rows: a valid policy target should sum to 1,
 # but some positions appear to have no visit distribution at all.
-for name in ("bootstrap",):
+for name in BUFFERS:
     pol = load_buffer(f"checkpoints/pente/{name}.pt")["policies"].float()
     sums = pol.sum(1)
     zero_rows = (sums == 0).nonzero().flatten()

@@ -85,23 +85,24 @@ int main(int argc, char *argv[]) {
               << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
               << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n\n";
 
-    if (!useHeuristic)
-        torch::set_num_threads(1);  // 1w/6e: each eval thread runs its own forward pass
-
     // Separate knobs so bootstrap (heuristic, no NN root Q worth trusting yet)
     // and self-play (NN-guided root Q) can diverge later even though they
     // start at the same value.
-    constexpr float kBootstrapValueBlendAlpha = 0.6f;
-    constexpr float kSelfPlayValueBlendAlpha  = 0.6f;
+    constexpr float kBootstrapValueBlendAlpha = 0.2f;
+    constexpr float kSelfPlayValueBlendAlpha  = 0.2f;
 
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
-    spConfig.explorationC     = 3.0f;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.25f;
     spConfig.valueBlendAlpha  = bootstrap ? kBootstrapValueBlendAlpha : kSelfPlayValueBlendAlpha;
-    spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 1;
-    spConfig.numEvalThreads   = useHeuristic ? 0 : 6;
+    // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
+    // threads feeding a single eval thread. Worker count is NOT scaled with
+    // NUM_THREADS — many threads sharing one MCTS tree contend heavily near
+    // the root (shared atomics, slab allocator mutex) before it has branched
+    // out enough to spread the load; 6 is the tested, working ratio.
+    spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 6;
+    spConfig.numEvalThreads   = useHeuristic ? 0 : 1;
 
     std::unique_ptr<Evaluator> evalPtr = useHeuristic
         ? std::unique_ptr<Evaluator>(std::make_unique<HeuristicEvaluator>())

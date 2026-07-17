@@ -19,7 +19,10 @@ struct SelfPlayExample {
 struct SelfPlayConfig {
     int   simulations        = 100;
     int   explorationDropoff = 8;    // moves after which Dirichlet noise and temp sampling are disabled
-    float explorationC       = 3.0f;
+    // Exploration constant is not a fixed knob here — runGame scales it by game
+    // phase via GameUtils::explorationConstantForMoveCount, matching the pente
+    // app's tuning (a limited sim budget needs more exploitation-focused search
+    // early/tactically, and can afford broader exploration once the game settles).
     float dirichletAlpha     = 0.3f;
     float dirichletEpsilon   = 0.25f;
     int   numWorkerThreads   = 4;
