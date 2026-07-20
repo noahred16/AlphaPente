@@ -12,8 +12,8 @@ struct SelfPlayExample {
     torch::Tensor captures;   // [2] — capture counts for each player
     torch::Tensor policy;     // [361] — MCTS visit proportions
     PenteGame::Player player; // whose turn it was
-    float value = 0.0f;       // training target: blend of game outcome and root Q (+1/-1/0 scale)
-    float rootValue = 0.0f;   // root's own totalValue/visits at search time, same perspective as value
+    float outcome = 0.0f;     // final game result z (+1/-1/0), previous-player perspective
+    float rootValue = 0.0f;   // root's own totalValue/visits at search time, same perspective as outcome
 };
 
 struct SelfPlayConfig {
@@ -27,13 +27,6 @@ struct SelfPlayConfig {
     float dirichletEpsilon   = 0.25f;
     int   numWorkerThreads   = 4;
     int   numEvalThreads     = 1;
-    // Value target = valueBlendAlpha * z + (1 - valueBlendAlpha) * rootQ, where z is
-    // the final game outcome and rootQ is this position's own root value estimate at
-    // search time. Pure z (alpha=1) gives every position in a game an identical,
-    // maximally-confident target regardless of how far it is from the decisive endgame;
-    // blending in the position's own search estimate tempers that for early/uncertain
-    // positions. See KataGo/AlphaZero-descendant value target design.
-    float valueBlendAlpha    = 0.6f;
 };
 
 // Build the policy-target visit counts from raw root-child visits. If a proven
@@ -45,8 +38,9 @@ struct SelfPlayConfig {
 std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx);
 
 // Run one self-play game. Returns one SelfPlayExample per move made.
-// Values are filled retroactively as a blend of game outcome and each
-// position's own root Q estimate (see SelfPlayConfig::valueBlendAlpha).
+// The final game outcome z and each position's own root Q estimate are kept
+// as separate fields; the value target is blended from them at train time
+// (see blendValueTargets in TrainCommon.hpp).
 std::vector<SelfPlayExample> runGame(Evaluator &eval,
                                       const PenteGame::Config &gameConfig,
                                       const SelfPlayConfig &cfg,

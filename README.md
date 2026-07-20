@@ -25,7 +25,8 @@ bash init_models.sh
 
 
 ## Python scripts setup (temp)
-
+for `scripts/generate_tests.py` - TODO convert to cpp app
+same for `scripts/review.py` - TODO convert
 ```bash
 python -m venv ~/.venvs/py312
 source ~/.venvs/py312/bin/activate

@@ -57,14 +57,11 @@ TEST_CASE("SelfPlay - bootstrap examples form valid training targets") {
         auto emptyPlane = ex.planes[2].reshape({B * B});
         CHECK((((ex.policy > 0.0f) & (emptyPlane < 0.5f))).sum().item<int64_t>() == 0);
 
-        // Value is a bounded blend of outcome and root Q; the implied outcome
-        // (backing out the root-Q component) must be a valid game outcome.
-        CHECK(ex.value >= -1.0f);
-        CHECK(ex.value <= 1.0f);
-        float impliedZ = (ex.value - (1.0f - cfg.valueBlendAlpha) * ex.rootValue) / cfg.valueBlendAlpha;
-        CHECK((std::abs(impliedZ - 1.0f) < 1e-4f ||
-               std::abs(impliedZ) < 1e-4f ||
-               std::abs(impliedZ + 1.0f) < 1e-4f));
+        // Outcome must be a valid game result and root Q a bounded value
+        // estimate — the two components of the train-time value target.
+        CHECK((ex.outcome == 1.0f || ex.outcome == 0.0f || ex.outcome == -1.0f));
+        CHECK(ex.rootValue >= -1.0f);
+        CHECK(ex.rootValue <= 1.0f);
     }
 }
 

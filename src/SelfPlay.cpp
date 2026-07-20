@@ -116,12 +116,11 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     for (auto &ex : examples) {
         // Convention: z = +1 if the player who MOVED INTO this position wins
         // (previous-player perspective), matching HeuristicEvaluator and MCTS backprop.
-        // ex.rootValue was captured in the same perspective at search time, so no sign
-        // adjustment is needed to blend the two.
-        float z = (winner == PenteGame::NONE) ? 0.0f
-                : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
-                                               :  1.0f;  // current player lost → previous player won
-        ex.value = cfg.valueBlendAlpha * z + (1.0f - cfg.valueBlendAlpha) * ex.rootValue;
+        // ex.rootValue was captured in the same perspective at search time, so the two
+        // can be blended directly at train time without sign adjustment.
+        ex.outcome = (winner == PenteGame::NONE) ? 0.0f
+                   : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
+                                                  :  1.0f;  // current player lost → previous player won
     }
 
     return examples;

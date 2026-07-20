@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Train on pre-generated bootstrap data, benchmarking after each cycle.
+# Train on pre-generated bootstrap data with validation-loss early stopping.
+# Every cycle re-trains on the same bootstrap.pt (more cycles = more passes
+# over the same data). train -b holds out the tail 10% as validation; training
+# stops once val loss hasn't improved for PATIENCE cycles. The best-val
+# checkpoint is then promoted to best_model.pt and the full benchmark battery
+# runs on it.
 # Run from anywhere in the repo.
-# Usage: ./scripts/bootstrap_train.sh [-g game] [-n cycles] [-a arena_every] [-s benchmark_arena_sims]
+# Usage: ./scripts/bootstrap_train.sh [-g game] [-n max_cycles] [-p patience] [-a arena_every]
 
 set -euo pipefail
 
 GAME="pente"
-CYCLES=10
+CYCLES=20
+PATIENCE=3
 ARENA_EVERY=5          # run the full battery (incl. 3-tier heuristic arena) every N cycles; 0 = never mid-loop
-BENCHMARK_ARENA_SIMS=800
 PROMOTION_ARENA_GAMES=40  # games played vs previous best_model.pt to confirm each val-gate promotion
-PROMOTION_ARENA_SIMS=400  # lower than BENCHMARK_ARENA_SIMS to afford more games at similar total compute
+PROMOTION_ARENA_SIMS=400  # lower than the full battery's sims to afford more games at similar total compute
 
-while getopts "g:n:a:s:" opt; do
+while getopts "g:n:p:a:" opt; do
     case $opt in
         g) GAME=$OPTARG ;;
         n) CYCLES=$OPTARG ;;
+        p) PATIENCE=$OPTARG ;;
         a) ARENA_EVERY=$OPTARG ;;
-        s) BENCHMARK_ARENA_SIMS=$OPTARG ;;
-        *) echo "Usage: $0 [-g game] [-n cycles] [-a arena_every] [-s benchmark_arena_sims]" >&2; exit 1 ;;
+        *) echo "Usage: $0 [-g game] [-n max_cycles] [-p patience] [-a arena_every]" >&2; exit 1 ;;
     esac
 done
 
@@ -34,19 +39,26 @@ cd "$BUILD_DIR"
 
 echo "Bootstrap training"      | tee "$LOG"
 echo "  game  : $GAME"         | tee -a "$LOG"
-echo "  cycles: $CYCLES (full battery every $ARENA_EVERY)" | tee -a "$LOG"
-echo "  arena sims: $BENCHMARK_ARENA_SIMS"                  | tee -a "$LOG"
+echo "  cycles: max $CYCLES (early stop after $PATIENCE stale, full battery every $ARENA_EVERY)" | tee -a "$LOG"
 echo "  log   : $LOG"          | tee -a "$LOG"
 echo "  start : $(date)"       | tee -a "$LOG"
 echo ""                        | tee -a "$LOG"
 
 START=$(date +%s)
+BEST_VAL=""
+BEST_CKPT=""
+LAST_CKPT=""
+STALE=0
 LAST_CYCLE_WAS_FULL=false
 
 cleanup() {
     ELAPSED=$(( $(date +%s) - START ))
     echo "" | tee -a "$LOG"
     echo "Stopped after ${ELAPSED}s elapsed." | tee -a "$LOG"
+    if [[ -n "$BEST_CKPT" ]]; then
+        echo "Best so far: $BEST_CKPT (val $BEST_VAL). best_model.pt still holds the LAST" | tee -a "$LOG"
+        echo "cycle's weights — promote manually: cp checkpoints/$GAME/$BEST_CKPT checkpoints/$GAME/best_model.pt" | tee -a "$LOG"
+    fi
 }
 trap cleanup INT TERM
 
@@ -94,6 +106,29 @@ for cycle in $(seq 1 "$CYCLES"); do
         echo "" | tee -a "$LOG"
     fi
 
+    VAL=$(grep -oP 'val\s+policy:.*total:\s*\K[0-9.]+' "$LOG" | tail -1 || true)
+    LAST_CKPT=$(grep -oP 'model_iter[0-9]+\.pt' "$LOG" | tail -1 || true)
+    if [[ -z "$VAL" || -z "$LAST_CKPT" ]]; then
+        echo "Could not parse val loss / saved checkpoint from train output — aborting." | tee -a "$LOG"
+        exit 1
+    fi
+
+    if [[ -z "$BEST_VAL" ]] || awk -v a="$VAL" -v b="$BEST_VAL" 'BEGIN { exit !(a < b) }'; then
+        BEST_VAL=$VAL
+        BEST_CKPT=$LAST_CKPT
+        STALE=0
+        echo ">>> val $VAL — new best ($BEST_CKPT)" | tee -a "$LOG"
+    else
+        STALE=$((STALE + 1))
+        echo ">>> val $VAL — no improvement on $BEST_VAL ($BEST_CKPT), stale $STALE/$PATIENCE" | tee -a "$LOG"
+        if (( STALE >= PATIENCE )); then
+            echo ">>> early stop after cycle $cycle" | tee -a "$LOG"
+            echo "" | tee -a "$LOG"
+            break
+        fi
+    fi
+    echo "" | tee -a "$LOG"
+
     if (( ARENA_EVERY > 0 && cycle % ARENA_EVERY == 0 )); then
         echo "── Benchmark (full battery) ────────────────────────────────────────" | tee -a "$LOG"
         ./benchmark -g "$GAME" -p "$CANDIDATE" 2>&1 | tee -a "$LOG"
@@ -107,13 +142,16 @@ for cycle in $(seq 1 "$CYCLES"); do
     echo "" | tee -a "$LOG"
 done
 
-if [[ "$LAST_CYCLE_WAS_FULL" == true ]]; then
-    echo "Last cycle already ran the full battery (3-tier heuristic arena) — skipping redundant final arena." | tee -a "$LOG"
+echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+echo "Promoting best checkpoint: $BEST_CKPT (val $BEST_VAL)"        | tee -a "$LOG"
+echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
+cp "$CKPT_DIR/$BEST_CKPT" "$CKPT_DIR/best_model.pt"
+
+if [[ "$LAST_CYCLE_WAS_FULL" == true && "$BEST_CKPT" == "$LAST_CKPT" ]]; then
+    echo "Best checkpoint already ran the full battery last cycle — skipping redundant final battery." | tee -a "$LOG"
 else
-    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-    echo "Final arena: NN vs heuristic" | tee -a "$LOG"
-    echo "════════════════════════════════════════════════════════════" | tee -a "$LOG"
-    ./benchmark -g "$GAME" -a -S "$BENCHMARK_ARENA_SIMS" 2>&1 | tee -a "$LOG"
+    echo "── Benchmark (full battery on best) ────────────────────────────────" | tee -a "$LOG"
+    ./benchmark -g "$GAME" -p "$CKPT_DIR/$BEST_CKPT" 2>&1 | tee -a "$LOG"
     echo "" | tee -a "$LOG"
 fi
 

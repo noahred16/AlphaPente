@@ -85,17 +85,10 @@ int main(int argc, char *argv[]) {
               << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
               << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n\n";
 
-    // Separate knobs so bootstrap (heuristic, no NN root Q worth trusting yet)
-    // and self-play (NN-guided root Q) can diverge later even though they
-    // start at the same value.
-    constexpr float kBootstrapValueBlendAlpha = 0.2f;
-    constexpr float kSelfPlayValueBlendAlpha  = 0.2f;
-
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
     spConfig.dirichletAlpha   = 0.3f;
     spConfig.dirichletEpsilon = 0.25f;
-    spConfig.valueBlendAlpha  = bootstrap ? kBootstrapValueBlendAlpha : kSelfPlayValueBlendAlpha;
     // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
     // threads feeding a single eval thread. Worker count is NOT scaled with
     // NUM_THREADS — many threads sharing one MCTS tree contend heavily near
@@ -127,7 +120,7 @@ int main(int argc, char *argv[]) {
             examples.erase(examples.begin(), examples.end() - tailMoves);
 
         if (!examples.empty()) {
-            float v0 = examples[0].value;
+            float v0 = examples[0].outcome;
             if      (v0 >  0.5f) bWins++;
             else if (v0 < -0.5f) wWins++;
             else                 draws++;
@@ -137,7 +130,7 @@ int main(int argc, char *argv[]) {
             allPlanes.push_back(ex.planes);
             allCaptures.push_back(ex.captures);
             allPolicies.push_back(ex.policy);
-            allValues.push_back(torch::tensor(ex.value));
+            allValues.push_back(torch::tensor({ex.outcome, ex.rootValue}));
             totalPositions++;
         }
 
@@ -163,10 +156,12 @@ int main(int argc, char *argv[]) {
 
     // Store compactly: stone planes only as uint8, policies as float16
     // (decodeStates reconstructs the full 5-plane float input at train time).
+    // Values are stored unblended as [N, 2] = (z, rootQ); the training target
+    // is blended at train time (blendValueTargets).
     auto newStates   = torch::stack(allPlanes,   0).slice(1, 0, 2).to(torch::kU8).contiguous();
     auto newCaptures = torch::stack(allCaptures, 0);
     auto newPolicies = torch::stack(allPolicies, 0).to(torch::kHalf);
-    auto newValues   = torch::stack(allValues,   0).unsqueeze(1);
+    auto newValues   = torch::stack(allValues,   0);
 
     std::cout << "\n── " << (bootstrap ? "Bootstrap" : "Buffer")
               << " ───────────────────────────────────────────────────────\n";

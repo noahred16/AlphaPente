@@ -124,14 +124,20 @@ int main(int argc, char *argv[]) {
     std::string gameFlag      = "pente";
     int         stepsOverride = 0;  // 0 = auto
     bool        bootstrap     = false;
+    float       valueAlpha    = 0.2f;
+    std::string outDirFlag    = "";  // "" = checkpoints/<game>
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: train [-g game] [-t steps] [-b]\n"
+            "Usage: train [-g game] [-t steps] [-a alpha] [-d dir] [-b]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
             "  -t  gradient steps (0 = auto from buffer)  (default: " << stepsOverride << ")\n"
+            "  -a  value blend alpha: target = a*z + (1-a)*rootQ  (default: " << valueAlpha << ")\n"
+            "  -d  checkpoint output dir                  (default: checkpoints/<game>;\n"
+            "      the buffer is always read from checkpoints/<game> — lets alpha-sweep\n"
+            "      runs share one buffer without clobbering each other's best_model.pt)\n"
             "  -b  bootstrap mode — train from bootstrap.pt instead of buffer.pt\n"
             "\n"
             "Examples:\n"
@@ -139,28 +145,37 @@ int main(int argc, char *argv[]) {
             "  ./train -g pente\n"
             "\n"
             "  # ad hoc: train with a fixed step budget\n"
-            "  ./train -g pente -t 500\n";
+            "  ./train -g pente -t 500\n"
+            "\n"
+            "  # alpha-sweep experiment against shared bootstrap data\n"
+            "  ./train -g pente -b -a 0.4 -d checkpoints/pente_a40\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:t:bh")) != -1) {
+    while ((opt = getopt(argc, argv, "g:t:a:d:bh")) != -1) {
         if      (opt == 'g') gameFlag      = optarg;
         else if (opt == 't') stepsOverride = std::stoi(optarg);
+        else if (opt == 'a') valueAlpha    = std::stof(optarg);
+        else if (opt == 'd') outDirFlag    = optarg;
         else if (opt == 'b') bootstrap     = true;
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
 
-    const std::string ckptDir    = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    const std::string bufDir     = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    const std::string ckptDir    = outDirFlag.empty() ? bufDir
+                                                      : std::string(PROJECT_ROOT) + "/" + outDirFlag;
     const std::string bestPath   = ckptDir + "/best_model.pt";
-    const std::string bufferPath = bootstrap ? ckptDir + "/bootstrap.pt"
-                                             : ckptDir + "/buffer.pt";
+    const std::string bufferPath = bootstrap ? bufDir + "/bootstrap.pt"
+                                             : bufDir + "/buffer.pt";
+    std::filesystem::create_directories(ckptDir);
 
     auto buf = loadBuffer(bufferPath);
 
     std::cout << "AlphaPente Train\n"
               << "  game  : " << gameFlag << "\n"
               << "  mode  : " << (bootstrap ? "bootstrap" : "selfplay") << "\n"
+              << "  alpha : " << valueAlpha << "\n"
               << "  buffer: " << buf.size() << " positions\n\n";
 
     if (buf.size() < MIN_BUFFER_SIZE) {
@@ -168,6 +183,8 @@ int main(int argc, char *argv[]) {
                   << ") — skipping training.\n";
         return 0;
     }
+
+    buf.values = blendValueTargets(buf.values, valueAlpha);
 
     auto [trainBuf, valBuf] = splitBuffer(buf, VAL_FRACTION);
 

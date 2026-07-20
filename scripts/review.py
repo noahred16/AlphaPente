@@ -1,19 +1,23 @@
 # purpose of this script is to do a quick review of the shapes of these pente training sets: bootstrap and buffer.
 #
-# usage: review.py [bu|bo]
+# usage: review.py [bu|bo] [-i]
 #   (no arg)  review both bootstrap and buffer
 #   bu        review buffer only
 #   bo        review bootstrap only
+#   -i        interactive game review: one position per screen, n=next b=back q=quit
 
 import sys
 
 import torch
 
 _MODES = {"bu": ("buffer",), "bo": ("bootstrap",)}
-if len(sys.argv) > 1:
-    if sys.argv[1] not in _MODES:
-        sys.exit(f"usage: {sys.argv[0]} [bu|bo]")
-    BUFFERS = _MODES[sys.argv[1]]
+args = sys.argv[1:]
+INTERACTIVE = "-i" in args and sys.stdin.isatty()
+args = [a for a in args if a != "-i"]
+if args:
+    if args[0] not in _MODES:
+        sys.exit(f"usage: {sys.argv[0]} [bu|bo] [-i]")
+    BUFFERS = _MODES[args[0]]
 else:
     BUFFERS = ("bootstrap", "buffer")
 
@@ -79,10 +83,11 @@ def analyze(name):
         print("  (no full games — skipping outcome and diversity stats)")
         return
 
-    # Outcome from the empty-board value of each full game. Value convention
-    # (SelfPlay.cpp): +1 = the player who moved INTO the position wins, so at
-    # the empty board -1 = first player won, +1 = second player won.
-    w = [values[b].item() for b, _ in full]
+    # Outcome from the empty-board z of each full game (values are stored as
+    # [N, 2] = (z, rootQ), unblended). Convention (SelfPlay.cpp): +1 = the
+    # player who moved INTO the position wins, so at the empty board -1 =
+    # first player won, +1 = second player won.
+    w = [values[b, 0].item() for b, _ in full]
     p1 = sum(v < -0.5 for v in w)
     p2 = sum(v > 0.5 for v in w)
     print(f"  outcomes over {len(w)} full games  P1/P2/draw: {p1}/{p2}/{len(w) - p1 - p2}")
@@ -137,6 +142,49 @@ def format_moves(moves):
     pairs = (f"{i // 2 + 1}. " + " ".join(moves[i:i + 2]) for i in range(0, len(moves), 2))
     return " ".join(pairs)
 
+def print_position(buf, stones_all, move_history, begin, pos):
+    state = buf["states"][pos]
+    caps = buf["captures"][pos]
+    z, q = buf["values"][pos].tolist()
+    policy = buf["policies"][pos]
+    stones = stones_all[pos]
+
+    # Planes/captures are (my, opp) from the to-move player's view; "my" is
+    # Black iff the stone count is even (Black moves first and parity flips
+    # every ply — captures remove stones in pairs). Stone glyphs match the C++
+    # app (GameUtils::printBoard): ○ = Black, ● = White.
+    black_to_move = stones % 2 == 0
+    mine, theirs = ("○", "●") if black_to_move else ("●", "○")
+    print(f"\n=== position {pos - begin + 1} ({stones} stones, {'Black ○' if black_to_move else 'White ●'} to move) ===")
+    for y in range(18, -1, -1):
+        row = " ".join(mine if state[0, y, x] else theirs if state[1, y, x] else "·" for x in range(19))
+        print(f"{y + 1:>2} {row}")
+    print("   " + " ".join(COLS))
+    print(f"moves: {format_moves(move_history[:pos - begin]) or '(none yet)'}")
+    # caps normalized by capturesToWin (10 for Pente)
+    my, opp = (round(c * 10) for c in caps.tolist())
+    black, white = (my, opp) if black_to_move else (opp, my)
+    print(f"captures: {black}/10 Black ○, {white}/10 White ●   z: {z:+.0f}   rootQ: {q:+.3f}")
+    # Train-time value target a*z + (1-a)*rootQ across the alpha sweep
+    # (a=0 is pure search estimate, a=1 pure game outcome; train -a picks one).
+    blends = "  ".join(f"{a / 10:.1f}:{(a / 10) * z + (1 - a / 10) * q:+.2f}"
+                       for a in range(11))
+    print(f"target by alpha: {blends}")
+
+    top = policy.topk(5)
+    moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
+    print(f"top policy moves: {moves}")
+
+def read_key():
+    import termios, tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd, termios.TCSADRAIN)  # DRAIN keeps typed-ahead keys (default FLUSH drops them)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
 # Positions are stored once, in game order (symmetries applied at train time).
 # Reuses stone_counts/segment_games (defined above) to find the last game's
 # record rather than re-deriving boundaries here.
@@ -146,28 +194,34 @@ def print_game(name):
     begin, end = segment_games(stones_all)[-1]
     full = stones_all[begin] == 0
     tag = "" if full else ", tail-trimmed — starts mid-game"
-    print(f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────")
+    header = f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────"
 
     move_history = infer_moves(buf["states"], begin, end)
 
-    for pos in range(begin, end):
-        state = buf["states"][pos]
-        caps = buf["captures"][pos]
-        value = buf["values"][pos].item()
-        policy = buf["policies"][pos]
-        stones = stones_all[pos]
+    if not INTERACTIVE:
+        print(header)
+        for pos in range(begin, end):
+            print_position(buf, stones_all, move_history, begin, pos)
+        return
 
-        print(f"\n=== position {pos - begin + 1} ({stones} stones) ===  (X = to-move, O = opponent)")
-        for y in range(18, -1, -1):
-            row = " ".join("X" if state[0, y, x] else "O" if state[1, y, x] else "." for x in range(19))
-            print(f"{y + 1:>2} {row}")
-        print("   " + " ".join(COLS))
-        print(f"moves: {format_moves(move_history[:pos - begin]) or '(none yet)'}")
-        print(f"captures (my, opp): {caps.tolist()}   value: {value:+.3f}")
-
-        top = policy.topk(5)
-        moves = ", ".join(f"{move_name(idx)}={p:.3f}" for p, idx in zip(top.values.tolist(), top.indices.tolist()))
-        print(f"top policy moves: {moves}")
+    pos = begin
+    while True:
+        print("\033[2J\033[H", end="")  # clear screen, cursor home
+        print(header)
+        print_position(buf, stones_all, move_history, begin, pos)
+        hint = "   (end of game)" if pos == end - 1 else ""
+        print(f"\n[n] next   [b] back   [q] quit{hint}", end="", flush=True)
+        key = read_key()
+        if key == "n":
+            pos = min(end - 1, pos + 1)
+        elif key == "b":
+            pos = max(begin, pos - 1)
+        elif key == "q":  # done with this game; next buffer's game, if any
+            print()
+            return
+        elif key == "\x03":  # Ctrl-C exits entirely
+            print()
+            sys.exit(0)
 
 for name in BUFFERS:
     print_game(name)

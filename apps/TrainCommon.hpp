@@ -22,9 +22,18 @@ struct ReplayBuffer {
     torch::Tensor states;    // [N, 2, 19, 19] uint8 — my stones, opp stones
     torch::Tensor captures;  // [N, 2]
     torch::Tensor policies;  // [N, 361] float16
-    torch::Tensor values;    // [N, 1]
+    torch::Tensor values;    // [N, 2] — game outcome z, root Q (blended at train time)
     int64_t size() const { return states.defined() ? states.size(0) : 0; }
 };
+
+// Value target = alpha * z + (1 - alpha) * rootQ. Pure z (alpha=1) gives every
+// position in a game an identical, maximally-confident target regardless of how
+// far it is from the decisive endgame; blending in the position's own search
+// estimate tempers that for early/uncertain positions. Storing (z, rootQ)
+// unblended keeps alpha a train-time knob, so one buffer serves any alpha.
+inline torch::Tensor blendValueTargets(const torch::Tensor &values, float alpha) {
+    return alpha * values.slice(1, 0, 1) + (1.0f - alpha) * values.slice(1, 1, 2);
+}
 
 // Reconstruct the 5-plane float input the net expects (my, opp, empty,
 // my_caps/max, opp_caps/max) from the compact stored form: empty is derived
@@ -88,6 +97,13 @@ inline ReplayBuffer loadBuffer(const std::string &path) {
             // Legacy full-float format — convert to compact form.
             buf.states   = buf.states.slice(1, 0, 2).to(torch::kU8).contiguous();
             buf.policies = buf.policies.to(torch::kHalf);
+        }
+        if (buf.values.defined() && buf.values.size(1) == 1) {
+            // Legacy pre-blended values — z and rootQ were collapsed at
+            // generation time and cannot be recovered. Treat as unloadable.
+            std::cerr << "Warning: " << path << " has legacy [N,1] blended values; "
+                         "ignoring buffer — regenerate to get (z, rootQ) targets.\n";
+            return ReplayBuffer{};
         }
     } catch (const std::exception &e) {
         std::cerr << "Warning: failed to load buffer (" << e.what() << ")\n";

@@ -135,13 +135,15 @@ int main(int argc, char *argv[]) {
     std::string modelPath = "";
     int         n         = 5;
     int64_t     probeSz   = 2000;
+    float       alpha     = 0.2f;
 
     int opt;
-    while ((opt = getopt(argc, argv, "b:n:m:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:n:m:s:a:")) != -1) {
         if      (opt == 'b') bufPath   = optarg;
         else if (opt == 'n') n         = std::stoi(optarg);
         else if (opt == 'm') modelPath = optarg;
         else if (opt == 's') probeSz   = std::stoi(optarg);
+        else if (opt == 'a') alpha     = std::stof(optarg);
     }
 
     if (!std::filesystem::exists(bufPath)) {
@@ -150,16 +152,21 @@ int main(int argc, char *argv[]) {
     }
 
     auto buf = loadBuffer(bufPath);
+    if (buf.size() == 0) {
+        std::cerr << "Buffer empty or unloadable: " << bufPath << "\n";
+        return 1;
+    }
     auto states   = decodeStates(buf.states, buf.captures);
     auto captures = buf.captures;
     auto policies = buf.policies.to(torch::kFloat);
-    auto values   = buf.values;
+    auto outcomes = buf.values.slice(1, 0, 1);            // stored z column
+    auto values   = blendValueTargets(buf.values, alpha); // train-time target
 
     int64_t total = states.size(0);
-    std::cout << "Buffer: " << total << " positions\n";
-    std::cout << "Value distribution:  +1=" << (values > 0.5f).sum().item<int64_t>()
-              << "  -1=" << (values < -0.5f).sum().item<int64_t>()
-              << "  0="  << (values.abs() < 0.5f).sum().item<int64_t>() << "\n\n";
+    std::cout << "Buffer: " << total << " positions  (value alpha " << alpha << ")\n";
+    std::cout << "Outcome distribution:  +1=" << (outcomes > 0.5f).sum().item<int64_t>()
+              << "  -1=" << (outcomes < -0.5f).sum().item<int64_t>()
+              << "  0="  << (outcomes.abs() < 0.5f).sum().item<int64_t>() << "\n\n";
 
     // Sample n evenly-spaced examples
     for (int i = 0; i < n; i++) {
