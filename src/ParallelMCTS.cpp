@@ -720,6 +720,15 @@ void ParallelMCTS::printStats(double wallTime, double /*cpuTime*/) const {
         if (nodes > 0)
             std::cout << "Avg bytes/node: " << static_cast<size_t>((slabConsumed + fallbackUsed) / nodes) << "\n";
     }
+    if (root_) {
+        auto status = root_->solvedStatus.load(std::memory_order_relaxed);
+        std::cout << "Solved status: "
+                  << (status == SolvedStatus::SOLVED_WIN    ? "SOLVED_WIN - All moves lead to a loss"
+                      : status == SolvedStatus::SOLVED_LOSS ? "SOLVED_LOSS - At least one move leads to a win"
+                      : status == SolvedStatus::SOLVED_DRAW ? "SOLVED_DRAW - Best play leads to a draw"
+                                                             : "Unsolved")
+                  << "\n";
+    }
 }
 
 void ParallelMCTS::printBestMoves(int n) const {
@@ -783,9 +792,11 @@ void ParallelMCTS::printBestMoves(int n) const {
         auto childStatus = child->solvedStatus.load(std::memory_order_relaxed);
         const char *status =
             childStatus == SolvedStatus::SOLVED_WIN  ? "WIN"  :
-            childStatus == SolvedStatus::SOLVED_LOSS ? "LOSS" : "-";
+            childStatus == SolvedStatus::SOLVED_LOSS ? "LOSS" :
+            childStatus == SolvedStatus::SOLVED_DRAW ? "DRAW" : "-";
         double puct = childStatus == SolvedStatus::SOLVED_WIN  ?  std::numeric_limits<double>::infinity() :
-                      childStatus == SolvedStatus::SOLVED_LOSS ? -std::numeric_limits<double>::infinity() :
+                      (childStatus == SolvedStatus::SOLVED_LOSS || childStatus == SolvedStatus::SOLVED_DRAW)
+                          ? -std::numeric_limits<double>::infinity() :
                       avgVal + c * root_->priors[i] * sqrtRootVisits / (1.0 + visits);
 
         std::cout << std::setw(6)  << moveLabel(root_->moves[i].x, root_->moves[i].y)
@@ -817,14 +828,25 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
         // Select best child index using PUCT
         int bestIndex = selectBestMoveIndex(node, game);
         if (bestIndex < 0) {
-            // childCapacity==0: genuine terminal, already marked. Otherwise all children
-            // are SOLVED_LOSS — this node is a proven win but backprop hasn't marked it
-            // yet (backprop only runs in Phase 2 after an eval round-trip). Mark it now
-            // so the worker's solved fast-path can backprop it and unblock the pipeline.
+            // childCapacity==0: genuine terminal, already marked. Otherwise every child
+            // is SOLVED_LOSS or SOLVED_DRAW (both score -inf, so none could win the
+            // argmax) — this node is a proven win (all losses) or draw (at least one
+            // draw), but backprop hasn't marked it yet (backprop only runs in Phase 2
+            // after an eval round-trip). Mark it now so the worker's solved fast-path
+            // can backprop it and unblock the pipeline.
             if (node->childCapacity > 0) {
+                bool anyDraw = false;
+                for (int i = 0; i < node->childCapacity; ++i) {
+                    ThreadSafeNode *sib = node->children[i].load(std::memory_order_acquire);
+                    if (sib && sib->solvedStatus.load(std::memory_order_acquire) == SolvedStatus::SOLVED_DRAW) {
+                        anyDraw = true;
+                        break;
+                    }
+                }
+                SolvedStatus target = anyDraw ? SolvedStatus::SOLVED_DRAW : SolvedStatus::SOLVED_WIN;
                 SolvedStatus exp = SolvedStatus::UNSOLVED;
                 node->solvedStatus.compare_exchange_strong(
-                    exp, SolvedStatus::SOLVED_WIN,
+                    exp, target,
                     std::memory_order_release, std::memory_order_relaxed);
             }
             return node;
@@ -899,6 +921,14 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game, float val
         // Convention: SOLVED_WIN means the last mover won (a win from the parent's perspective).
         node->value = 1.0f;
         node->solvedStatus.store(SolvedStatus::SOLVED_WIN, std::memory_order_release);
+    } else if (capacity == 0) {
+        // Not a win, and the evaluator's policy (one entry per legal move) came back
+        // empty: board full, no legal moves left, no winner -- a proven draw. Key off
+        // `capacity` (the pre-arena requested size) rather than `actualCap`, which can
+        // also be 0 when capacity>0 but arena exhaustion collapsed the allocation --
+        // that's a different case and must not be marked as a draw.
+        node->value = 0.0f;
+        node->solvedStatus.store(SolvedStatus::SOLVED_DRAW, std::memory_order_release);
     } else {
         // Record this node's own value estimate (previous-mover-perspective, matching
         // evaluateValue's convention) so selectBestMoveIndex can use it as first-play
@@ -912,6 +942,17 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game, float val
 void ParallelMCTS::backpropagate(ThreadSafeNode *node, float value,
                                  std::vector<ThreadSafeNode *> &searchPath) {
     float currentValue = value;
+
+    // A proven-draw leaf's backpropagated value is always neutral, regardless of
+    // what static evaluation (or stale WIN/LOSS guess) the caller computed before
+    // expand() marked it solved -- the evaluator has no notion of "proven draw".
+    // Checking here (rather than at each call site) covers every path uniformly:
+    // first resolution, later re-selection of an already-solved leaf, and the
+    // queue-mode Phase 2 round trip all call backpropagate() right after the node's
+    // solvedStatus is settled.
+    if (node->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_DRAW) {
+        currentValue = 0.0f;
+    }
 
     while (!searchPath.empty()) {
         ThreadSafeNode *current = searchPath.back();
@@ -938,27 +979,41 @@ void ParallelMCTS::backpropagate(ThreadSafeNode *node, float value,
                 parent->solvedStatus.compare_exchange_strong(
                     exp, SolvedStatus::SOLVED_LOSS,
                     std::memory_order_release, std::memory_order_relaxed);
-            } else if (status == SolvedStatus::SOLVED_LOSS) {
-                // This child is a proven loss for the mover. Check if all of parent's
-                // children are now proven losses — if so, parent is a proven win.
+            } else if (status == SolvedStatus::SOLVED_LOSS || status == SolvedStatus::SOLVED_DRAW) {
+                // This child is a proven loss-or-draw for the mover. Check if every one
+                // of parent's children is now resolved (a WIN child would already have
+                // short-circuited parent to SOLVED_LOSS above, so none of them can be a
+                // WIN here) — if so, parent is a proven win unless at least one child
+                // only managed a draw, in which case parent is a proven draw.
                 // Scan under nodeSubtreeLock to avoid races with lazy child creation.
+                // This rescan is idempotent: re-running it for an already-resolved parent
+                // (e.g. from a re-selected already-solved child) is a harmless no-op, since
+                // the compare_exchange below only takes effect starting from UNSOLVED.
                 if (parent->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::UNSOLVED) {
-                    bool allLoss = true;
+                    bool allResolved = true;
+                    bool anyDraw = false;
                     {
                         std::lock_guard<std::mutex> lock(parent->nodeSubtreeLock);
                         for (int i = 0; i < parent->childCapacity; ++i) {
                             ThreadSafeNode *sib = parent->children[i].load(std::memory_order_acquire);
-                            if (sib == nullptr ||
-                                sib->solvedStatus.load(std::memory_order_acquire) != SolvedStatus::SOLVED_LOSS) {
-                                allLoss = false;
+                            if (sib == nullptr) {
+                                allResolved = false;
+                                break;
+                            }
+                            auto sibStatus = sib->solvedStatus.load(std::memory_order_acquire);
+                            if (sibStatus == SolvedStatus::SOLVED_DRAW) {
+                                anyDraw = true;
+                            } else if (sibStatus != SolvedStatus::SOLVED_LOSS) {
+                                allResolved = false;
                                 break;
                             }
                         }
                     }
-                    if (allLoss && parent->childCapacity > 0) {
+                    if (allResolved && parent->childCapacity > 0) {
+                        SolvedStatus target = anyDraw ? SolvedStatus::SOLVED_DRAW : SolvedStatus::SOLVED_WIN;
                         SolvedStatus exp = SolvedStatus::UNSOLVED;
                         parent->solvedStatus.compare_exchange_strong(
-                            exp, SolvedStatus::SOLVED_WIN,
+                            exp, target,
                             std::memory_order_release, std::memory_order_relaxed);
                     }
                 }
@@ -1006,7 +1061,10 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
             auto childStatus = child->solvedStatus.load(std::memory_order_acquire);
             if (childStatus == SolvedStatus::SOLVED_WIN) {
                 exploitation = std::numeric_limits<double>::infinity();
-            } else if (childStatus == SolvedStatus::SOLVED_LOSS) {
+            } else if (childStatus == SolvedStatus::SOLVED_LOSS || childStatus == SolvedStatus::SOLVED_DRAW) {
+                // A proven draw is better than a proven loss, but from the selection
+                // standpoint both are "fully known, stop spending visits here" — send
+                // search budget to still-unresolved siblings instead.
                 exploitation = -std::numeric_limits<double>::infinity();
             } else {
                 exploitation = (effectiveVisits == 0) ? fpu :

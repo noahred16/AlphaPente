@@ -28,7 +28,8 @@ class ParallelMCTS {
     enum class SolvedStatus : uint8_t {
         UNSOLVED = 0,
         SOLVED_WIN,
-        SOLVED_LOSS
+        SOLVED_LOSS,
+        SOLVED_DRAW   // Proven draw (board full, no legal moves, no winner)
     };
     enum class SearchMode { PUCT };
 

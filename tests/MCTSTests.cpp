@@ -1,5 +1,6 @@
 #include "Evaluator.hpp"
 #include "MCTS.hpp"
+#include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 
 // doctest must come AFTER the torch-dependent headers: the c10 logging header
@@ -46,4 +47,44 @@ TEST_CASE("MCTS proves an unwinnable board as a solved draw at the root") {
     // all (search()'s main loop breaks on iteration 0 once root is solved).
     mcts.search(game);
     CHECK(mcts.getTotalVisits() == visitsAfterFirstSearch);
+}
+
+// Same scenario, against the separate multi-threaded ParallelMCTS implementation,
+// which has its own atomic/CAS-based SOLVED_DRAW bubbling (see backpropagate(),
+// select()'s bestIndex<0 fallback, and selectBestMoveIndex() in ParallelMCTS.cpp).
+TEST_CASE("ParallelMCTS proves an unwinnable board as a solved draw at the root") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame game(config);
+    game.reset();
+    game.makeMove(9, 9); // forced opening move (center); leaves 8 real branches to test aggregation over
+
+    HeuristicEvaluator evaluator;
+    ParallelMCTS::Config mctsConfig;
+    mctsConfig.evaluator = &evaluator;
+    // ParallelMCTS has no progressive widening (unlike single-threaded MCTS) and 4
+    // workers explore somewhat redundantly, so it empirically needs ~127K iterations
+    // to fully resolve this same 8-branch position (vs. 662 single-threaded) -- budget
+    // well above that.
+    mctsConfig.maxIterations = 500000;
+    mctsConfig.seed = 42;
+    mctsConfig.numWorkerThreads = 4;
+    mctsConfig.numEvalThreads = 0; // inline mode: cheap heuristic evaluator, no queue round-trip
+    mctsConfig.arenaSize = 64ull * 1024 * 1024;
+
+    ParallelMCTS mcts(mctsConfig);
+    mcts.search(game);
+
+    const auto *root = mcts.getRoot();
+    REQUIRE(root != nullptr);
+    REQUIRE(root->childCapacity == 8);
+    for (int i = 0; i < root->childCapacity; ++i) {
+        auto *child = root->children[i].load();
+        REQUIRE(child != nullptr);
+        CHECK(child->solvedStatus.load() == ParallelMCTS::SolvedStatus::SOLVED_DRAW);
+    }
+    CHECK(root->solvedStatus.load() == ParallelMCTS::SolvedStatus::SOLVED_DRAW);
+
+    // Proved well before exhausting the iteration budget.
+    CHECK(mcts.getTotalVisits() < mctsConfig.maxIterations);
 }

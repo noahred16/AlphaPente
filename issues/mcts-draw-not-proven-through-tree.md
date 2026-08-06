@@ -121,9 +121,83 @@ Verified end to end:
   leads to a draw`, matching the unit test's 662-visit count exactly.
 - WASM: same 3x3 scenario through `Module.Game`, `getTopMoves()` shows
   `DRAW` on all 8 replies.
-- Tried the actual target (5x5, full Pente rules) at 300k-500k iterations:
-  still unsolved. Proving a 3x3 board takes ~662 visits; 5x5 with captures
-  enabled is a much larger game and evidently needs a materially bigger
-  budget (or a stronger evaluator) to fully resolve — that's a search-scale
-  question, not a correctness bug, and out of scope for this fix.
+- Tried the actual target (5x5, full Pente rules) at 300k-500k iterations,
+  then 10M single-threaded: still unsolved. Proving a 3x3 board takes ~662
+  visits; 5x5 with captures enabled is a much larger game and evidently
+  needs a materially bigger budget (or a stronger evaluator) to fully
+  resolve — that's a search-scale question, not a correctness bug, and out
+  of scope for this fix.
 - `./unit_tests`: 83/85 pass (2 pre-existing skipped flaky, unrelated).
+
+## Follow-up: ported the same fix to ParallelMCTS, still can't reach 5x5
+`ParallelMCTS` (the multi-threaded engine the default `pente`/`gomoku`/etc.
+binaries use) is a **separate implementation** with its own `SolvedStatus`
+enum and atomic/CAS-based `backpropagate()` — the fix above only touched the
+single-threaded `MCTS` class. Before this follow-up, `ParallelMCTS` had no
+`SOLVED_DRAW` concept at all (enum was `{UNSOLVED, SOLVED_WIN, SOLVED_LOSS}`)
+and didn't even detect "board full, no legal moves" as terminal, so a drawn
+leaf just sat there permanently `UNSOLVED` with a stale evaluator value.
+
+Ported the same design (`src/ParallelMCTS.cpp`, `include/ParallelMCTS.hpp`):
+- `expand()`: when the evaluator's policy comes back empty (keyed off the
+  pre-arena-exhaustion `capacity`, not the post-collapse `actualCap`, so an
+  exhausted arena is never mis-marked as a draw) and the game isn't already
+  over, mark `SOLVED_DRAW` with value 0.0f.
+- `backpropagate()`: overrides the propagated value to 0.0f whenever the
+  leaf's own `solvedStatus` is `SOLVED_DRAW`, in one place at the top of the
+  function — covers first resolution, re-selection of an already-solved
+  leaf, and the queue-mode Phase 2 round trip uniformly, without touching
+  each call site. The LOSS-only full-rescan-under-lock aggregation (this
+  class's equivalent of `unprovenCount`) now fires on LOSS-or-DRAW and
+  tracks `anyDraw` to decide `SOLVED_WIN` vs `SOLVED_DRAW`. This scan-based
+  design turned out to be inherently idempotent (unlike a decrementing
+  counter) — re-running it for an already-resolved parent is a no-op via the
+  `compare_exchange_strong(UNSOLVED, ...)` — so no extra "already counted"
+  guard was needed here, unlike what a naive counter-based port might have
+  required.
+- `select()`'s `bestIndex < 0` fallback and `selectBestMoveIndex()`'s
+  exploitation scoring both now treat `SOLVED_DRAW` like `SOLVED_LOSS`
+  (-infinity, stop spending visits there) — same rationale as the
+  single-threaded port. This is what made the `bestIndex < 0` fallback need
+  a genuine fix, not just an extension: it used to assume "-inf on every
+  child" could only mean all-LOSS and unconditionally marked `SOLVED_WIN`,
+  which would have been outright wrong (should be `SOLVED_DRAW`) once DRAW
+  also returns -inf there.
+- `printBestMoves()`/`printStats()`: DRAW display text, matching the
+  single-threaded versions.
+
+New test in `tests/MCTSTests.cpp` mirrors the single-threaded one against
+`ParallelMCTS` (4 workers, inline eval mode) on the same 3x3 board — passed
+reliably across 5 repeated runs, needing ~127K iterations to fully resolve
+(vs. 662 single-threaded — `ParallelMCTS` has no progressive widening or
+transposition-table/symmetry sharing, so 4 workers redundantly explore
+symmetric-equivalent subtrees from scratch instead of sharing them like the
+single-threaded engine's canonical-hash transposition table does).
+
+Verified against the real target: `./pente -B 5 -n "1. K10" <N>` (real
+Pente, captures on, default parallel engine, 8 cores) —
+- 5M iterations: 19s, unsolved, visits spread thinly across ~5 candidate moves.
+- 100M iterations: 6m20s (264K iters/sec, ~3.3x single-threaded's
+  throughput), 63.4M nodes, arena at 52% of 29GB — still unsolved. One move
+  (H12) had absorbed 98M of 100M visits; the other 15 root replies were
+  barely touched.
+
+Conclusion: the ParallelMCTS port is correct (verified on 3x3), but full 5x5
+Pente is evidently much too large a game to brute-force to a proven root
+result with either engine at these budgets. The missing transposition/
+symmetry sharing in `ParallelMCTS` (noted above) is likely the biggest lever
+for closing this gap without just burning more raw compute — single-threaded
+MCTS's canonical-hash transposition table is presumably why it needed far
+fewer visits per node than the parallel engine's un-deduplicated tree, even
+though it has far less raw throughput. That would be a separate, sizable
+piece of work (making lock-free/atomic transposition insertion race-safe
+across worker threads), not something to fold into this fix.
+
+## Status (updated)
+Draw-bubbling is fixed and verified on both engines. A fully solved 5x5
+root remains out of reach at the budgets tried so far (up to 100M parallel
+iterations, ~6.3 minutes on this 8-core machine) — this is now a search-
+scale/algorithmic-improvement question (most plausibly: add transposition/
+symmetry sharing to `ParallelMCTS`, or use a stronger evaluator to prune
+harder), not a correctness bug, and needs explicit direction before any
+further compute or engineering time goes into it.
