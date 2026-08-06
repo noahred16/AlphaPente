@@ -21,6 +21,17 @@ function getEffortSimulations() {
   return EFFORT_SIMULATIONS[level];
 }
 
+// Fill in each effort label with its iteration count, e.g. "Low (3K)", read
+// straight from EFFORT_SIMULATIONS so labels can't drift out of sync with it.
+function labelEffortButtons() {
+  document.querySelectorAll('input[name="effort"]').forEach(input => {
+    const n = EFFORT_SIMULATIONS[input.value];
+    const count = n >= 1000 ? `${n / 1000}K` : n;
+    const span = input.nextElementSibling;
+    span.textContent = `${span.textContent} (${count})`;
+  });
+}
+
 function newGame() {
   if (game) game.delete();
   game = new Module.Game(BOARD_SIZE, getEffortSimulations());
@@ -112,7 +123,7 @@ function onCellClick(x, y) {
 function aiTurn() {
   const move = game.computeAIMove();
   if (move.x < 0) { lastTopMoves = null; render(); return; } // no moves left (draw)
-  lastTopMoves = game.getTopMoves(5);
+  lastTopMoves = game.getTopMoves(10);
   render(lastTopMoves);
   setTimeout(() => {
     game.makeMove(move.x, move.y);
@@ -120,6 +131,7 @@ function aiTurn() {
   }, 500);
 }
 
+labelEffortButtons();
 resetBtn.addEventListener('click', newGame);
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', newGame));
 document.querySelectorAll('input[name="effort"]').forEach(r =>
