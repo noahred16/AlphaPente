@@ -7,6 +7,8 @@ let Module, game, boardSize;
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
+const capturesEl = document.getElementById('captures');
+const topMovesBody = document.querySelector('#top-moves tbody');
 const resetBtn = document.getElementById('reset');
 
 function getMode() {
@@ -61,18 +63,31 @@ function render(topMoves) {
       cells[m.y * boardSize + m.x].classList.add('top-move');
     }
   }
+  renderTopMoves(topMoves);
   updateStatus();
 }
 
+// topMoves: same array passed to render(), or undefined/empty to clear the table.
+function renderTopMoves(topMoves) {
+  topMovesBody.innerHTML = '';
+  if (!topMoves) return;
+  for (const m of topMoves) {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>(${m.x}, ${m.y})</td><td>${m.visits}</td>` +
+      `<td>${m.value.toFixed(3)}</td><td>${m.puct.toFixed(3)}</td><td>${m.status}</td>`;
+    topMovesBody.appendChild(row);
+  }
+}
+
 function updateStatus() {
+  capturesEl.textContent = `Captures — Black: ${game.getBlackCaptures()}, White: ${game.getWhiteCaptures()}`;
   if (game.isGameOver()) {
     const winner = game.getWinner(); // 0=none, 1=black, 2=white
     statusEl.textContent = winner === 1 ? 'Black wins!' : winner === 2 ? 'White wins!' : 'Draw';
     return;
   }
   const player = game.getCurrentPlayer() === 1 ? 'Black' : 'White';
-  statusEl.textContent =
-    `${player}'s turn — Captures: Black ${game.getBlackCaptures()}, White ${game.getWhiteCaptures()}`;
+  statusEl.textContent = `${player}'s turn`;
 }
 
 function onCellClick(x, y) {

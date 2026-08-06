@@ -112,6 +112,8 @@ class MCTS {
         PenteGame::Move move;
         int visits;
         double avgValue;
+        double puct;
+        SolvedStatus solvedStatus;
     };
     std::vector<TopMove> getTopMoves(int topN) const;
 

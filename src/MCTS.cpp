@@ -707,12 +707,7 @@ std::vector<MCTS::TopMove> MCTS::getTopMoves(int topN) const {
         this->game.getCanonicalHash(rootSym);
     }
 
-    struct Entry {
-        TopMove top;
-        SolvedStatus solvedStatus;
-    };
-    std::vector<Entry> entries;
-    entries.reserve(root_->childCapacity);
+    const double sqrtN = std::sqrt((double)root_->visits);
 
     for (int i = 0; i < root_->childCapacity; i++) {
         Node *child = root_->children[i];
@@ -730,21 +725,21 @@ std::vector<MCTS::TopMove> MCTS::getTopMoves(int topN) const {
         top.move = physMove;
         top.visits = child->visits;
         top.avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
-        entries.push_back({top, child->solvedStatus});
+        top.puct = child->getPUCTValue(config_.explorationConstant, sqrtN, root_->priors[i]);
+        top.solvedStatus = child->solvedStatus;
+        moves.push_back(top);
     }
 
-    std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+    std::sort(moves.begin(), moves.end(), [](const TopMove &a, const TopMove &b) {
         if (a.solvedStatus == SolvedStatus::SOLVED_WIN && b.solvedStatus != SolvedStatus::SOLVED_WIN)
             return true;
         if (a.solvedStatus != SolvedStatus::SOLVED_WIN && b.solvedStatus == SolvedStatus::SOLVED_WIN)
             return false;
-        return a.top.visits > b.top.visits;
+        return a.visits > b.visits;
     });
 
-    int n = std::min(topN, static_cast<int>(entries.size()));
-    moves.reserve(n);
-    for (int i = 0; i < n; i++)
-        moves.push_back(entries[i].top);
+    if (static_cast<int>(moves.size()) > topN)
+        moves.resize(topN);
 
     return moves;
 }

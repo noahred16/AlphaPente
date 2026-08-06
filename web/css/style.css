@@ -9,9 +9,26 @@ body {
 }
 
 #status {
-  margin-bottom: 1em;
   font-weight: bold;
   min-height: 1.5em;
+}
+
+#captures {
+  margin-bottom: 1em;
+}
+
+#top-moves {
+  margin: 1em auto 0;
+  border-collapse: collapse;
+}
+
+#top-moves th, #top-moves td {
+  padding: 2px 8px;
+  text-align: right;
+}
+
+#top-moves th:first-child, #top-moves td:first-child {
+  text-align: left;
 }
 
 #board {

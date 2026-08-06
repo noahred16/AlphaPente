@@ -74,6 +74,10 @@ class WasmGame {
             entry.set("y", m.move.y - origin_);
             entry.set("visits", m.visits);
             entry.set("value", m.avgValue);
+            entry.set("puct", m.puct);
+            entry.set("status", m.solvedStatus == MCTS::SolvedStatus::SOLVED_WIN    ? "WIN"
+                                 : m.solvedStatus == MCTS::SolvedStatus::SOLVED_LOSS ? "LOSS"
+                                                                                     : "-");
             out.call<void>("push", entry);
         }
         return out;
