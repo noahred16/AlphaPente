@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AlphaPente</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<h1>AlphaPente</h1>
+
+<div id="controls">
+  <label><input type="radio" name="mode" value="pvp" checked> Player vs Player</label>
+  <label><input type="radio" name="mode" value="ai"> Player vs AI</label>
+  <button id="reset">Reset</button>
+</div>
+
+<div id="controls">
+  Effort:
+  <label><input type="radio" name="effort" value="low" checked> Low</label>
+  <label><input type="radio" name="effort" value="medium"> Medium</label>
+  <label><input type="radio" name="effort" value="high"> High</label>
+</div>
+
+<div id="status"></div>
+
+<div id="board"></div>
+
+<script src="wasm/pente.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

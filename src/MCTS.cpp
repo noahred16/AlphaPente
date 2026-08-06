@@ -137,6 +137,17 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
             totalSimulations_++;
             continue;
         }
+        if (localGame.getLegalMoves().empty()) {
+            // Board full with no winner: a draw. There are no children to expand into
+            // (expand() requires childCapacity > 0), so backpropagate a neutral value
+            // directly. Left UNSOLVED (not SOLVED_*) rather than adding a draw status,
+            // since minimax proof-solving semantics for draws belong to a deliberate
+            // PNS design decision, not this fix — this just avoids searching into a
+            // position with zero legal moves.
+            backpropagate(node, 0.0, searchPath);
+            totalSimulations_++;
+            continue;
+        }
         try {
             node = expand(node, localGame);
         } catch (const std::bad_alloc &) {
@@ -683,6 +694,59 @@ void MCTS::printStats(double wallTime, double cpuTime) const {
         std::cout << "Best move: " << GameUtils::displayMove(getBestMove().x, getBestMove().y) << "\n";
     }
     std::cout << "=======================\n\n";
+}
+
+std::vector<MCTS::TopMove> MCTS::getTopMoves(int topN) const {
+    std::vector<TopMove> moves;
+    if (!root_ || root_->childCapacity == 0)
+        return moves;
+
+    // Precompute physical-coord translation for canonical root moves
+    int rootSym = -1;
+    if (root_->canonicalSym >= 0) {
+        this->game.getCanonicalHash(rootSym);
+    }
+
+    struct Entry {
+        TopMove top;
+        SolvedStatus solvedStatus;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(root_->childCapacity);
+
+    for (int i = 0; i < root_->childCapacity; i++) {
+        Node *child = root_->children[i];
+        if (!child)
+            continue;
+
+        PenteGame::Move physMove = root_->moves[i];
+        if (rootSym >= 0) {
+            int px, py;
+            Zobrist::instance().applyInverseSym(rootSym, physMove.x, physMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+
+        TopMove top;
+        top.move = physMove;
+        top.visits = child->visits;
+        top.avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
+        entries.push_back({top, child->solvedStatus});
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+        if (a.solvedStatus == SolvedStatus::SOLVED_WIN && b.solvedStatus != SolvedStatus::SOLVED_WIN)
+            return true;
+        if (a.solvedStatus != SolvedStatus::SOLVED_WIN && b.solvedStatus == SolvedStatus::SOLVED_WIN)
+            return false;
+        return a.top.visits > b.top.visits;
+    });
+
+    int n = std::min(topN, static_cast<int>(entries.size()));
+    moves.reserve(n);
+    for (int i = 0; i < n; i++)
+        moves.push_back(entries[i].top);
+
+    return moves;
 }
 
 void MCTS::printBestMoves(int topN) const {

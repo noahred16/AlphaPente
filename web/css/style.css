@@ -1,0 +1,56 @@
+body {
+  font-family: sans-serif;
+  text-align: center;
+  background: #eee;
+}
+
+#controls {
+  margin-bottom: 0.5em;
+}
+
+#status {
+  margin-bottom: 1em;
+  font-weight: bold;
+  min-height: 1.5em;
+}
+
+#board {
+  display: inline-grid;
+  gap: 2px;
+  background: #b8873a;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.cell {
+  width: 40px;
+  height: 40px;
+  background: #d9ab5c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cell.top-move {
+  background: #f2e0a0;
+}
+
+.cell.occupied {
+  cursor: default;
+}
+
+.stone {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.stone.black {
+  background: #222;
+}
+
+.stone.white {
+  background: #fafafa;
+  border: 1px solid #999;
+}

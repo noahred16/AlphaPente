@@ -106,6 +106,15 @@ class MCTS {
     // Get best move from current tree (no additional search)
     PenteGame::Move getBestMove() const;
 
+    // Top N root moves by visit count (physical coords), most-visited first.
+    // Used for UI overlays; solved wins are sorted to the front like getBestMove().
+    struct TopMove {
+        PenteGame::Move move;
+        int visits;
+        double avgValue;
+    };
+    std::vector<TopMove> getTopMoves(int topN) const;
+
     // Tree management
     void reset();
     void clearTree();

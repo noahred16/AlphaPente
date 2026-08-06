@@ -200,7 +200,7 @@ void PenteGame::patchPromisingMovesAfterCaptures(const BitBoard &capturedBits) {
         toCheck.setBitUnchecked(cx, cy);
         for (int i = 0; i < config_.numOffsets; i++) {
             int nx = cx + dirs[i][0], ny = cy + dirs[i][1];
-            if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE)
+            if (nx >= minIdx() && nx < maxIdx() && ny >= minIdx() && ny < maxIdx())
                 toCheck.setBitUnchecked(nx, ny);
         }
     });

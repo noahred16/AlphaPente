@@ -20,6 +20,7 @@ float Evaluator::rollout(const PenteGame &game) {
 
     while ((winner = simGame.getWinner()) == PenteGame::NONE && depth < maxRolloutDepth_) {
         PenteGame::Move move = simGame.getRandomPromisingMove();
+        if (move.x == PenteGame::Move::INVALID) break; // no promising moves left (board full) — treat as draw
         simGame.makeMove(move.x, move.y);
         depth++;
     }
