@@ -19,7 +19,12 @@ double MCTS::Node::getPUCTValue(double explorationFactor, double sqrtParentVisit
     if (this->solvedStatus == SolvedStatus::SOLVED_WIN) {
         return std::numeric_limits<double>::infinity();
     }
-    if (this->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+    if (this->solvedStatus == SolvedStatus::SOLVED_LOSS || this->solvedStatus == SolvedStatus::SOLVED_DRAW) {
+        // A proven draw is strictly better than a proven loss, but from the
+        // parent's selection standpoint both are "fully known, stop spending
+        // simulations here" — treat it like SOLVED_LOSS so search time goes to
+        // still-unresolved siblings instead. getBestMove() already prefers a
+        // drawn child over a losing one once all siblings are resolved.
         return -std::numeric_limits<double>::infinity();
     }
 
@@ -141,10 +146,8 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
             // Board full with no winner: a proven draw. There are no children to expand
             // into (expand() requires childCapacity > 0), so mark it solved directly and
             // backpropagate a neutral value. Marking it SOLVED_DRAW (rather than leaving
-            // UNSOLVED) makes it terminal and visible in getTopMoves()/printBestMoves();
-            // it's intentionally invisible to the WIN/LOSS minimax bubbling below (neither
-            // `if` there matches SOLVED_DRAW) — proving an ancestor as a forced draw is a
-            // separate PNS design decision, not this fix.
+            // UNSOLVED) makes it terminal, and it bubbles up through backpropagate()'s
+            // minimax step just like SOLVED_LOSS does (see there for the WIN/DRAW decision).
             node->solvedStatus = SolvedStatus::SOLVED_DRAW;
             backpropagate(node, 0.0, searchPath);
             totalSimulations_++;
@@ -434,13 +437,19 @@ void MCTS::backpropagate(Node *node, double result, std::vector<Node *> &searchP
             parent->solvedStatus = SolvedStatus::SOLVED_LOSS;
         }
 
-        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS) {
+        if (current->solvedStatus == SolvedStatus::SOLVED_LOSS || current->solvedStatus == SolvedStatus::SOLVED_DRAW) {
+            if (current->solvedStatus == SolvedStatus::SOLVED_DRAW) {
+                parent->hasDrawChild = true;
+            }
             parent->unprovenCount--;
 
             assert(parent->unprovenCount >= 0);
 
             if (parent->unprovenCount == 0) {
-                parent->solvedStatus = SolvedStatus::SOLVED_WIN;
+                // Every reply is proven LOSS-for-the-opponent or DRAW, and none is a
+                // WIN-for-the-opponent (that would have short-circuited above already) —
+                // so parent is a proven win unless at least one reply only manages a draw.
+                parent->solvedStatus = parent->hasDrawChild ? SolvedStatus::SOLVED_DRAW : SolvedStatus::SOLVED_WIN;
             }
         }
 
@@ -687,6 +696,8 @@ void MCTS::printStats(double wallTime, double cpuTime) const {
               << (root_ ? (root_->solvedStatus == SolvedStatus::SOLVED_WIN ? "SOLVED_WIN - All moves lead to a loss"
                            : root_->solvedStatus == SolvedStatus::SOLVED_LOSS
                                ? "SOLVED_LOSS - At least one move leads to a win"
+                           : root_->solvedStatus == SolvedStatus::SOLVED_DRAW
+                               ? "SOLVED_DRAW - Best play leads to a draw"
                                : "Unsolved")
                         : "N/A")
               << " And Root avg value: " << std::fixed << std::setprecision(3)

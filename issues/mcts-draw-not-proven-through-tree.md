@@ -98,5 +98,32 @@ would face the same win/draw/loss-vs-win/not-win distinction this issue is
 about — this isn't just an MCTS quirk to route around by switching to PNS.
 
 ## Status
-Not started. Leaf-level `SOLVED_DRAW` marking (this issue's prerequisite)
-merged; ancestor bubbling is the open piece.
+Fixed. `backpropagate()`'s LOSS-only decrement became a LOSS-or-DRAW decrement
+(a new `Node::hasDrawChild` bool tracks whether any resolved child was a
+DRAW), and `getPUCTValue()` now treats `SOLVED_DRAW` like `SOLVED_LOSS`
+(-infinity) so a proven-drawn subtree stops eating simulation budget once
+found — the existing all-children-resolved fallback in `selectBestMoveIndex`
+(originally written for the LOSS-only case) turned out to already handle the
+DRAW case for free once DRAW also returns -infinity there, so no new
+"already counted" bookkeeping was needed to avoid double-decrementing a
+child that gets reselected. `getBestMove()` needed no changes: by the time a
+root is fully resolved, every child is LOSS or DRAW, and the existing
+exclude-LOSS + max-visits logic already lands on a DRAW child correctly.
+
+Verified end to end:
+- `tests/MCTSTests.cpp` — a 3x3 gomoku board (five-in-a-row is physically
+  impossible there, so only the DRAW path can ever prove anything) fully
+  solves the root as `SOLVED_DRAW` in 662 of a 50,000-iteration budget, and a
+  second `search()` call does zero further work, confirming the root is
+  truly terminal.
+- Native CLI: `./pente -B 3 -s -n "1. K10" 200000` — real Pente rules
+  (captures on), 3x3 board — prints `Solved status: SOLVED_DRAW - Best play
+  leads to a draw`, matching the unit test's 662-visit count exactly.
+- WASM: same 3x3 scenario through `Module.Game`, `getTopMoves()` shows
+  `DRAW` on all 8 replies.
+- Tried the actual target (5x5, full Pente rules) at 300k-500k iterations:
+  still unsolved. Proving a 3x3 board takes ~662 visits; 5x5 with captures
+  enabled is a much larger game and evidently needs a materially bigger
+  budget (or a stronger evaluator) to fully resolve — that's a search-scale
+  question, not a correctness bug, and out of scope for this fix.
+- `./unit_tests`: 83/85 pass (2 pre-existing skipped flaky, unrelated).

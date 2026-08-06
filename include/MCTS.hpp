@@ -73,6 +73,11 @@ class MCTS {
         // Untried moves metadata (2 bytes each = 4 bytes)
         uint16_t unprovenCount = 0;
 
+        // True once at least one child has resolved to SOLVED_DRAW; decides
+        // whether this node proves to SOLVED_WIN or SOLVED_DRAW once every
+        // child is resolved (unprovenCount reaches 0). See backpropagate().
+        bool hasDrawChild = false;
+
         // Statistics (16 bytes)
         int32_t visits = 0;
         int32_t wins = 0;
