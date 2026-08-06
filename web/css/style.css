@@ -1,11 +1,31 @@
+* {
+  box-sizing: border-box;
+}
+
 body {
   font-family: sans-serif;
   text-align: center;
   background: #eee;
+  font-size: 18px;
+  padding: 0.5em;
 }
 
 #controls {
   margin-bottom: 0.5em;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5em;
+}
+
+#controls label {
+  white-space: nowrap;
+}
+
+#controls button {
+  font-size: 1em;
+  padding: 0.4em 0.8em;
 }
 
 #status {
@@ -17,9 +37,15 @@ body {
   margin-bottom: 1em;
 }
 
+#top-moves-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 #top-moves {
   margin: 1em auto 0;
   border-collapse: collapse;
+  font-size: 0.9em;
 }
 
 #top-moves th, #top-moves td {
@@ -32,16 +58,19 @@ body {
 }
 
 #board {
-  display: inline-grid;
+  display: grid;
+  grid-template-columns: repeat(var(--board-size, 5), 1fr);
+  grid-template-rows: repeat(var(--board-size, 5), 1fr);
   gap: 2px;
   background: #b8873a;
   padding: 4px;
   border-radius: 4px;
+  width: min(92vw, 420px);
+  aspect-ratio: 1;
+  margin: 0 auto;
 }
 
 .cell {
-  width: 40px;
-  height: 40px;
   background: #d9ab5c;
   display: flex;
   align-items: center;
@@ -58,8 +87,8 @@ body {
 }
 
 .stone {
-  width: 30px;
-  height: 30px;
+  width: 75%;
+  height: 75%;
   border-radius: 50%;
 }
 

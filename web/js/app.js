@@ -32,7 +32,7 @@ function newGame() {
 
 function buildBoard() {
   boardEl.innerHTML = '';
-  boardEl.style.gridTemplateColumns = `repeat(${boardSize}, 40px)`;
+  boardEl.style.setProperty('--board-size', boardSize);
   for (let y = 0; y < boardSize; y++) {
     for (let x = 0; x < boardSize; x++) {
       const cell = document.createElement('div');
