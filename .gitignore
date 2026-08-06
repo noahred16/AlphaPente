@@ -5,6 +5,7 @@ checkpoints/
 
 # C++ Build artifacts
 build/
+build-tsan/
 bin/
 *.exe
 *.out

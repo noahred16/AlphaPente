@@ -55,10 +55,11 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         std::vector<int> visits(cap, 0);
         int solvedWinIdx = -1;
         for (int i = 0; i < cap; i++) {
-            if (!root->children[i]) continue;
-            visits[i] = root->children[i]->visits.load();
+            const auto *child = root->children[i].load(std::memory_order_acquire);
+            if (!child) continue;
+            visits[i] = child->visits.load();
             if (solvedWinIdx < 0 &&
-                root->children[i]->solvedStatus.load(std::memory_order_acquire) ==
+                child->solvedStatus.load(std::memory_order_acquire) ==
                     ParallelMCTS::SolvedStatus::SOLVED_WIN)
                 solvedWinIdx = i;
         }

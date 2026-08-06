@@ -87,7 +87,12 @@ class ParallelMCTS {
         PenteGame::Move *moves = nullptr;
         float *priors = nullptr;
         float value = 0.0f;
-        ThreadSafeNode **children = nullptr;
+        // Atomic so a lazily-created child can be published with release ordering
+        // (see select()) and consumed with acquire ordering by readers that don't
+        // hold nodeSubtreeLock (the PUCT fast path, selectBestMoveIndex) — without
+        // this, a reader could observe a non-null child pointer before the child's
+        // constructor (including its embedded mutex) has finished publishing.
+        std::atomic<ThreadSafeNode *> *children = nullptr;
 
         bool isFullyExpanded() const { return expanded.load(); }
         bool isTerminal() const { return solvedStatus.load(std::memory_order_acquire) != SolvedStatus::UNSOLVED; }

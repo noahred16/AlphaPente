@@ -835,18 +835,20 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
         PenteGame::Move move = node->moves[bestIndex];
         game.makeMove(move.x, move.y);
 
-        // Double-checked locking: fast path avoids lock when child already exists
-        ThreadSafeNode *child = node->children[bestIndex];
+        // Double-checked locking: fast path avoids lock when child already exists.
+        // acquire/release on the atomic pointer ensures a reader that observes the
+        // non-null child here also sees all of the child's constructor writes.
+        ThreadSafeNode *child = node->children[bestIndex].load(std::memory_order_acquire);
         if (child == nullptr) {
             std::lock_guard<std::mutex> lock(node->nodeSubtreeLock);
-            child = node->children[bestIndex];  // re-read under lock
+            child = node->children[bestIndex].load(std::memory_order_relaxed);  // re-read under lock
             if (child == nullptr) {
                 child = allocateNode();
                 if (!child) return node;  // arena full, treat as leaf
                 child->move = move;
                 child->player = game.getCurrentPlayer();
                 child->positionHash = game.getHash();
-                node->children[bestIndex] = child;
+                node->children[bestIndex].store(child, std::memory_order_release);
             }
         }
 
@@ -945,7 +947,7 @@ void ParallelMCTS::backpropagate(ThreadSafeNode *node, float value,
                     {
                         std::lock_guard<std::mutex> lock(parent->nodeSubtreeLock);
                         for (int i = 0; i < parent->childCapacity; ++i) {
-                            ThreadSafeNode *sib = parent->children[i];
+                            ThreadSafeNode *sib = parent->children[i].load(std::memory_order_acquire);
                             if (sib == nullptr ||
                                 sib->solvedStatus.load(std::memory_order_acquire) != SolvedStatus::SOLVED_LOSS) {
                                 allLoss = false;
@@ -992,7 +994,7 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     // Unvisited (null) children contribute exploitation=fpu so their exploration
     // term drives selection until they are visited — correct AlphaZero PUCT.
     for (int i = 0; i < cap; ++i) {
-        ThreadSafeNode *child = node->children[i];
+        ThreadSafeNode *child = node->children[i].load(std::memory_order_acquire);
 
         int32_t effectiveVisits;
         double  exploitation;
@@ -1042,14 +1044,17 @@ void ParallelMCTS::initNodeChildren(ThreadSafeNode *node, int capacity) {
         return;
     }
 
-    auto *children = static_cast<ThreadSafeNode **>(
-        allocateFromSlab(sizeof(ThreadSafeNode *) * capacity, alignof(ThreadSafeNode *)));
+    using AtomicChild = std::atomic<ThreadSafeNode *>;
+    auto *children = static_cast<AtomicChild *>(
+        allocateFromSlab(sizeof(AtomicChild) * capacity, alignof(AtomicChild)));
     if (!children) {
         node->children = nullptr;
         node->childCapacity = 0;
         return;
     }
-    std::memset(children, 0, sizeof(ThreadSafeNode *) * capacity);
+    // Arena memory is raw bytes — placement-construct each atomic rather than
+    // memset, so the objects are properly initialized (not just zero bytes).
+    for (int i = 0; i < capacity; ++i) new (&children[i]) AtomicChild(nullptr);
     node->children    = children;
     node->childCapacity = static_cast<uint16_t>(capacity);
     node->childCount  = 0;

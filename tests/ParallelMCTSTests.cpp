@@ -188,7 +188,7 @@ TEST_CASE("reuseSubtree preserves child visit counts across searches") {
     int childVisits = 0;
     for (int i = 0; i < root->childCapacity; ++i) {
         if (root->moves[i].x == best.x && root->moves[i].y == best.y && root->children[i]) {
-            childVisits = root->children[i]->visits.load();
+            childVisits = root->children[i].load()->visits.load();
             break;
         }
     }
