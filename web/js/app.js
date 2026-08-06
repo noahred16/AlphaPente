@@ -4,6 +4,7 @@ const BOARD_SIZE = 5;
 const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000 };
 
 let Module, game, boardSize;
+let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -24,6 +25,7 @@ function newGame() {
   if (game) game.delete();
   game = new Module.Game(BOARD_SIZE, getEffortSimulations());
   boardSize = game.getBoardSize();
+  lastTopMoves = null;
   buildBoard();
   render();
 }
@@ -95,6 +97,7 @@ function onCellClick(x, y) {
   if (getMode() === 'ai' && game.getCurrentPlayer() !== 1) return; // AI (White) is moving
   if (game.getStoneAt(x, y) !== 0) return; // cell already has a stone
   if (!game.makeMove(x, y)) return;
+  lastTopMoves = null;
   render();
 
   if (getMode() === 'ai' && !game.isGameOver()) {
@@ -104,14 +107,16 @@ function onCellClick(x, y) {
 }
 
 // Search first (without applying), show the top candidate moves briefly, then commit.
+// The table + highlight are left showing (via lastTopMoves) after the move commits,
+// until the next AI search replaces them or a human move clears them.
 function aiTurn() {
   const move = game.computeAIMove();
-  if (move.x < 0) { render(); return; } // no moves left (draw)
-  const topMoves = game.getTopMoves(5);
-  render(topMoves);
+  if (move.x < 0) { lastTopMoves = null; render(); return; } // no moves left (draw)
+  lastTopMoves = game.getTopMoves(5);
+  render(lastTopMoves);
   setTimeout(() => {
     game.makeMove(move.x, move.y);
-    render();
+    render(lastTopMoves);
   }, 500);
 }
 
