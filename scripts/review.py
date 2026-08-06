@@ -185,16 +185,44 @@ def read_key():
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
+# Table of the most recent games, newest first. Interactively lets the user
+# pick one by digit key; non-interactively (or on an unrecognized key) just
+# takes the top (most recent) row.
+def select_game(name, buf, stones_all):
+    recent = list(reversed(segment_games(stones_all)[-10:]))
+    print(f"\n── {name}: recent games ──")
+    print(f"  {'#':>2} {'positions':>11} {'length':>6}  outcome")
+    for i, (b, e) in enumerate(recent):
+        full = stones_all[b] == 0
+        if full:
+            z = buf["values"][b, 0].item()
+            outcome = "P1" if z < -0.5 else "P2" if z > 0.5 else "draw"
+        else:
+            outcome = "tail-trimmed"
+        print(f"  {i:>2} {f'{b}-{e - 1}':>11} {e - b:>6}  {outcome}")
+
+    if not INTERACTIVE:
+        return recent[0]
+
+    print(f"select [0-{len(recent) - 1}], enter for top: ", end="", flush=True)
+    key = read_key()
+    print()
+    if key == "\x03":
+        sys.exit(0)
+    if key.isdigit() and int(key) < len(recent):
+        return recent[int(key)]
+    return recent[0]
+
 # Positions are stored once, in game order (symmetries applied at train time).
-# Reuses stone_counts/segment_games (defined above) to find the last game's
-# record rather than re-deriving boundaries here.
+# Reuses stone_counts/segment_games (defined above) to find the selected
+# game's record rather than re-deriving boundaries here.
 def print_game(name):
     buf = load_buffer(f"checkpoints/pente/{name}.pt")
     stones_all = stone_counts(buf["states"])
-    begin, end = segment_games(stones_all)[-1]
+    begin, end = select_game(name, buf, stones_all)
     full = stones_all[begin] == 0
     tag = "" if full else ", tail-trimmed — starts mid-game"
-    header = f"\n── Last game record: {name} ({end - begin} positions{tag}) ──────────────────────────"
+    header = f"\n── Game record: {name} ({end - begin} positions{tag}) ──────────────────────────"
 
     move_history = infer_moves(buf["states"], begin, end)
 
