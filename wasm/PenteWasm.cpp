@@ -77,6 +77,7 @@ class WasmGame {
             entry.set("puct", m.puct);
             entry.set("status", m.solvedStatus == MCTS::SolvedStatus::SOLVED_WIN    ? "WIN"
                                  : m.solvedStatus == MCTS::SolvedStatus::SOLVED_LOSS ? "LOSS"
+                                 : m.solvedStatus == MCTS::SolvedStatus::SOLVED_DRAW ? "DRAW"
                                                                                      : "-");
             out.call<void>("push", entry);
         }

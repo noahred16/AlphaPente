@@ -138,12 +138,14 @@ PenteGame::Move MCTS::search(const PenteGame &game) {
             continue;
         }
         if (localGame.getLegalMoves().empty()) {
-            // Board full with no winner: a draw. There are no children to expand into
-            // (expand() requires childCapacity > 0), so backpropagate a neutral value
-            // directly. Left UNSOLVED (not SOLVED_*) rather than adding a draw status,
-            // since minimax proof-solving semantics for draws belong to a deliberate
-            // PNS design decision, not this fix — this just avoids searching into a
-            // position with zero legal moves.
+            // Board full with no winner: a proven draw. There are no children to expand
+            // into (expand() requires childCapacity > 0), so mark it solved directly and
+            // backpropagate a neutral value. Marking it SOLVED_DRAW (rather than leaving
+            // UNSOLVED) makes it terminal and visible in getTopMoves()/printBestMoves();
+            // it's intentionally invisible to the WIN/LOSS minimax bubbling below (neither
+            // `if` there matches SOLVED_DRAW) — proving an ancestor as a forced draw is a
+            // separate PNS design decision, not this fix.
+            node->solvedStatus = SolvedStatus::SOLVED_DRAW;
             backpropagate(node, 0.0, searchPath);
             totalSimulations_++;
             continue;
@@ -815,6 +817,7 @@ void MCTS::printBestMoves(int topN) const {
         const auto &m = moves[i];
         const char *status = m.solvedStatus == SolvedStatus::SOLVED_WIN    ? "WIN"
                              : m.solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS"
+                             : m.solvedStatus == SolvedStatus::SOLVED_DRAW ? "DRAW"
                                                                            : "-";
 
         std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << m.wins << std::setw(10)
@@ -908,6 +911,7 @@ void MCTS::printMovesFromNode(MCTS::Node *node, int topN) const {
         const auto &m = moves[i];
         const char *status = m.solvedStatus == SolvedStatus::SOLVED_WIN    ? "WIN"
                              : m.solvedStatus == SolvedStatus::SOLVED_LOSS ? "LOSS"
+                             : m.solvedStatus == SolvedStatus::SOLVED_DRAW ? "DRAW"
                                                                            : "-";
 
         std::cout << std::setw(6) << m.moveStr << std::setw(10) << m.visits << std::setw(10) << std::fixed

@@ -21,7 +21,8 @@ class MCTS {
     enum class SolvedStatus : uint8_t {
         UNSOLVED = 0, // Not proven yet
         SOLVED_WIN,   // Proven win for the player who made the move
-        SOLVED_LOSS   // Proven loss for the player who made the move
+        SOLVED_LOSS,  // Proven loss for the player who made the move
+        SOLVED_DRAW   // Proven draw (board full, no legal moves, no winner)
     };
     enum class SearchMode { PUCT };
     enum class HeuristicMode { UNIFORM, HEURISTIC, NEURAL_NET };
