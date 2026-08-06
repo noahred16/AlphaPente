@@ -12,12 +12,13 @@
 int main(int argc, char *argv[]) {
     int numOffsets = 16;
     int batchSize = 512;
+    int boardSize = 19;
     bool nonInteractive = false;
     bool useSerial = false;
     bool useUniform = false;
     std::string nnPath;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:h")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:B:h")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
@@ -25,6 +26,7 @@ int main(int argc, char *argv[]) {
         else if (opt == 'N') nnPath = PROJECT_ROOT "/checkpoints/pente/best_model.pt";
         else if (opt == 'p') nnPath = optarg;
         else if (opt == 'b') batchSize = std::atoi(optarg);
+        else if (opt == 'B') boardSize = std::max(1, std::min(19, std::atoi(optarg)));
         else if (opt == 'h') {
             std::cout <<
                 "Usage: pente [options] [\"move string\"] [iterations]\n"
@@ -36,6 +38,7 @@ int main(int argc, char *argv[]) {
                 "  -N              Use NN evaluator (checkpoints/pente/best_model.pt)\n"
                 "  -p <path>       Use NN evaluator at custom path\n"
                 "  -b <size>       Eval batch size (default: 512)\n"
+                "  -B <size>       Board size, NxN centered board (default: 19)\n"
                 "  -n              Non-interactive: run search once and exit\n"
                 "  -s              Use serial (single-threaded) MCTS\n"
                 "  -u              Use uniform random evaluator\n"
@@ -73,6 +76,14 @@ int main(int argc, char *argv[]) {
     // Game time - use Pente config (default)
     PenteGame::Config penteConfig = PenteGame::Config::pente();
     penteConfig.numOffsets = numOffsets;
+    penteConfig.boardSize = boardSize;
+    if (boardSize < 7 && penteConfig.tournamentRule) {
+        // Tournament rule (3rd-move restriction) is a fixed distance-3 ring around
+        // center; it doesn't fit inside a board smaller than 7x7.
+        penteConfig.tournamentRule = false;
+        std::cout << "Board size " << boardSize << " < 7: tournament rule doesn't fit, disabling it.\n";
+    }
+    if (boardSize != 19) std::cout << "Board size: " << boardSize << "x" << boardSize << std::endl;
     std::cout << "Num offsets: " << numOffsets << std::endl;
     if (!nnPath.empty()) std::cout << "Evaluator: NN (" << nnPath << ")" << std::endl;
     PenteGame game(penteConfig);
