@@ -176,6 +176,13 @@ std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
 void GameUtils::printBoard(const PenteGame &game) {
     const auto &legalMoves = game.getLegalMoves();
 
+    // Only print the configured play area, not the full physical BOARD_SIZE grid
+    // it's centered within -- a -B 5 board would otherwise still render as 19x19
+    // of mostly unusable border cells. minIdx()/maxIdx() aren't public, so mirror
+    // their formula here from the (public) boardSize config.
+    int lo = (PenteGame::BOARD_SIZE - game.getConfig().boardSize) / 2;
+    int hi = PenteGame::BOARD_SIZE - lo;
+
     // Helper to handle skipping 'I'
     auto getColChar = [](int x) {
         char c = (char)('A' + x);
@@ -183,14 +190,14 @@ void GameUtils::printBoard(const PenteGame &game) {
     };
 
     std::cout << "   ";
-    for (int x = 0; x < PenteGame::BOARD_SIZE; x++) {
+    for (int x = lo; x < hi; x++) {
         std::cout << getColChar(x) << " ";
     }
     std::cout << "\n";
 
-    for (int y = PenteGame::BOARD_SIZE - 1; y >= 0; y--) {
+    for (int y = hi - 1; y >= lo; y--) {
         std::cout << (y < 9 ? " " : "") << (y + 1) << " ";
-        for (int x = 0; x < PenteGame::BOARD_SIZE; x++) {
+        for (int x = lo; x < hi; x++) {
             PenteGame::Player stone = game.getStoneAt(x, y);
             if (stone == PenteGame::BLACK) {
                 std::cout << "\u25CB "; // White circle for Black stones
@@ -211,7 +218,7 @@ void GameUtils::printBoard(const PenteGame &game) {
     }
 
     std::cout << "   ";
-    for (int x = 0; x < PenteGame::BOARD_SIZE; x++) {
+    for (int x = lo; x < hi; x++) {
         std::cout << getColChar(x) << " ";
     }
     std::cout << "\n";
