@@ -4,6 +4,7 @@
 #include "Arena.hpp"
 #include "Evaluator.hpp"
 #include "PenteGame.hpp"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cmath>
@@ -16,6 +17,7 @@
 #include <optional>
 #include <random>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // ============================================================================
@@ -55,6 +57,15 @@ class ParallelMCTS {
         float dirichletAlpha   = 0.0f;
         float dirichletEpsilon = 0.25f;
 
+        // Canonical-hash transposition sharing (see ThreadSafeNode::canonicalSym):
+        // while getMoveCount() <= this, nodes are looked up/shared by canonical
+        // (symmetry-folded) hash instead of each being allocated fresh per parent.
+        // 0 = disabled. Kept shallow by default -- the board has real D4 symmetry
+        // only early on (once stones accumulate asymmetrically it stops paying off),
+        // and every lookup here costs an extra shard-mutex acquisition, so going
+        // deeper trades hot-path latency for transposition hits that stop existing.
+        int canonicalHashDepth = 10;
+
         Config() : explorationConstant(std::sqrt(2.0)) {}
     };
 
@@ -88,6 +99,15 @@ class ParallelMCTS {
         PenteGame::Move *moves = nullptr;
         float *priors = nullptr;
         float value = 0.0f;
+        // -1 = moves[] in physical coords; 0-7 = moves[] in canonical coords (see
+        // Config::canonicalHashDepth). Only ever written once, at first expand()/
+        // prepareRoot(), before the node is published to any other thread -- safe
+        // to read without synchronization thereafter. A node reached via canonical
+        // sharing may see this node from a *different* physical orientation than
+        // the one that set it, so callers must still recompute their own current
+        // symmetry fresh each visit (see select()) rather than trust this value
+        // for anything beyond "is this node's move list canonical at all".
+        int8_t canonicalSym = -1;
         // Atomic so a lazily-created child can be published with release ordering
         // (see select()) and consumed with acquire ordering by readers that don't
         // hold nodeSubtreeLock (the PUCT fast path, selectBestMoveIndex) — without
@@ -276,6 +296,14 @@ class ParallelMCTS {
     int selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &game) const;
     void injectDirichletNoise();
 
+    // Canonical-hash transposition sharing (Config::canonicalHashDepth). Looks up
+    // `hash` in the sharded table; on a miss, allocates a fresh node, publishes it,
+    // and returns it. Returns nullptr if the arena is exhausted. Thread-safe: the
+    // owning shard's mutex covers the whole find-or-insert, so concurrent callers
+    // for the same hash always agree on a single winning node.
+    ThreadSafeNode *findOrCreateTranspositionChild(uint64_t hash, const PenteGame::Move &move,
+                                                    PenteGame::Player player);
+
     // Arena allocation
     ThreadSafeNode *allocateNode();
     void initNodeChildren(ThreadSafeNode *node, int capacity);
@@ -341,6 +369,21 @@ class ParallelMCTS {
 
     // Size of each on-demand refill chunk when a slab runs out.
     static constexpr size_t kSlabRefillBytes = 16 * 1024 * 1024;  // 16 MB
+
+    // Canonical-hash transposition table (Config::canonicalHashDepth), sharded to
+    // spread lock contention across worker threads instead of one global mutex on
+    // a hot path hit near the start of every iteration. Bounded in size: only
+    // nodes within canonicalHashDepth plies of the game start are ever inserted,
+    // so this never grows across a long search or a long self-play game the way
+    // the tree itself does. Cleared alongside the arena in reset()/clearTree() --
+    // entries left over from before a reset would otherwise point at memory the
+    // arena's bump allocator is free to hand out again.
+    struct TranspositionShard {
+        std::mutex mutex;
+        std::unordered_map<uint64_t, ThreadSafeNode *> map;
+    };
+    static constexpr size_t kTranspositionShards = 64;
+    std::array<TranspositionShard, kTranspositionShards> transpositionShards_;
 };
 
 #endif // PARALLEL_MCTS_HPP

@@ -193,11 +193,72 @@ though it has far less raw throughput. That would be a separate, sizable
 piece of work (making lock-free/atomic transposition insertion race-safe
 across worker threads), not something to fold into this fix.
 
+## Follow-up: added canonical-hash transposition/symmetry sharing to ParallelMCTS
+Implemented the lever identified above. `ParallelMCTS::Config::canonicalHashDepth`
+(default 10, matching single-threaded `MCTS`) gates it: while
+`game.getMoveCount() <= canonicalHashDepth`, a node's move list is stored in
+canonical (D4-symmetry-folded) coordinates and its children are looked up/
+created in a shared, sharded (64-way, mutex-per-shard) hash table keyed by
+canonical position hash, instead of each parent/orientation getting its own
+independent subtree. Every visit re-derives the physical<->canonical mapping
+fresh from the live game state (never trusts a node's own `canonicalSym`
+beyond "is this canonical at all") since a shared node can be reached from
+different physical orientations by different parents. Beyond the depth
+cutoff, node creation is untouched (same per-parent lock as before).
+
+`select()`, `expand()`, `prepareRoot()`, `reuseSubtree()`, `getBestMove()`,
+and `printBestMoves()` all needed updating for the physical/canonical
+distinction — `getBestMove()` and `reuseSubtree()` in particular were real
+correctness bugs waiting to happen (returning/matching canonical coordinates
+where physical ones were required) since they returned raw `root_->moves[]`
+without un-rotating.
+
+**Caught by the test suite, not by inspection:** `src/SelfPlay.cpp`'s
+`runGame()` reads `ThreadSafeNode::moves[]` directly (bypassing the class's
+own accessors) for both the policy training target *and* the actual move
+played via `game.makeMove()`. This wasn't touched by the ParallelMCTS-internal
+fixes above and would have fed canonical coordinates into `game.makeMove()`
+as if physical — `SelfPlayPolicyTests.cpp`'s existing "policy has probability
+only on empty cells" check caught it immediately (probability mass showing up
+on occupied cells). Fixed by un-rotating there too. This is the exact kind of
+thing "leaky ownership of a node's internal representation" produces, and is
+why it's worth calling out explicitly: any *other* future direct consumer of
+`ThreadSafeNode`/`getRoot()` needs the same treatment.
+
+New tests in `tests/MCTSTests.cpp`: two directly verify the sharing mechanism
+itself (symmetric root replies collapse to the same child pointer within
+`canonicalHashDepth`; no sharing occurs with it set to 0) rather than just
+observing it indirectly via a faster solve.
+
+**Performance, verified with a controlled same-process A/B (identical
+position and iteration count, only `canonicalHashDepth` toggled between 0 and
+10) rather than separate noisy process runs:**
+- Move 1 (shallow, sharing actively engaged): 324K -> 247K iters/sec, a real
+  **-31%** per-iteration cost. Comes from `getCanonicalHash()` itself
+  (hashing all 8 symmetries from scratch every visit) dominating over shard-
+  mutex contention -- more shards wouldn't meaningfully help this.
+- Move 12 (past the depth-10 cutoff): 391K -> 390K iters/sec, **~0%**
+  (0.3%, noise floor). Confirms the depth gate genuinely confines the cost to
+  the shallow window rather than it leaking into deep-game throughput.
+- Net effect where sharing engages: proving the 3x3 case dropped from 127K to
+  681 iterations (~190x fewer) -- the per-iteration tax is trivially repaid.
+- On the real 5x5 target: the shallow-level symmetry collapse is visibly
+  working (e.g. `./pente -B 5 -n "1. K10" 5000000` shows H8/H12/M8/M12 with
+  *identical* visit counts -- confirmed sharing one subtree), but even with
+  4-5x fewer effectively-independent root branches, 50M iterations (3m47s,
+  ~221K iters/sec) still leaves the root unsolved: one surviving branch
+  absorbed nearly the entire budget on its own. Full 5x5 Pente remains out of
+  reach at these budgets -- the underlying subtrees are apparently just very
+  large on their own merits, not merely large due to redundant symmetric
+  duplication. Symmetry sharing was a correct, verified, worthwhile fix; it
+  was not enough on its own to reach a solved 5x5 root.
+
 ## Status (updated)
-Draw-bubbling is fixed and verified on both engines. A fully solved 5x5
-root remains out of reach at the budgets tried so far (up to 100M parallel
-iterations, ~6.3 minutes on this 8-core machine) — this is now a search-
-scale/algorithmic-improvement question (most plausibly: add transposition/
-symmetry sharing to `ParallelMCTS`, or use a stronger evaluator to prune
-harder), not a correctness bug, and needs explicit direction before any
-further compute or engineering time goes into it.
+Draw-bubbling is fixed and verified on both engines. Canonical-hash
+transposition/symmetry sharing is implemented in `ParallelMCTS`, verified
+correct (dedicated tests) and confined to the intended depth window with
+negligible cost beyond it (controlled A/B above). A fully solved 5x5 root
+still remains out of reach at practical budgets even with this improvement.
+Next lever, if pursued: a stronger evaluator to prune harder, since the
+remaining bottleneck now looks like genuine subtree size rather than
+redundant/symmetric exploration.

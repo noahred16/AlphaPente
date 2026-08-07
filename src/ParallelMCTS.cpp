@@ -574,6 +574,22 @@ void ParallelMCTS::prepareRoot(const PenteGame &game) {
         root_->priors[i] = policy[i].second;
     }
 
+    // Root is populated here rather than via expand() (no leaf/eval round-trip
+    // needed for it), so it needs its own copy of expand()'s canonicalization.
+    bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                          game.getMoveCount() <= config_.canonicalHashDepth);
+    if (useCanonical) {
+        int canonSym = -1;
+        game.getCanonicalHash(canonSym);
+        const auto &zob = Zobrist::instance();
+        for (int i = 0; i < capacity; ++i) {
+            int cx, cy;
+            zob.applySymToMove(canonSym, root_->moves[i].x, root_->moves[i].y, cx, cy);
+            root_->moves[i] = PenteGame::Move(cx, cy);
+        }
+        root_->canonicalSym = static_cast<int8_t>(canonSym);
+    }
+
     root_->childCount = static_cast<uint16_t>(capacity);
     root_->expanded = true;
     root_->evaluated = true;
@@ -616,13 +632,16 @@ PenteGame::Move ParallelMCTS::getBestMove() const {
 
     int bestIndex = -1;
     int32_t bestVisits = -1;
+    int winIndex = -1;
 
     for (int i = 0; i < root_->childCapacity; ++i) {
         ThreadSafeNode *child = root_->children[i];
         if (child == nullptr) continue;
 
-        if (child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN)
-            return root_->moves[i];
+        if (child->solvedStatus.load(std::memory_order_relaxed) == SolvedStatus::SOLVED_WIN) {
+            winIndex = i;
+            break;
+        }
 
         int32_t visits = child->visits.load(std::memory_order_relaxed);
         if (visits > bestVisits) {
@@ -631,7 +650,20 @@ PenteGame::Move ParallelMCTS::getBestMove() const {
         }
     }
 
-    return bestIndex >= 0 ? root_->moves[bestIndex] : PenteGame::Move{-1, -1};
+    if (winIndex >= 0) bestIndex = winIndex;
+    if (bestIndex < 0) return PenteGame::Move{-1, -1};
+
+    PenteGame::Move move = root_->moves[bestIndex];
+    // root_->moves[] is in canonical coords when root_->canonicalSym >= 0 --
+    // un-rotate back to physical coords before returning to the caller.
+    if (root_->canonicalSym >= 0) {
+        int rootSym = -1;
+        initialGame_.getCanonicalHash(rootSym);
+        int px, py;
+        Zobrist::instance().applyInverseSym(rootSym, move.x, move.y, px, py);
+        return PenteGame::Move(px, py);
+    }
+    return move;
 }
 
 void ParallelMCTS::reset() {
@@ -644,6 +676,14 @@ void ParallelMCTS::reset() {
     totalIterations = 0;
     totalInProgress = 0;
     arenaExhausted_.store(false, std::memory_order_relaxed);
+
+    // Transposition entries point into the arena just reset above; leaving them
+    // would let a later search reuse them as if they were live nodes over memory
+    // the bump allocator is now free to hand out to something else.
+    for (auto &shard : transpositionShards_) {
+        std::lock_guard<std::mutex> shardLock(shard.mutex);
+        shard.map.clear();
+    }
 }
 
 void ParallelMCTS::clearTree() {
@@ -653,8 +693,19 @@ void ParallelMCTS::clearTree() {
 void ParallelMCTS::reuseSubtree(const PenteGame::Move &move) {
     if (!root_) return;
 
+    // root_->moves[] may be in canonical coords; convert the physical query move
+    // to match before searching for it.
+    PenteGame::Move searchMove = move;
+    if (root_->canonicalSym >= 0) {
+        int rootSym = -1;
+        initialGame_.getCanonicalHash(rootSym);
+        int cx, cy;
+        Zobrist::instance().applySymToMove(rootSym, move.x, move.y, cx, cy);
+        searchMove = PenteGame::Move(cx, cy);
+    }
+
     for (int i = 0; i < root_->childCapacity; ++i) {
-        if (root_->moves[i].x == move.x && root_->moves[i].y == move.y) {
+        if (root_->moves[i].x == searchMove.x && root_->moves[i].y == searchMove.y) {
             ThreadSafeNode *child = root_->children[i];
             if (child) {
                 reusePath_.push_back(root_);
@@ -771,6 +822,12 @@ void ParallelMCTS::printBestMoves(int n) const {
     double sqrtRootVisits = std::sqrt(static_cast<double>(root_->visits.load(std::memory_order_relaxed)));
     double c = config_.explorationConstant;
 
+    // Precompute physical-coord translation for canonical root moves.
+    int rootSym = -1;
+    if (root_->canonicalSym >= 0) {
+        initialGame_.getCanonicalHash(rootSym);
+    }
+
     std::cout << "\n=== Top " << show << " Moves of " << entries.size() << " Considered ===\n";
     std::cout << std::setw(6)  << "Move"
               << std::setw(10) << "Visits"
@@ -799,7 +856,14 @@ void ParallelMCTS::printBestMoves(int n) const {
                           ? -std::numeric_limits<double>::infinity() :
                       avgVal + c * root_->priors[i] * sqrtRootVisits / (1.0 + visits);
 
-        std::cout << std::setw(6)  << moveLabel(root_->moves[i].x, root_->moves[i].y)
+        PenteGame::Move physMove = root_->moves[i];
+        if (rootSym >= 0) {
+            int px, py;
+            Zobrist::instance().applyInverseSym(rootSym, physMove.x, physMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+
+        std::cout << std::setw(6)  << moveLabel(physMove.x, physMove.y)
                   << std::setw(10) << visits
                   << std::setw(10) << std::setprecision(3) << root_->priors[i]
                   << std::setw(10) << std::setprecision(3) << avgVal
@@ -854,23 +918,53 @@ ParallelMCTS::ThreadSafeNode *ParallelMCTS::select(ThreadSafeNode *node, PenteGa
 
         assert(bestIndex < node->childCapacity && "bestIndex out of range");
         assert(node->moves != nullptr && "moves array must be allocated before selection");
-        PenteGame::Move move = node->moves[bestIndex];
-        game.makeMove(move.x, move.y);
+
+        // node->moves[] is in canonical coords when node->canonicalSym >= 0 -- always
+        // recompute the current symmetry fresh from the live game state rather than
+        // trusting node->canonicalSym for the transform itself: this node may have
+        // been reached via transposition sharing from a different physical
+        // orientation than the one that originally expanded it.
+        PenteGame::Move canonMove = node->moves[bestIndex];
+        PenteGame::Move physMove = canonMove;
+        if (node->canonicalSym >= 0) {
+            int currentSym = -1;
+            game.getCanonicalHash(currentSym);
+            int px, py;
+            Zobrist::instance().applyInverseSym(currentSym, canonMove.x, canonMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+        game.makeMove(physMove.x, physMove.y);
 
         // Double-checked locking: fast path avoids lock when child already exists.
         // acquire/release on the atomic pointer ensures a reader that observes the
         // non-null child here also sees all of the child's constructor writes.
         ThreadSafeNode *child = node->children[bestIndex].load(std::memory_order_acquire);
         if (child == nullptr) {
-            std::lock_guard<std::mutex> lock(node->nodeSubtreeLock);
-            child = node->children[bestIndex].load(std::memory_order_relaxed);  // re-read under lock
-            if (child == nullptr) {
-                child = allocateNode();
+            bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                                  game.getMoveCount() <= config_.canonicalHashDepth);
+            if (useCanonical) {
+                // Shared across every parent/orientation that transposes to this
+                // position -- looked up centrally instead of under node's own lock,
+                // so no further locking needed here: findOrCreateTranspositionChild
+                // guarantees a single winning node per hash, and every racing caller
+                // publishing that same pointer into node->children[bestIndex] below
+                // is a benign identical-value store.
+                int childSym = -1;
+                uint64_t hash = game.getCanonicalHash(childSym);
+                child = findOrCreateTranspositionChild(hash, canonMove, game.getCurrentPlayer());
                 if (!child) return node;  // arena full, treat as leaf
-                child->move = move;
-                child->player = game.getCurrentPlayer();
-                child->positionHash = game.getHash();
                 node->children[bestIndex].store(child, std::memory_order_release);
+            } else {
+                std::lock_guard<std::mutex> lock(node->nodeSubtreeLock);
+                child = node->children[bestIndex].load(std::memory_order_relaxed);  // re-read under lock
+                if (child == nullptr) {
+                    child = allocateNode();
+                    if (!child) return node;  // arena full, treat as leaf
+                    child->move = physMove;
+                    child->player = game.getCurrentPlayer();
+                    child->positionHash = game.getHash();
+                    node->children[bestIndex].store(child, std::memory_order_release);
+                }
             }
         }
 
@@ -905,6 +999,25 @@ void ParallelMCTS::expand(ThreadSafeNode *node, const PenteGame &game, float val
             for (int i = 0; i < actualCap; ++i) {
                 node->moves[i]  = policy[i].first;
                 node->priors[i] = policy[i].second;
+            }
+
+            // Store this node's own move list in canonical (symmetry-folded)
+            // coordinates so transposition-shared parents reached from different
+            // physical orientations can all use it -- select() re-derives the
+            // physical mapping fresh on every visit (never trusts canonicalSym
+            // for the transform itself, only as an "is this canonical" flag).
+            bool useCanonical = (config_.canonicalHashDepth > 0 &&
+                                  game.getMoveCount() <= config_.canonicalHashDepth);
+            if (useCanonical) {
+                int canonSym = -1;
+                game.getCanonicalHash(canonSym);
+                const auto &zob = Zobrist::instance();
+                for (int i = 0; i < actualCap; ++i) {
+                    int cx, cy;
+                    zob.applySymToMove(canonSym, node->moves[i].x, node->moves[i].y, cx, cy);
+                    node->moves[i] = PenteGame::Move(cx, cy);
+                }
+                node->canonicalSym = static_cast<int8_t>(canonSym);
             }
         } else {
             // moves/priors allocation failed — collapse to unexpandable leaf
@@ -1082,6 +1195,23 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     }
 
     return bestIndex;
+}
+
+ParallelMCTS::ThreadSafeNode *ParallelMCTS::findOrCreateTranspositionChild(uint64_t hash, const PenteGame::Move &move,
+                                                                            PenteGame::Player player) {
+    TranspositionShard &shard = transpositionShards_[hash & (kTranspositionShards - 1)];
+    std::lock_guard<std::mutex> lock(shard.mutex);
+
+    auto it = shard.map.find(hash);
+    if (it != shard.map.end()) return it->second;
+
+    ThreadSafeNode *node = allocateNode();
+    if (!node) return nullptr;  // arena exhausted
+    node->move = move;
+    node->player = player;
+    node->positionHash = hash;
+    shard.map.emplace(hash, node);
+    return node;
 }
 
 ParallelMCTS::ThreadSafeNode *ParallelMCTS::allocateNode() {

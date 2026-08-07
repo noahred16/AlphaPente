@@ -52,6 +52,20 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         const auto *root = mcts.getRoot();
         int cap          = static_cast<int>(root->childCapacity);
 
+        // root->moves[] is in canonical (symmetry-folded) coordinates within the
+        // first few plies (ParallelMCTS::Config::canonicalHashDepth) -- un-rotate
+        // before using them as board cell indices or as the move actually played.
+        int rootSym = -1;
+        if (root->canonicalSym >= 0) {
+            game.getCanonicalHash(rootSym);
+        }
+        auto toPhysical = [&](const PenteGame::Move &m) -> PenteGame::Move {
+            if (rootSym < 0) return m;
+            int px, py;
+            Zobrist::instance().applyInverseSym(rootSym, m.x, m.y, px, py);
+            return PenteGame::Move(px, py);
+        };
+
         std::vector<int> visits(cap, 0);
         int solvedWinIdx = -1;
         for (int i = 0; i < cap; i++) {
@@ -78,7 +92,7 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
             auto acc = policyTensor.accessor<float, 1>();
             for (int i = 0; i < cap; i++) {
                 if (visits[i] > 0) {
-                    const auto &mv = root->moves[i];
+                    PenteGame::Move mv = toPhysical(root->moves[i]);
                     acc[mv.y * B + mv.x] = (float)visits[i] / (float)totalVisits;
                 }
             }
@@ -108,7 +122,7 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
             }
         }
 
-        PenteGame::Move mv = root->moves[chosen];
+        PenteGame::Move mv = toPhysical(root->moves[chosen]);
         game.makeMove(mv.x, mv.y);
         mcts.reuseSubtree(mv);
     }

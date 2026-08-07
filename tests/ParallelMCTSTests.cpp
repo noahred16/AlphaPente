@@ -182,12 +182,23 @@ TEST_CASE("reuseSubtree preserves child visit counts across searches") {
     PenteGame::Move best = mcts.getBestMove();
     REQUIRE(best.x >= 0);
 
-    // Find the visit count of the best child before reuse
+    // Find the visit count of the best child before reuse.
+    // root->moves[] may be stored in canonical (symmetry-folded) coordinates
+    // (default within the first 10 plies) -- convert best into the same frame
+    // before searching for it, matching what reuseSubtree() does internally.
     const auto *root = mcts.getRoot();
+    PenteGame::Move searchMove = best;
+    if (root->canonicalSym >= 0) {
+        int rootSym = -1;
+        game.getCanonicalHash(rootSym);
+        int cx, cy;
+        Zobrist::instance().applySymToMove(rootSym, best.x, best.y, cx, cy);
+        searchMove = PenteGame::Move(cx, cy);
+    }
     int rootVisits = root->visits.load();
     int childVisits = 0;
     for (int i = 0; i < root->childCapacity; ++i) {
-        if (root->moves[i].x == best.x && root->moves[i].y == best.y && root->children[i]) {
+        if (root->moves[i].x == searchMove.x && root->moves[i].y == searchMove.y && root->children[i]) {
             childVisits = root->children[i].load()->visits.load();
             break;
         }
