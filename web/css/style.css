@@ -2,15 +2,28 @@
   box-sizing: border-box;
 }
 
+:root {
+  --green-dark: #1f5c33;
+  --green: #2f7d40;
+  --yellow: #f2c94c;
+  --yellow-light: #fdeeb0;
+  --yellow-pale: #fbf6df;
+  --last-move: #e8532b;
+}
+
 body {
   font-family: sans-serif;
   text-align: center;
-  background: #eee;
+  background: var(--yellow-pale);
   font-size: 18px;
   padding: 0.5em;
 }
 
-#controls {
+h1 {
+  color: var(--green-dark);
+}
+
+#toolbar {
   margin-bottom: 0.5em;
   display: flex;
   flex-wrap: wrap;
@@ -19,18 +32,79 @@ body {
   gap: 0.5em;
 }
 
-#controls label {
+#toolbar button {
+  font-size: 1em;
+  padding: 0.4em 0.8em;
+  background: var(--yellow);
+  color: var(--green-dark);
+  border: 1px solid var(--green);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#settings-btn {
+  font-size: 1.2em;
+  padding: 0.3em 0.6em;
+  line-height: 1;
+}
+
+#settings-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+#settings-dialog.open {
+  display: flex;
+}
+
+#settings-content {
+  border: 2px solid var(--green);
+  border-radius: 8px;
+  padding: 1em 1.5em;
+  background: var(--yellow-pale);
+}
+
+#settings-content h2 {
+  margin-top: 0;
+  color: var(--green-dark);
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3em;
+  margin-bottom: 1em;
+}
+
+.settings-label {
+  font-weight: bold;
+  color: var(--green-dark);
+  margin-bottom: 0.2em;
+}
+
+.settings-group label {
   white-space: nowrap;
 }
 
-#controls button {
-  font-size: 1em;
+#settings-close {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
   padding: 0.4em 0.8em;
+  cursor: pointer;
 }
 
 #status {
   font-weight: bold;
   min-height: 1.5em;
+  color: var(--green-dark);
 }
 
 #captures {
@@ -62,7 +136,7 @@ body {
   grid-template-columns: repeat(var(--board-size, 5), 1fr);
   grid-template-rows: repeat(var(--board-size, 5), 1fr);
   gap: 2px;
-  background: #b8873a;
+  background: var(--green-dark);
   padding: 4px;
   border-radius: 4px;
   width: min(92vw, 420px);
@@ -71,7 +145,7 @@ body {
 }
 
 .cell {
-  background: #d9ab5c;
+  background: var(--yellow);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -79,7 +153,13 @@ body {
 }
 
 .cell.top-move {
-  background: #f2e0a0;
+  background: var(--yellow-light);
+}
+
+/* The AI's most recently played move: the tile underneath the stone is
+   marked with a distinct color so it stands out from the top-move overlay. */
+.cell.last-ai-move {
+  background: var(--last-move);
 }
 
 .cell.occupied {

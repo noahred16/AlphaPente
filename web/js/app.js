@@ -5,12 +5,16 @@ const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000 };
 
 let Module, game, boardSize;
 let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
+let lastAiMove = null; // {x, y} of the AI's most recent move, kept highlighted until its next move
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const capturesEl = document.getElementById('captures');
 const topMovesBody = document.querySelector('#top-moves tbody');
 const resetBtn = document.getElementById('reset');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsDialog = document.getElementById('settings-dialog');
+const settingsCloseBtn = document.getElementById('settings-close');
 
 function getMode() {
   return document.querySelector('input[name="mode"]:checked').value;
@@ -37,6 +41,7 @@ function newGame() {
   game = new Module.Game(BOARD_SIZE, getEffortSimulations());
   boardSize = game.getBoardSize();
   lastTopMoves = null;
+  lastAiMove = null;
   buildBoard();
   render();
 }
@@ -62,6 +67,7 @@ function render(topMoves) {
       const cell = cells[y * boardSize + x];
       cell.innerHTML = '';
       cell.classList.remove('top-move');
+      cell.classList.remove('last-ai-move');
       const stoneVal = game.getStoneAt(x, y); // 0=empty, 1=black, 2=white
       cell.classList.toggle('occupied', stoneVal !== 0);
       if (stoneVal === 1 || stoneVal === 2) {
@@ -75,6 +81,9 @@ function render(topMoves) {
     for (const m of topMoves) {
       cells[m.y * boardSize + m.x].classList.add('top-move');
     }
+  }
+  if (lastAiMove) {
+    cells[lastAiMove.y * boardSize + lastAiMove.x].classList.add('last-ai-move');
   }
   renderTopMoves(topMoves);
   updateStatus();
@@ -127,12 +136,15 @@ function aiTurn() {
   render(lastTopMoves);
   setTimeout(() => {
     game.makeMove(move.x, move.y);
+    lastAiMove = { x: move.x, y: move.y };
     render(lastTopMoves);
   }, 500);
 }
 
 labelEffortButtons();
 resetBtn.addEventListener('click', newGame);
+settingsBtn.addEventListener('click', () => settingsDialog.classList.add('open'));
+settingsCloseBtn.addEventListener('click', () => settingsDialog.classList.remove('open'));
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', newGame));
 document.querySelectorAll('input[name="effort"]').forEach(r =>
   r.addEventListener('change', () => game.setSimulations(getEffortSimulations())));

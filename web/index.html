@@ -3,23 +3,36 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AlphaPente</title>
+<title>5 x 5 Pente</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<h1>AlphaPente</h1>
+<h1>5 x 5 Pente</h1>
 
-<div id="controls">
-  <label><input type="radio" name="mode" value="pvp"> Player vs Player</label>
-  <label><input type="radio" name="mode" value="ai" checked> Player vs AI</label>
+<div id="toolbar">
   <button id="reset">Reset</button>
+  <button id="settings-btn" aria-label="Settings" title="Settings">⚙</button>
 </div>
 
-<div id="controls">
-  Effort:
-  <label><input type="radio" name="effort" value="low" checked> <span>Low</span></label>
-  <label><input type="radio" name="effort" value="medium"> <span>Medium</span></label>
-  <label><input type="radio" name="effort" value="high"> <span>High</span></label>
+<div id="settings-dialog">
+<div id="settings-content">
+  <h2>Settings</h2>
+
+  <div class="settings-group">
+    <div class="settings-label">Mode</div>
+    <label><input type="radio" name="mode" value="pvp"> Player vs Player</label>
+    <label><input type="radio" name="mode" value="ai" checked> Player vs AI</label>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label">Effort</div>
+    <label><input type="radio" name="effort" value="low"> <span>Low</span></label>
+    <label><input type="radio" name="effort" value="medium"> <span>Medium</span></label>
+    <label><input type="radio" name="effort" value="high" checked> <span>High</span></label>
+  </div>
+
+  <button id="settings-close">Close</button>
+</div>
 </div>
 
 <div id="status"></div>
