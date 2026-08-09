@@ -1,4 +1,4 @@
-const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000 };
+const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000, ultra: 100000 };
 
 let Module, game, boardSize;
 let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
