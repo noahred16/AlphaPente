@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the browser AI (PenteGame + single-threaded MCTS + HeuristicEvaluator)
 # to WebAssembly via the emscripten/emsdk Docker image, no local toolchain
-# needed. Output: web/wasm/pente.js + web/wasm/pente.wasm
+# needed. Output: docs/wasm/pente.js + docs/wasm/pente.wasm
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,6 +16,6 @@ sudo docker run --rm -v "$PWD":/src -u "$(id -u)":"$(id -g)" -w /src emscripten/
   -s MODULARIZE=1 \
   -s EXPORT_NAME=PenteModule \
   -s ENVIRONMENT=web,node \
-  -o web/wasm/pente.js
+  -o docs/wasm/pente.js
 
-echo "Built web/wasm/pente.js + web/wasm/pente.wasm"
+echo "Built docs/wasm/pente.js + docs/wasm/pente.wasm"
