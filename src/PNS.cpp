@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <limits>
 
 namespace {
 const char *outcomeToString(PNS::Outcome o) {
@@ -128,9 +129,28 @@ void PNS::updatePnDn(Node *n, bool isOrNode) const {
     }
 }
 
+template <typename Predicate>
+uint16_t PNS::depthFrom(const std::vector<Node *> &children, bool useMax, Predicate want) {
+    bool any = false;
+    uint16_t best = useMax ? 0 : std::numeric_limits<uint16_t>::max();
+    for (Node *c : children) {
+        if (!c || !want(c)) continue;
+        any = true;
+        best = useMax ? std::max(best, c->depth) : std::min(best, c->depth);
+    }
+    assert(any);
+    return static_cast<uint16_t>(best + 1);
+}
+
 void PNS::resolveOutcome(Node *n, bool isOrNode) const {
     if (n->pn == 0) {
         n->outcome = Outcome::WIN;
+        // OR: root picks whichever winning reply is fastest (min). AND: every
+        // reply already forces a win (pn=sum==0 needs every term 0), so the
+        // guarantee is only as fast as the opponent's best (slowest) defense
+        // (max).
+        n->depth = depthFrom(n->childPtr, /*useMax=*/!isOrNode,
+                              [](Node *c) { return c->outcome == Outcome::WIN; });
         return;
     }
     // dn == 0 here (mid()'s caller only calls this when pn==0 or dn==0).
@@ -144,7 +164,15 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
         }
         // Root, moving here, simply avoids the losing replies: DRAW if any
         // move preserves one, else every move loses.
-        n->outcome = anyDraw ? Outcome::DRAW : Outcome::LOSS;
+        if (anyDraw) {
+            n->outcome = Outcome::DRAW;
+            // Root picks the fastest draw among its options.
+            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::DRAW; });
+        } else {
+            n->outcome = Outcome::LOSS;
+            // Every move loses; root delays the inevitable as long as possible.
+            n->depth = depthFrom(n->childPtr, /*useMax=*/true, [](Node *c) { return c->outcome == Outcome::LOSS; });
+        }
     } else {
         // dn = min(children dn) == 0 needs only one resolved non-WIN child;
         // others may still be untried/unresolved - ignore them, that's the
@@ -158,7 +186,14 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
             else if (c->outcome == Outcome::DRAW) anyDraw = true;
         }
         assert(anyLoss || anyDraw);
-        n->outcome = anyLoss ? Outcome::LOSS : Outcome::DRAW;
+        if (anyLoss) {
+            n->outcome = Outcome::LOSS;
+            // Opponent takes their fastest win (root's fastest loss).
+            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::LOSS; });
+        } else {
+            n->outcome = Outcome::DRAW;
+            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::DRAW; });
+        }
     }
 }
 
@@ -292,6 +327,8 @@ bool PNS::solve(const PenteGame &rootGame) {
 
 PNS::Outcome PNS::getRootOutcome() const { return rootNode_ ? rootNode_->outcome : Outcome::UNKNOWN; }
 
+int PNS::getRootDepth() const { return rootNode_ ? static_cast<int>(rootNode_->depth) : 0; }
+
 PNS::Outcome PNS::getOutcome(const PenteGame &game) const {
     int sym = -1;
     PositionKey key = PositionKey::canonical(game, sym);
@@ -299,14 +336,32 @@ PNS::Outcome PNS::getOutcome(const PenteGame &game) const {
     return (it != table_.end()) ? it->second.outcome : Outcome::UNKNOWN;
 }
 
+int PNS::getDepth(const PenteGame &game) const {
+    int sym = -1;
+    PositionKey key = PositionKey::canonical(game, sym);
+    auto it = table_.find(key);
+    return (it != table_.end()) ? static_cast<int>(it->second.depth) : 0;
+}
+
 uint64_t PNS::getNodeCount() const { return table_.size(); }
+
+std::vector<PNS::Record> PNS::exportResolved() const {
+    std::vector<Record> out;
+    out.reserve(table_.size());
+    for (const auto &entry : table_) {
+        if (entry.second.outcome != Outcome::UNKNOWN) {
+            out.push_back({entry.first, entry.second.outcome, entry.second.depth});
+        }
+    }
+    return out;
+}
 
 void PNS::printProofStats() const {
     std::cout << "PNS: nodes=" << table_.size() << " midCalls=" << stats_.midCalls
               << " transpositionHits=" << stats_.transpositionHits;
     if (rootNode_) {
         std::cout << " root(pn=" << rootNode_->pn << ", dn=" << rootNode_->dn
-                   << ", outcome=" << outcomeToString(rootNode_->outcome) << ")";
+                   << ", outcome=" << outcomeToString(rootNode_->outcome) << ", depth=" << rootNode_->depth << ")";
     }
     std::cout << "\n";
 }

@@ -21,6 +21,11 @@ TEST_CASE("PNS proves an unwinnable 3x3 board as a draw at the root") {
 
     CHECK(solved);
     CHECK(pns.getRootOutcome() == PNS::Outcome::DRAW);
+    // At most the 8 remaining empty cells can be played before the board is
+    // full; exact optimal-line length isn't asserted (not hand-verified),
+    // just that depth tracking produced something in the plausible range.
+    CHECK(pns.getRootDepth() > 0);
+    CHECK(pns.getRootDepth() <= 8);
 }
 
 // Directed test isolating the OR-node WIN short-circuit and real five-in-a-row
@@ -50,6 +55,7 @@ TEST_CASE("PNS finds an immediate five-in-a-row win") {
 
     CHECK(solved);
     CHECK(pns.getRootOutcome() == PNS::Outcome::WIN);
+    CHECK(pns.getRootDepth() == 1); // wins on the very next move
 }
 
 // Directed test isolating capture-based terminal detection (a distinct code
@@ -79,4 +85,5 @@ TEST_CASE("PNS finds an immediate capture win") {
 
     CHECK(solved);
     CHECK(pns.getRootOutcome() == PNS::Outcome::WIN);
+    CHECK(pns.getRootDepth() == 1); // wins on the very next move
 }

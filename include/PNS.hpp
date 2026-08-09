@@ -136,24 +136,51 @@ class PNS {
 
     Outcome getRootOutcome() const;
 
+    // Plies from the root until the game genuinely ends under the specific
+    // adversarial line implied by getRootOutcome() (0 if the root is itself
+    // already game-over). Meaningless while getRootOutcome() == UNKNOWN.
+    int getRootDepth() const;
+
     // Looks up an already-visited position's resolved outcome (UNKNOWN if
     // never visited or not yet resolved). Position is packed/canonicalized
     // exactly like solve()'s own nodes, so this works for any position
     // reachable from the last solve() call's root.
     Outcome getOutcome(const PenteGame &game) const;
+    int getDepth(const PenteGame &game) const;
 
     uint64_t getNodeCount() const;
     const Stats &getStats() const { return stats_; }
     void printProofStats() const;
+
+    // One resolved (outcome != UNKNOWN) position, for handing off to
+    // PositionBook to persist. Deliberately excludes still-UNKNOWN nodes -
+    // there's nothing useful to checkpoint about a position solve() hasn't
+    // finished with yet.
+    struct Record {
+        PositionKey key;
+        Outcome outcome;
+        uint16_t depth;
+    };
+    std::vector<Record> exportResolved() const;
 
   private:
     struct Node {
         Number pn = 1;
         Number dn = 1;
         Outcome outcome = Outcome::UNKNOWN;
+        // Plies from this node until game-over under the adversarial line
+        // that produced `outcome` (see resolveOutcome()). 0 for a node that's
+        // already terminal itself (set directly in expandNode) and for any
+        // node still UNKNOWN (meaningless until resolved).
+        uint16_t depth = 0;
         bool expanded = false;
-        std::vector<PenteGame::Move> childMoves; // physical coords, evaluateMove()-ordered best-first
-        std::vector<Node *> childPtr;            // lazily materialized; nullptr = untried (default pn=dn=1)
+        // Canonical coordinates, evaluateMove()-ordered best-first - NOT
+        // physical, since this node may be shared (via the transposition
+        // table) with parents reached through different physical
+        // orientations. mid() re-derives the current orientation and
+        // un-rotates before calling makeMove() - see the comment there.
+        std::vector<PenteGame::Move> childMoves;
+        std::vector<Node *> childPtr; // lazily materialized; nullptr = untried (default pn=dn=1)
     };
 
     Config config_;
@@ -165,6 +192,13 @@ class PNS {
 
     static Number pnOf(const Node *n) { return n ? n->pn : 1; }
     static Number dnOf(const Node *n) { return n ? n->dn : 1; }
+
+    // Depth helper: min/max over resolved children matching `want`, +1 for
+    // this ply. Mirrors standard chess-engine mate-distance convention: the
+    // side steering TOWARD an outcome takes the fastest line (min), the side
+    // forced INTO it delays as long as possible (max).
+    template <typename Predicate>
+    static uint16_t depthFrom(const std::vector<Node *> &children, bool useMax, Predicate want);
 
     Node *getOrCreateNode(const PenteGame &game);
     void expandNode(Node *n, const PenteGame &game);
