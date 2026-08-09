@@ -28,12 +28,13 @@ class PenteGame {
         int boardSize = 19;          // logical play area, centered within the physical BOARD_SIZE grid
         int numOffsets = 16;
         uint32_t seed = 0;           // 0 = non-deterministic, non-zero = deterministic
+        bool renjuForbiddenMoves = false; // Renju forbidden-move rules (overline/double-four/double-three), Black only
 
         // Factory methods for presets
         static Config pente() { return Config{}; }
         static Config gomoku() { return Config{10, false, false, false}; }
         static Config keryoPente() { return Config{15, true, true, true}; }
-        static Config renju() { return Config{10, false, false, false, 15}; }
+        static Config renju() { return Config{10, false, false, false, 15, 16, 0, true}; }
     };
 
     enum Player : uint8_t { NONE = 0, BLACK = 1, WHITE = 2 };
@@ -75,8 +76,16 @@ class PenteGame {
     int checkAndCapture(int x, int y);
     int countConsecutive(const BitBoard &stones, int x, int y, int dx, int dy) const;
 
+    // Renju forbidden-move rules (Black only). Builds a fresh finder from the current board each
+    // time - cheap relative to node expansion/evaluation, and avoids keeping a second incrementally
+    // maintained board in sync through captures/clone/syncFrom.
+    class RenjuForbiddenPointFinder buildRenjuFinder() const;
+    bool isRenjuForbidden(int x, int y) const; // false unless renjuForbiddenMoves is set and it's Black's turn
+    const std::vector<Move> &getRenjuLegalMoves() const;
+
     std::vector<Move> promisingMovesVector;                     // empty squares within distance 1 of any stone
     mutable std::vector<Move> tournamentRulePerimeterBuffer;    // filtered perimeter for move 3 rule
+    mutable std::vector<Move> renjuLegalMovesBuffer;            // promising moves minus Black's forbidden points
     std::array<size_t, BOARD_SIZE * BOARD_SIZE> promisingMoveIndex;
     static constexpr size_t INVALID_INDEX = static_cast<size_t>(-1); // Max size_t value
 

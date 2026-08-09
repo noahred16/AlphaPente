@@ -1,6 +1,7 @@
 #include "PenteGame.hpp"
 #include "GameUtils.hpp"
 #include "Profiler.hpp"
+#include "RenjuForbiddenPointFinder.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -253,9 +254,51 @@ bool PenteGame::isLegalMove(int x, int y) const {
         return x == BOARD_SIZE / 2 && y == BOARD_SIZE / 2;
     }
 
+    if (isRenjuForbidden(x, y)) {
+        return false;
+    }
+
     return true;
     // TODO implement proper valid move check
     // return promisingMovesVector[encodePos(x, y)] != INVALID_INDEX;
+}
+
+// Builds a Renju forbidden-point finder from the current board. (x, y) must be empty in the
+// physical board before calling isRenjuForbidden/isForbidden on it - the finder's checks assume so.
+RenjuForbiddenPointFinder PenteGame::buildRenjuFinder() const {
+    RenjuForbiddenPointFinder finder(config_.boardSize);
+    int offset = minIdx();
+    blackStones.forEachSetBit([&](int cell) {
+        int x = cell % BOARD_SIZE, y = cell / BOARD_SIZE;
+        finder.setStone(x - offset, y - offset, RenjuForbiddenPointFinder::BLACK);
+    });
+    whiteStones.forEachSetBit([&](int cell) {
+        int x = cell % BOARD_SIZE, y = cell / BOARD_SIZE;
+        finder.setStone(x - offset, y - offset, RenjuForbiddenPointFinder::WHITE);
+    });
+    return finder;
+}
+
+bool PenteGame::isRenjuForbidden(int x, int y) const {
+    if (!config_.renjuForbiddenMoves || currentPlayer != BLACK) return false;
+    if (blackStones.getBit(x, y) || whiteStones.getBit(x, y)) return false; // occupied cells aren't forbidden-move candidates
+    int offset = minIdx();
+    return buildRenjuFinder().isForbidden(x - offset, y - offset);
+}
+
+const std::vector<PenteGame::Move> &PenteGame::getRenjuLegalMoves() const {
+    PROFILE_SCOPE("PenteGame::getRenjuLegalMoves");
+    RenjuForbiddenPointFinder finder = buildRenjuFinder();
+    int offset = minIdx();
+
+    renjuLegalMovesBuffer.clear();
+    renjuLegalMovesBuffer.reserve(promisingMovesVector.size());
+    for (const Move &m : promisingMovesVector) {
+        if (!finder.isForbidden(m.x - offset, m.y - offset)) {
+            renjuLegalMovesBuffer.push_back(m);
+        }
+    }
+    return renjuLegalMovesBuffer;
 }
 
 const std::vector<PenteGame::Move> &PenteGame::getLegalMoves() const {
@@ -263,7 +306,10 @@ const std::vector<PenteGame::Move> &PenteGame::getLegalMoves() const {
     if (config_.tournamentRule && moveCount == 2 && blackStones.getBit(9, 9)) {
         return getTournamentRulePerimeter();
     }
-    // assumption that we can treat promising moves as legal moves. 
+    if (config_.renjuForbiddenMoves && currentPlayer == BLACK) {
+        return getRenjuLegalMoves();
+    }
+    // assumption that we can treat promising moves as legal moves.
     // done to reduce search space.
     return promisingMovesVector;
 }
@@ -294,7 +340,8 @@ bool PenteGame::isGameOver() const {
 
 bool PenteGame::checkFiveInRow(int x, int y) const {
     // Get the stones of the player who just moved
-    const BitBoard &stones = (currentPlayer == WHITE) ? blackStones : whiteStones;
+    bool moverIsBlack = (currentPlayer == WHITE);
+    const BitBoard &stones = moverIsBlack ? blackStones : whiteStones;
 
     // Check all 4 directions through the last move
     const int dirs[4][2] = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
@@ -309,6 +356,8 @@ bool PenteGame::checkFiveInRow(int x, int y) const {
         count += countConsecutive(stones, x, y, -dx, -dy);
 
         if (count >= 5) {
+            // Renju: an overline (6+) does not win for Black, only an exact five does.
+            if (config_.renjuForbiddenMoves && moverIsBlack && count != 5) continue;
             return true;
         }
     }
@@ -362,10 +411,13 @@ std::vector<PenteGame::Move> PenteGame::getPromisingMoves(int distance) const {
 }
 
 PenteGame::Move PenteGame::getRandomPromisingMove() const {
-    if (promisingMovesVector.empty())
+    // Routed through getLegalMoves() (rather than promisingMovesVector directly) so random
+    // rollouts respect the tournament-rule perimeter and Renju's forbidden-move rules for Black.
+    const auto &legal = getLegalMoves();
+    if (legal.empty())
         return Move();
-    std::uniform_int_distribution<size_t> dis(0, promisingMovesVector.size() - 1);
-    return promisingMovesVector[dis(rng_)];
+    std::uniform_int_distribution<size_t> dis(0, legal.size() - 1);
+    return legal[dis(rng_)];
 }
 
 PenteGame PenteGame::clone() const {

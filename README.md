@@ -338,4 +338,12 @@ Useful flags:
 ./unit_tests -ltc            # List all test cases
 ```
 
+Renju forbidden-move rules (overline, double-four, double-three) live in
+`RenjuForbiddenPointFinder` (per-concept unit tests) and are wired into `PenteGame` via
+`Config::renju()` (integration tests: legal-move filtering, win-condition, White unrestricted):
+```bash
+./unit_tests -sf="*RenjuForbiddenPointFinderTests*" # the rule engine itself, concept by concept
+./unit_tests -sf="*RenjuTests*"                     # wired into PenteGame (Config::renju())
+```
+
 See `tests/README.md` for more details.

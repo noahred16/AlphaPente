@@ -15,7 +15,9 @@ public:
     explicit RenjuForbiddenPointFinder(int size = 15);
 
     void clear();
-    void setStone(int x, int y, char stone);
+    // const: mutates only the mutable scratch grid `b_`, used internally by the query methods
+    // below to temporarily place/revert hypothetical stones.
+    void setStone(int x, int y, char stone) const;
     char getStone(int x, int y) const;
     int  getSize() const { return size_; }
 

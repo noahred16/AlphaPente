@@ -8,7 +8,8 @@
 #include <unistd.h>
 
 // How to run: ./renju "1. K10 L9 2. K12 M10" 100000 [-o <numOffsets>] [-n] [-s]
-// Renju: 15x15 board, 5-in-a-row only, no captures (forbidden-move rules not yet implemented)
+// Renju: 15x15 board, 5-in-a-row only, no captures. Black is subject to the forbidden-move rules
+// (overline, double-four, double-three) via PenteGame::Config::renju(); White is unrestricted.
 int main(int argc, char *argv[]) {
     std::cout << "Playing Renju (15x15, 5-in-a-row, no captures)..." << std::endl;
 

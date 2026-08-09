@@ -100,6 +100,7 @@ add_library(pente_core
     src/Evaluator.cpp
     src/Zobrist.cpp
     src/RenjuRules.cpp
+    src/RenjuForbiddenPointFinder.cpp
 )
 
 if(TORCH_FOUND)
@@ -141,6 +142,7 @@ add_executable(unit_tests
     tests/MCTSTests.cpp
     tests/AugmentTests.cpp
     tests/RenjuTests.cpp
+    tests/RenjuForbiddenPointFinderTests.cpp
     tests/SelfPlayPolicyTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
