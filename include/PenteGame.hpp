@@ -91,10 +91,6 @@ class PenteGame {
 
     size_t encodePos(int x, int y) const { return static_cast<size_t>(y * BOARD_SIZE + x); }
 
-    // Logical play area is a square of config_.boardSize centered within the physical BOARD_SIZE grid.
-    int minIdx() const { return (BOARD_SIZE - config_.boardSize) / 2; }
-    int maxIdx() const { return BOARD_SIZE - minIdx(); } // exclusive
-
     // Add a legal move - O(1). Called when captured stones are returned to the board.
     void setLegalMove(int x, int y) {
         size_t pos = encodePos(x, y);
@@ -215,6 +211,10 @@ class PenteGame {
     float evaluateMove(Move move) const;
     float evaluatePosition() const;
     int countOpenFours(Player player) const;
+
+    // Logical play area is a square of config_.boardSize centered within the physical BOARD_SIZE grid.
+    int minIdx() const { return (BOARD_SIZE - config_.boardSize) / 2; }
+    int maxIdx() const { return BOARD_SIZE - minIdx(); } // exclusive
 
     // Config access
     const Config &getConfig() const { return config_; }

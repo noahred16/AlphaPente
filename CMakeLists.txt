@@ -101,6 +101,7 @@ add_library(pente_core
     src/Zobrist.cpp
     src/RenjuRules.cpp
     src/RenjuForbiddenPointFinder.cpp
+    src/PositionKey.cpp
 )
 
 if(TORCH_FOUND)
@@ -144,6 +145,7 @@ add_executable(unit_tests
     tests/RenjuTests.cpp
     tests/RenjuForbiddenPointFinderTests.cpp
     tests/SelfPlayPolicyTests.cpp
+    tests/PositionKeyTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
 target_include_directories(unit_tests PRIVATE apps)  # TrainCommon.hpp for AugmentTests
