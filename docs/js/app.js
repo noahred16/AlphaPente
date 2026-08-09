@@ -1,6 +1,3 @@
-// Bump this to switch board size later (WasmGame takes boardSize as a
-// constructor param, so nothing else here needs to change).
-const BOARD_SIZE = 5;
 const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000 };
 
 let Module, game, boardSize;
@@ -18,9 +15,16 @@ const undoBtn = document.getElementById('undo');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsCloseBtn = document.getElementById('settings-close');
+const boardSizeSelect = document.getElementById('board-size');
+const pageTitleEl = document.getElementById('page-title');
+const pageHeadingEl = document.getElementById('page-heading');
 
 function getMode() {
   return document.querySelector('input[name="mode"]:checked').value;
+}
+
+function getBoardSizeSetting() {
+  return Number(boardSizeSelect.value);
 }
 
 function getEffortSimulations() {
@@ -41,8 +45,11 @@ function labelEffortButtons() {
 
 function newGame() {
   if (game) game.delete();
-  game = new Module.Game(BOARD_SIZE, getEffortSimulations());
+  game = new Module.Game(getBoardSizeSetting(), getEffortSimulations());
   boardSize = game.getBoardSize();
+  const title = `${boardSize} x ${boardSize} Pente`;
+  pageTitleEl.textContent = title;
+  pageHeadingEl.textContent = title;
   lastTopMoves = null;
   lastAiMove = null;
   moveHistory = [];
@@ -174,6 +181,7 @@ resetBtn.addEventListener('click', newGame);
 undoBtn.addEventListener('click', undoMove);
 settingsBtn.addEventListener('click', () => settingsDialog.classList.add('open'));
 settingsCloseBtn.addEventListener('click', () => settingsDialog.classList.remove('open'));
+boardSizeSelect.addEventListener('change', newGame);
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', newGame));
 document.querySelectorAll('input[name="effort"]').forEach(r =>
   r.addEventListener('change', () => game.setSimulations(getEffortSimulations())));

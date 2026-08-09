@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>5 x 5 Pente</title>
+<title id="page-title">5 x 5 Pente</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<h1>5 x 5 Pente</h1>
+<h1 id="page-heading">5 x 5 Pente</h1>
 
 <div id="toolbar">
   <button id="reset">Reset</button>
@@ -18,6 +18,14 @@
 <div id="settings-dialog">
 <div id="settings-content">
   <h2>Settings</h2>
+
+  <div class="settings-group">
+    <div class="settings-label">Board Size</div>
+    <select id="board-size">
+      <option value="5" selected>5 x 5</option>
+      <option value="7">7 x 7</option>
+    </select>
+  </div>
 
   <div class="settings-group">
     <div class="settings-label">Mode</div>
