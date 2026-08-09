@@ -1,8 +1,11 @@
+#ifndef PNS_HPP
+#define PNS_HPP
+
 /*
-Proof Number Search (PNS)
+Proof Number Search (PNS) - df-pn variant.
 Each iteration starts at the root until the proof number or disproof number reaches 0
 
-Win" is relative to the player who made the first move (the Root player).
+"Win" is relative to the player who made the first move (the Root player).
 
 Open Q's:
 - If a node has two parents, and those parents share the same parent, when we backprop the node, wouldnt it get counted
@@ -32,3 +35,146 @@ Stages:
 */
 
 // Plan. We can use a MCTS solver policy value NN to efficiently do PNS. Policy for proofs and Value for disproof.
+
+// ============================================================================
+// Implementation notes (df-pn, see AlphaPente's issues/mcts-draw-not-proven-
+// through-tree.md for why MCTS/PUCT alone couldn't close out 5x5 Pente).
+//
+// - df-pn (depth-first, iterative-deepening with (pn,dn) thresholds), not
+//   naive best-first PNS: bounds working memory to the transposition table +
+//   current recursion path, no separate global priority queue over the whole
+//   tree. See PNS::mid() for the threshold formulas (Nagai's df-pn).
+//
+// - 3-outcome (WIN/LOSS/DRAW) resolution, generalizing classic binary
+//   proven/disproven df-pn, mirrors MCTS::backpropagate's already-verified
+//   convention: an OR node (root's own turn) becomes WIN as soon as any child
+//   is WIN (pn=0 short-circuit); once dn=0 (no WIN child; for an OR node this
+//   requires literally every child resolved, since dn=sum), it's DRAW if any
+//   resolved child is DRAW, else LOSS - root just avoids the losing replies by
+//   playing whichever move preserves at least a draw. An AND node (opponent's
+//   turn) becomes LOSS as soon as any single child is LOSS (opponent takes the
+//   escape that's worst for root - this falls out of dn=min needing only one
+//   term at 0, no extra bookkeeping needed); once dn=0 without any LOSS child
+//   present yet, it's DRAW. See PNS::resolveOutcome().
+//
+// - GHI / double-counting (the "Open Q's" note above): accepted as a known,
+//   documented simplification rather than solved. Shared DAG nodes reached via
+//   multiple parents can make proof numbers overcount slightly, which affects
+//   search *efficiency* only, never *soundness* - a WIN/LOSS/DRAW status is
+//   only ever assigned when pn or dn actually reaches 0 through a fully
+//   descended, fully verified line (see resolveOutcome()). No PNS^2 / GHI-
+//   aware counting is implemented.
+//
+// - True cycles (a position recurring along a single line of play) cannot
+//   happen here, so the position graph is a genuine DAG, never worse:
+//   PositionKey packs (stones, side-to-move, captures), and moveCount is
+//   always exactly recoverable from those contents alone (occupied-cell count
+//   + total captured-stone count); every move strictly increments moveCount,
+//   so no two positions on one root-to-leaf path can ever share a key. This
+//   also means two different paths that reach an identical key always agree
+//   on moveCount too, so - unlike the original plan assumed - no moveCount
+//   gating is needed before transposition-sharing/canonicalizing: legality
+//   only ever depends on the *current* position, never on how it was reached.
+//   (This does still require the tournamentRule move-count-gated restriction
+//   to be off - see the assert in solve() - since that rule's own legal-move
+//   set isn't reproduced by this engine's exhaustive move enumeration below;
+//   5x5 already runs with tournamentRule disabled by existing convention,
+//   see apps/Pente.cpp's boardSize<7 auto-disable.)
+//
+// - Move enumeration is intentionally NOT PenteGame::getLegalMoves() (which
+//   only returns cells within a small neighborhood of existing stones, an
+//   approximation acceptable for MCTS's heuristic play but NOT complete - it
+//   can omit genuinely legal, if unusual, replies). A sound proof requires an
+//   exhaustive legal-move set. Since the board is tiny (<=25 cells), PNS
+//   enumerates every empty cell in the logical window directly instead - see
+//   enumerateLegalMoves() in PNS.cpp.
+// ============================================================================
+
+#include "PenteGame.hpp"
+#include "PositionKey.hpp"
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
+
+class PNS {
+  public:
+    enum class Outcome : uint8_t { UNKNOWN = 0, WIN, LOSS, DRAW };
+
+    using Number = uint64_t;
+    // Sentinel for "infinite" proof/disproof number. Deliberately far below
+    // Number's actual range so sums across a modest branching factor can
+    // never wrap; comparisons should test `>= INF`, not `== INF`, since
+    // intermediate threshold arithmetic can legitimately produce values
+    // slightly above INF without that meaning anything different.
+    static constexpr Number INF = 1ULL << 40;
+
+    struct Config {
+        // Hard cap on transposition-table size (one entry per distinct
+        // canonical position). solve() stops (leaving the DAG in a valid,
+        // inspectable but incomplete state) once this is reached, rather than
+        // growing unbounded.
+        uint64_t maxNodes = 20'000'000;
+
+        Config() {}
+    };
+
+    struct Stats {
+        uint64_t nodesCreated = 0;
+        uint64_t midCalls = 0;
+        uint64_t transpositionHits = 0; // getOrCreateNode() found an existing entry
+    };
+
+    explicit PNS(const Config &config = Config());
+
+    // Runs df-pn from rootGame until the root resolves to WIN/LOSS/DRAW, or
+    // until config.maxNodes is reached (returns false in that case; the DAG
+    // built so far remains valid and query-able via getOutcome()).
+    // Requires rootGame's config to have tournamentRule and
+    // renjuForbiddenMoves both disabled, and boardSize <= PositionKey::kMaxBoardSize -
+    // see the class-level comment above for why.
+    bool solve(const PenteGame &rootGame);
+
+    Outcome getRootOutcome() const;
+
+    // Looks up an already-visited position's resolved outcome (UNKNOWN if
+    // never visited or not yet resolved). Position is packed/canonicalized
+    // exactly like solve()'s own nodes, so this works for any position
+    // reachable from the last solve() call's root.
+    Outcome getOutcome(const PenteGame &game) const;
+
+    uint64_t getNodeCount() const;
+    const Stats &getStats() const { return stats_; }
+    void printProofStats() const;
+
+  private:
+    struct Node {
+        Number pn = 1;
+        Number dn = 1;
+        Outcome outcome = Outcome::UNKNOWN;
+        bool expanded = false;
+        std::vector<PenteGame::Move> childMoves; // physical coords, evaluateMove()-ordered best-first
+        std::vector<Node *> childPtr;            // lazily materialized; nullptr = untried (default pn=dn=1)
+    };
+
+    Config config_;
+    Stats stats_;
+    std::unordered_map<PositionKey, Node> table_;
+    Node *rootNode_ = nullptr;
+    PenteGame::Player rootPlayer_ = PenteGame::NONE;
+    bool stopRequested_ = false;
+
+    static Number pnOf(const Node *n) { return n ? n->pn : 1; }
+    static Number dnOf(const Node *n) { return n ? n->dn : 1; }
+
+    Node *getOrCreateNode(const PenteGame &game);
+    void expandNode(Node *n, const PenteGame &game);
+    void updatePnDn(Node *n, bool isOrNode) const;
+    void resolveOutcome(Node *n, bool isOrNode) const;
+    void selectChildOr(const Node *n, int &bestIdx, Number &secondPn) const;
+    void selectChildAnd(const Node *n, int &bestIdx, Number &secondDn) const;
+    void mid(Node *n, PenteGame game, Number thpn, Number thdn);
+
+    static std::vector<PenteGame::Move> enumerateLegalMoves(const PenteGame &game);
+};
+
+#endif // PNS_HPP

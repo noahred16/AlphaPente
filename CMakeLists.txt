@@ -102,6 +102,7 @@ add_library(pente_core
     src/RenjuRules.cpp
     src/RenjuForbiddenPointFinder.cpp
     src/PositionKey.cpp
+    src/PNS.cpp
 )
 
 if(TORCH_FOUND)
@@ -146,6 +147,7 @@ add_executable(unit_tests
     tests/RenjuForbiddenPointFinderTests.cpp
     tests/SelfPlayPolicyTests.cpp
     tests/PositionKeyTests.cpp
+    tests/PNSTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
 target_include_directories(unit_tests PRIVATE apps)  # TrainCommon.hpp for AugmentTests
