@@ -411,13 +411,14 @@ std::vector<PenteGame::Move> PenteGame::getPromisingMoves(int distance) const {
 }
 
 PenteGame::Move PenteGame::getRandomPromisingMove() const {
-    // Routed through getLegalMoves() (rather than promisingMovesVector directly) so random
-    // rollouts respect the tournament-rule perimeter and Renju's forbidden-move rules for Black.
-    const auto &legal = getLegalMoves();
-    if (legal.empty())
+    // Deliberately NOT routed through getLegalMoves(): rollouts are a cheap heuristic fallback for
+    // value estimation (not the actual search path, which already filters correctly via
+    // evaluatePolicy -> getLegalMoves()), and getLegalMoves() is expensive for Renju (a full
+    // forbidden-point scan). Called up to maxRolloutDepth_ times per rollout, so it must stay O(1).
+    if (promisingMovesVector.empty())
         return Move();
-    std::uniform_int_distribution<size_t> dis(0, legal.size() - 1);
-    return legal[dis(rng_)];
+    std::uniform_int_distribution<size_t> dis(0, promisingMovesVector.size() - 1);
+    return promisingMovesVector[dis(rng_)];
 }
 
 PenteGame PenteGame::clone() const {

@@ -1,6 +1,8 @@
 # Pente AlphaZero Implementation
 C++ implementation of AlphaZero for the game of Pente. Pente is an amusing two-player strategy board game where the objective is to get five of your pieces in a row or capture five pairs of your opponent's pieces. The game is played on a 19x19 grid.
 
+Play the 5x5 version in your browser: https://noahred16.github.io/AlphaPente/
+
 
 
 

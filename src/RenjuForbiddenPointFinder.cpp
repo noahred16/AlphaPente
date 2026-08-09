@@ -1,19 +1,142 @@
 #include "RenjuForbiddenPointFinder.hpp"
-#include <algorithm>
 
 // Faithful C++ port of CForbiddenPointFinder (Wenzhe Lu). Internal storage is 1-based with a
 // one-cell BORDER ring so line scans terminate naturally at the edge without bounds checks.
 //
 // Convention shared by every public query below: (x, y) must be EMPTY on entry. Each function
-// virtually places the relevant stone at (x, y), evaluates the pattern using whatever real/virtual
-// stones already sit in the grid, then reverts (x, y) back to EMPTY before returning. This lets
-// the functions nest (isDoubleThree -> isOpenThree -> isOpenFour -> isFive) with each level only
-// ever touching its own single cell, and lets every concept be unit-tested in isolation by simply
-// building a board and calling the query directly.
+// evaluates the pattern as if the relevant stone were placed at (x, y), given whatever real stones
+// already sit on the board, without mutating the board.
+//
+// Performance note: isDoubleThree/isDoubleFour ultimately need up to isOpenThree -> isOpenFour ->
+// isFive (up to 81 five-checks per direction for a three) - hot enough to matter, since
+// getLegalMoves() calls this once per MCTS node expansion. Two things keep that cheap:
+//   1. Each public query extracts its line into a small local array ONCE and runs the whole
+//      recursive check against that array, instead of re-deriving the same cells from the live
+//      board (with its bounds checks) at every level of the recursion.
+//   2. hasNearby() bails out of a direction immediately when there's no same-color stone within
+//      reach - true for most (candidate, direction) pairs in a real game, since stones cluster.
+// Same algorithm, same results either way (see the isFive/isFour/isOpenFour/isOpenThree tests).
 
 namespace {
-// The 4 canonical line directions; index 0..3 = forward, 4..7 = the same lines reversed.
+// The 4 canonical line directions.
 constexpr int kDirs[4][2] = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+
+// Radius (in cells, either side of the candidate) covered by the extracted line. Growth points
+// are always empty *board* cells (BORDER fails the emptiness check), so no reachable cell - however
+// deep the isOpenThree -> isOpenFour -> isFive recursion goes - can ever be farther from the
+// candidate than the board itself is wide. 15 covers the documented max board size (see the
+// class's 17x17 `b_`) with a 1-cell margin.
+constexpr int kRadius = 15;
+constexpr int kLen = kRadius * 2 + 1;
+
+// Counts consecutive `c` in `line`, starting one step from idx, stepping by `step` (+-1).
+int countOnLine(const char *line, int idx, char c, int step) {
+    int count = 0;
+    int i = idx + step;
+    while (i >= 0 && i < kLen && line[i] == c) {
+        count++;
+        i += step;
+    }
+    return count;
+}
+
+// A four/open-four/three can only form where at least one same-color stone already sits within
+// reach (a completion needs 3-4 stones total, one of which is the candidate itself). Bailing out
+// early when a direction is "empty" skips the expensive nested search entirely for the common case
+// of a candidate that isn't near any of its own color along that particular line.
+bool hasNearby(const char *line, int idx, char c, int radius) {
+    for (int i = -radius; i <= radius; i++) {
+        if (i == 0) continue;
+        int p = idx + i;
+        if (p >= 0 && p < kLen && line[p] == c) return true;
+    }
+    return false;
+}
+
+bool isFiveOnLine(char *line, int idx, int nColor) {
+    char c = (nColor == 0) ? RenjuForbiddenPointFinder::BLACK : RenjuForbiddenPointFinder::WHITE;
+    char saved = line[idx];
+    line[idx] = c;
+    int count = 1 + countOnLine(line, idx, c, +1) + countOnLine(line, idx, c, -1);
+    line[idx] = saved;
+    // Black needs exactly five: a run of six or more is an overline, not a win.
+    return (nColor == 0) ? (count == 5) : (count >= 5);
+}
+
+bool isFourOnLine(char *line, int idx, int nColor) {
+    char c = (nColor == 0) ? RenjuForbiddenPointFinder::BLACK : RenjuForbiddenPointFinder::WHITE;
+    char saved = line[idx];
+    line[idx] = c;
+
+    if (!hasNearby(line, idx, c, 4)) {
+        line[idx] = saved;
+        return false;
+    }
+
+    bool result = false;
+    for (int i = -4; i <= 4 && !result; i++) {
+        if (i == 0) continue;
+        int p = idx + i;
+        if (p < 0 || p >= kLen || line[p] != RenjuForbiddenPointFinder::EMPTY) continue;
+        if (isFiveOnLine(line, p, nColor)) result = true;
+    }
+
+    line[idx] = saved;
+    return result;
+}
+
+int isOpenFourOnLine(char *line, int idx, int nColor) {
+    char c = (nColor == 0) ? RenjuForbiddenPointFinder::BLACK : RenjuForbiddenPointFinder::WHITE;
+    char saved = line[idx];
+    line[idx] = c;
+
+    if (!hasNearby(line, idx, c, 4)) {
+        line[idx] = saved;
+        return 0;
+    }
+
+    int count = 0;
+    for (int i = -4; i <= 4 && count < 2; i++) {
+        if (i == 0) continue;
+        int p = idx + i;
+        if (p < 0 || p >= kLen || line[p] != RenjuForbiddenPointFinder::EMPTY) continue;
+        if (isFiveOnLine(line, p, nColor)) count++;
+    }
+
+    line[idx] = saved;
+    return count; // loop stops as soon as count reaches 2, so already capped
+}
+
+bool isOpenThreeOnLine(char *line, int idx, int nColor) {
+    char c = (nColor == 0) ? RenjuForbiddenPointFinder::BLACK : RenjuForbiddenPointFinder::WHITE;
+    char saved = line[idx];
+    line[idx] = c;
+
+    if (!hasNearby(line, idx, c, 4)) {
+        line[idx] = saved;
+        return false;
+    }
+
+    bool result = false;
+    for (int i = -4; i <= 4 && !result; i++) {
+        if (i == 0) continue;
+        int p = idx + i;
+        if (p < 0 || p >= kLen || line[p] != RenjuForbiddenPointFinder::EMPTY) continue;
+        if (isOpenFourOnLine(line, p, nColor) == 2) result = true;
+    }
+
+    line[idx] = saved;
+    return result;
+}
+
+// Extracts the board's line through (x, y) along `dir` into `line[kLen]`, with (x, y) itself at
+// index kRadius. (x, y) is copied as-is (EMPTY, per the class-wide precondition).
+void extractLine(const RenjuForbiddenPointFinder &finder, int x, int y, int dir, char *line) {
+    int dx = kDirs[dir][0], dy = kDirs[dir][1];
+    for (int i = -kRadius; i <= kRadius; i++) {
+        line[i + kRadius] = finder.getStone(x + dx * i, y + dy * i);
+    }
+}
 } // namespace
 
 RenjuForbiddenPointFinder::RenjuForbiddenPointFinder(int size) : size_(size) { clear(); }
@@ -38,7 +161,8 @@ char RenjuForbiddenPointFinder::getStone(int x, int y) const {
 }
 
 // Counts consecutive stones of color `c` starting one step from (x, y), walking in direction
-// `dir` (0..3 forward, 4..7 the reverse of 0..3). Does not include (x, y) itself.
+// `dir` (0..3 forward, 4..7 the reverse of 0..3). Does not include (x, y) itself. Kept for
+// isOverline, which is already O(1) and doesn't need the line-extraction machinery below.
 int RenjuForbiddenPointFinder::countLine(int x, int y, char c, int dir) const {
     int ddx, ddy;
     if (dir < 4) {
@@ -60,13 +184,9 @@ int RenjuForbiddenPointFinder::countLine(int x, int y, char c, int dir) const {
 }
 
 bool RenjuForbiddenPointFinder::isFive(int x, int y, int nColor, int dir) const {
-    char c = (nColor == 0) ? BLACK : WHITE;
-    setStone(x, y, c);
-    int count = 1 + countLine(x, y, c, dir) + countLine(x, y, c, dir + 4);
-    setStone(x, y, EMPTY);
-
-    // Black needs exactly five: a run of six or more is an overline, not a win.
-    return (nColor == 0) ? (count == 5) : (count >= 5);
+    char line[kLen];
+    extractLine(*this, x, y, dir, line);
+    return isFiveOnLine(line, kRadius, nColor);
 }
 
 bool RenjuForbiddenPointFinder::isFive(int x, int y, int nColor) const {
@@ -92,60 +212,27 @@ bool RenjuForbiddenPointFinder::isOverline(int x, int y) const {
 // isFive's exact-five rule for black). This naturally excludes fours whose only completion would
 // be an overline for black - no special-casing needed.
 bool RenjuForbiddenPointFinder::isFour(int x, int y, int nColor, int dir) const {
-    char c = (nColor == 0) ? BLACK : WHITE;
-    setStone(x, y, c);
-
-    bool result = false;
-    int ddx = kDirs[dir][0], ddy = kDirs[dir][1];
-    for (int i = -4; i <= 4 && !result; i++) {
-        if (i == 0) continue;
-        int px = x + ddx * i, py = y + ddy * i;
-        if (getStone(px, py) != EMPTY) continue;
-        if (isFive(px, py, nColor, dir)) result = true;
-    }
-
-    setStone(x, y, EMPTY);
-    return result;
+    char line[kLen];
+    extractLine(*this, x, y, dir, line);
+    return isFourOnLine(line, kRadius, nColor);
 }
 
 // Counts how many distinct empty points along dir would complete a five if filled (0, 1, or 2).
 // 2 means a genuine open four (e.g. "_XXXX_"): both completions are live, so it cannot be blocked
 // with a single stone.
 int RenjuForbiddenPointFinder::isOpenFour(int x, int y, int nColor, int dir) const {
-    char c = (nColor == 0) ? BLACK : WHITE;
-    setStone(x, y, c);
-
-    int count = 0;
-    int ddx = kDirs[dir][0], ddy = kDirs[dir][1];
-    for (int i = -4; i <= 4; i++) {
-        if (i == 0) continue;
-        int px = x + ddx * i, py = y + ddy * i;
-        if (getStone(px, py) != EMPTY) continue;
-        if (isFive(px, py, nColor, dir)) count++;
-    }
-
-    setStone(x, y, EMPTY);
-    return std::min(count, 2);
+    char line[kLen];
+    extractLine(*this, x, y, dir, line);
+    return isOpenFourOnLine(line, kRadius, nColor);
 }
 
 // True if placing nColor at (x, y) creates a real "three" along dir: an empty point within reach
 // which, if filled by nColor, produces a genuine open four (isOpenFour == 2). A three whose only
 // follow-up is a simple (one-sided) four doesn't count - the opponent could block it with one move.
 bool RenjuForbiddenPointFinder::isOpenThree(int x, int y, int nColor, int dir) const {
-    char c = (nColor == 0) ? BLACK : WHITE;
-    setStone(x, y, c);
-
-    bool result = false;
-    int ddx = kDirs[dir][0], ddy = kDirs[dir][1];
-    for (int i = -4; i <= 4 && !result; i++) {
-        if (i == 0) continue;
-        int px = x + ddx * i, py = y + ddy * i;
-        if (getStone(px, py) != EMPTY) continue;
-        if (isOpenFour(px, py, nColor, dir) == 2) result = true;
-    }
-
-    setStone(x, y, EMPTY);
-    return result;
+    char line[kLen];
+    extractLine(*this, x, y, dir, line);
+    return isOpenThreeOnLine(line, kRadius, nColor);
 }
 
 // Double-four: two or more distinct four-lines through (x, y). Counting by direction (rather than
@@ -153,7 +240,7 @@ bool RenjuForbiddenPointFinder::isOpenThree(int x, int y, int nColor, int dir) c
 // line) from being miscounted as a double-four.
 bool RenjuForbiddenPointFinder::isDoubleFour(int x, int y) const {
     int count = 0;
-    for (int dir = 0; dir < 4; dir++) {
+    for (int dir = 0; dir < 4 && count < 2; dir++) {
         if (isFour(x, y, 0, dir)) count++;
     }
     return count >= 2;
@@ -161,7 +248,7 @@ bool RenjuForbiddenPointFinder::isDoubleFour(int x, int y) const {
 
 bool RenjuForbiddenPointFinder::isDoubleThree(int x, int y) const {
     int count = 0;
-    for (int dir = 0; dir < 4; dir++) {
+    for (int dir = 0; dir < 4 && count < 2; dir++) {
         if (isOpenThree(x, y, 0, dir)) count++;
     }
     return count >= 2;
