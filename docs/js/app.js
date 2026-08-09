@@ -6,12 +6,15 @@ const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000 };
 let Module, game, boardSize;
 let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
 let lastAiMove = null; // {x, y} of the AI's most recent move, kept highlighted until its next move
+let moveHistory = []; // [{x, y}, ...] in play order, Black first; used to replay after undo
+let aiPending = false; // true from when the AI's turn is scheduled until its move commits
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const capturesEl = document.getElementById('captures');
 const topMovesBody = document.querySelector('#top-moves tbody');
 const resetBtn = document.getElementById('reset');
+const undoBtn = document.getElementById('undo');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsCloseBtn = document.getElementById('settings-close');
@@ -42,6 +45,8 @@ function newGame() {
   boardSize = game.getBoardSize();
   lastTopMoves = null;
   lastAiMove = null;
+  moveHistory = [];
+  aiPending = false;
   buildBoard();
   render();
 }
@@ -117,11 +122,13 @@ function onCellClick(x, y) {
   if (getMode() === 'ai' && game.getCurrentPlayer() !== 1) return; // AI (White) is moving
   if (game.getStoneAt(x, y) !== 0) return; // cell already has a stone
   if (!game.makeMove(x, y)) return;
+  moveHistory.push({ x, y });
   lastTopMoves = null;
   render();
 
   if (getMode() === 'ai' && !game.isGameOver()) {
     statusEl.textContent = 'AI is thinking...';
+    aiPending = true;
     setTimeout(aiTurn, 30);
   }
 }
@@ -131,18 +138,40 @@ function onCellClick(x, y) {
 // until the next AI search replaces them or a human move clears them.
 function aiTurn() {
   const move = game.computeAIMove();
-  if (move.x < 0) { lastTopMoves = null; render(); return; } // no moves left (draw)
+  if (move.x < 0) { aiPending = false; lastTopMoves = null; render(); return; } // no moves left (draw)
   lastTopMoves = game.getTopMoves(10);
   render(lastTopMoves);
   setTimeout(() => {
     game.makeMove(move.x, move.y);
+    moveHistory.push({ x: move.x, y: move.y });
     lastAiMove = { x: move.x, y: move.y };
+    aiPending = false;
     render(lastTopMoves);
   }, 500);
 }
 
+// Undoes the last full turn: 1 move in PvP, or the AI's move plus the human's
+// move that provoked it in Player vs AI. Disabled while the AI is mid-turn
+// (search running or its move about to commit) to avoid racing that timeout.
+function undoMove() {
+  if (aiPending) return; // AI move in flight; wait for it to commit
+  const removeCount = getMode() === 'ai' ? 2 : 1;
+  if (moveHistory.length < removeCount) return;
+  moveHistory.length -= removeCount;
+
+  game.reset();
+  lastTopMoves = null;
+  lastAiMove = null;
+  for (const m of moveHistory) game.makeMove(m.x, m.y);
+  if (getMode() === 'ai' && moveHistory.length % 2 === 0 && moveHistory.length > 0) {
+    lastAiMove = moveHistory[moveHistory.length - 1]; // last move replayed was White's (AI's)
+  }
+  render();
+}
+
 labelEffortButtons();
 resetBtn.addEventListener('click', newGame);
+undoBtn.addEventListener('click', undoMove);
 settingsBtn.addEventListener('click', () => settingsDialog.classList.add('open'));
 settingsCloseBtn.addEventListener('click', () => settingsDialog.classList.remove('open'));
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', newGame));
