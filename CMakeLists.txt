@@ -135,6 +135,7 @@ add_pente_executable(renju      apps/Renju.cpp)
 add_pente_executable(keryopente apps/KeryoPente.cpp)
 add_pente_executable(benchmark  apps/Benchmark.cpp)
 add_pente_executable(inspect    apps/Inspect.cpp)
+add_pente_executable(solve5x5   apps/Solve5x5.cpp)
 
 # ─── Unit tests ───────────────────────────────────────────────────────────────
 

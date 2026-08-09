@@ -235,6 +235,18 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn) {
     if (stopRequested_) return;
     stats_.midCalls++;
 
+    // Clock queries are relatively expensive; only check every 4096 calls to
+    // keep this off the hot path. Can overshoot the budget slightly as a
+    // result - that's fine, this is a coarse "stop eventually" budget, not a
+    // hard deadline.
+    if (config_.maxSeconds > 0 && (stats_.midCalls & 0xFFF) == 0) {
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime_).count();
+        if (elapsed >= config_.maxSeconds) {
+            stopRequested_ = true;
+            return;
+        }
+    }
+
     if (!n->expanded) {
         expandNode(n, game);
         return;
@@ -310,6 +322,7 @@ bool PNS::solve(const PenteGame &rootGame) {
     table_.clear();
     stats_ = Stats{};
     stopRequested_ = false;
+    startTime_ = std::chrono::steady_clock::now();
     rootPlayer_ = rootGame.getCurrentPlayer();
 
     rootNode_ = getOrCreateNode(rootGame);

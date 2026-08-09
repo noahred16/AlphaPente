@@ -92,6 +92,7 @@ Stages:
 
 #include "PenteGame.hpp"
 #include "PositionKey.hpp"
+#include <chrono>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -114,6 +115,13 @@ class PNS {
         // inspectable but incomplete state) once this is reached, rather than
         // growing unbounded.
         uint64_t maxNodes = 20'000'000;
+
+        // Wall-clock budget in seconds; 0 = unlimited. Checked periodically
+        // (not every mid() call, to keep the clock query off the hot path),
+        // so the actual stop can overshoot slightly. Like maxNodes, hitting
+        // this leaves the DAG in a valid, resumable-in-spirit but incomplete
+        // state - solve() returns false rather than crashing or looping.
+        double maxSeconds = 0;
 
         Config() {}
     };
@@ -189,6 +197,7 @@ class PNS {
     Node *rootNode_ = nullptr;
     PenteGame::Player rootPlayer_ = PenteGame::NONE;
     bool stopRequested_ = false;
+    std::chrono::steady_clock::time_point startTime_;
 
     static Number pnOf(const Node *n) { return n ? n->pn : 1; }
     static Number dnOf(const Node *n) { return n ? n->dn : 1; }
