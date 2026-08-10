@@ -344,6 +344,78 @@ bool PNS::solve(const PenteGame &rootGame) {
     return rootNode_->outcome != Outcome::UNKNOWN;
 }
 
+void PNS::dfsExhaustive(Node *n, PenteGame game, int depth) {
+    if (n->outcome != Outcome::UNKNOWN) return; // already resolved (memoized via table_)
+    if (stopRequested_) return;
+    stats_.midCalls++;
+
+    if (depth >= config_.maxRecursionDepth) {
+        stopRequested_ = true;
+        return;
+    }
+    if (config_.maxSeconds > 0 && (stats_.midCalls & 0xFFF) == 0) {
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime_).count();
+        if (elapsed >= config_.maxSeconds) {
+            stopRequested_ = true;
+            return;
+        }
+    }
+
+    if (!n->expanded) {
+        expandNode(n, game); // resolves n directly (sets outcome) if terminal
+    }
+    if (n->outcome != Outcome::UNKNOWN) return;
+
+    const bool isOr = (game.getCurrentPlayer() == rootPlayer_);
+    int currentSym = -1;
+    PositionKey::canonical(game, currentSym);
+
+    for (size_t bi = 0; bi < n->childMoves.size(); ++bi) {
+        int physX, physY;
+        PositionKey::applyInverseSymToPhysical(game, currentSym, n->childMoves[bi].x, n->childMoves[bi].y, physX, physY);
+        PenteGame childGame = game;
+        childGame.makeMove(physX, physY);
+
+        if (!n->childPtr[bi]) {
+            if (table_.size() >= config_.maxNodes) {
+                stopRequested_ = true;
+                return;
+            }
+            n->childPtr[bi] = getOrCreateNode(childGame);
+        }
+        dfsExhaustive(n->childPtr[bi], std::move(childGame), depth + 1);
+        if (stopRequested_) return;
+    }
+
+    // Every child is now fully resolved. Provably, this always leaves n->pn
+    // or n->dn exactly 0 in whichever direction resolveOutcome() expects (an
+    // OR node either has a WIN child, giving pn=0, or every child is
+    // LOSS/DRAW, giving dn=sum(0s)=0; symmetric for AND nodes) - so both
+    // helpers work completely unchanged from df-pn's own use of them.
+    updatePnDn(n, isOr);
+    resolveOutcome(n, isOr);
+}
+
+bool PNS::solveExhaustive(const PenteGame &rootGame) {
+    assert(!rootGame.getConfig().tournamentRule &&
+           "PNS requires tournamentRule disabled (matches apps/Pente.cpp's boardSize<7 auto-disable convention) "
+           "since its exhaustive move enumeration doesn't reproduce the tournament-rule perimeter restriction");
+    assert(!rootGame.getConfig().renjuForbiddenMoves && "PNS does not support Renju forbidden-move rules");
+    assert(rootGame.getConfig().boardSize <= PositionKey::kMaxBoardSize &&
+           "PositionKey packing only supports boardSize <= 5");
+
+    table_.clear();
+    stats_ = Stats{};
+    stopRequested_ = false;
+    startTime_ = std::chrono::steady_clock::now();
+    rootPlayer_ = rootGame.getCurrentPlayer();
+
+    rootNode_ = getOrCreateNode(rootGame);
+    dfsExhaustive(rootNode_, rootGame, 0);
+
+    return rootNode_->outcome != Outcome::UNKNOWN;
+}
+
 PNS::Outcome PNS::getRootOutcome() const { return rootNode_ ? rootNode_->outcome : Outcome::UNKNOWN; }
 
 int PNS::getRootDepth() const { return rootNode_ ? static_cast<int>(rootNode_->depth) : 0; }

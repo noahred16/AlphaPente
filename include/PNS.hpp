@@ -156,7 +156,30 @@ class PNS {
     // Requires rootGame's config to have tournamentRule and
     // renjuForbiddenMoves both disabled, and boardSize <= PositionKey::kMaxBoardSize -
     // see the class-level comment above for why.
+    //
+    // NOTE: df-pn is deliberately efficient - it stops exploring a branch
+    // the instant it's no longer needed to prove/disprove the root, so most
+    // reachable positions are left UNKNOWN even after a full proof (e.g. a
+    // 3x3 solve touches 264 nodes but resolves only 86). Use
+    // solveExhaustive() instead if you want every reachable position's
+    // outcome, e.g. to build a complete book rather than just prove the root.
     bool solve(const PenteGame &rootGame);
+
+    // Same preconditions as solve(), but resolves EVERY position reachable
+    // via legal play from rootGame, not just the minimal subset needed to
+    // prove the root - a full memoized postorder traversal (visit every
+    // child, no proof-number-driven pruning) rather than df-pn's
+    // threshold-guided descent. Reuses expandNode()/updatePnDn()/
+    // resolveOutcome() unchanged: once every child of a node is fully
+    // resolved, that node's pn/dn always end up exactly 0 in the direction
+    // resolveOutcome() expects (provable from the OR/AND aggregation rules),
+    // so no separate combine logic was needed for this mode.
+    // Can visit substantially more nodes than solve() on the same game.
+    // Still respects maxNodes/maxSeconds/maxRecursionDepth as safety nets;
+    // returns false if any of them cut the traversal short (root and
+    // whatever got fully resolved along the way remain valid/query-able,
+    // but incomplete - not a full book in that case).
+    bool solveExhaustive(const PenteGame &rootGame);
 
     Outcome getRootOutcome() const;
 
@@ -232,6 +255,7 @@ class PNS {
     void selectChildOr(const Node *n, int &bestIdx, Number &secondPn) const;
     void selectChildAnd(const Node *n, int &bestIdx, Number &secondDn) const;
     void mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth);
+    void dfsExhaustive(Node *n, PenteGame game, int depth);
 
     static std::vector<PenteGame::Move> enumerateLegalMoves(const PenteGame &game);
 };

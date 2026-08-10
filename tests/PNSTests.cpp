@@ -28,6 +28,28 @@ TEST_CASE("PNS proves an unwinnable 3x3 board as a draw at the root") {
     CHECK(pns.getRootDepth() <= 8);
 }
 
+// solveExhaustive() exists specifically because solve() leaves most reachable
+// positions UNKNOWN (df-pn stops exploring once a branch is no longer needed
+// to prove the root). This checks the actual distinguishing property: same
+// root result as solve() on the identical scenario, but resolves the full
+// reachable DAG rather than a minimal subset - every node solveExhaustive()
+// ever touches (getNodeCount()) ends up resolved (exportResolved().size()
+// equal to it), unlike solve()'s partial coverage.
+TEST_CASE("PNS::solveExhaustive resolves every reachable position, not just enough to prove the root") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame game(config);
+    game.reset();
+    game.makeMove(9, 9);
+
+    PNS pns;
+    bool solved = pns.solveExhaustive(game);
+
+    CHECK(solved);
+    CHECK(pns.getRootOutcome() == PNS::Outcome::DRAW); // matches the plain solve() result above
+    CHECK(pns.exportResolved().size() == pns.getNodeCount());
+}
+
 // Regression test for the recursion-depth safety valve (Config::maxRecursionDepth):
 // a real long single-threaded 4x4 run once SIGSEGV'd (stack overflow - mid()
 // recurses per-ply, passing a full PenteGame >8KB by value each level) once

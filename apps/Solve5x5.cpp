@@ -59,13 +59,15 @@ int main(int argc, char *argv[]) {
     double maxSeconds = 0;
     std::string outPath;
     std::string inPath;
+    bool exhaustive = false;
     int opt;
-    while ((opt = getopt(argc, argv, "B:N:t:o:i:h")) != -1) {
+    while ((opt = getopt(argc, argv, "B:N:t:o:i:xh")) != -1) {
         if (opt == 'B') boardSize = std::max(3, std::min(PositionKey::kMaxBoardSize, std::atoi(optarg)));
         else if (opt == 'N') maxNodes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 't') maxSeconds = std::atof(optarg);
         else if (opt == 'o') outPath = optarg;
         else if (opt == 'i') inPath = optarg;
+        else if (opt == 'x') exhaustive = true;
         else if (opt == 'h') {
             std::cout <<
                 "Usage: solve5x5 [options] [\"move string\"]\n"
@@ -76,6 +78,9 @@ int main(int argc, char *argv[]) {
                 "  -B <size>       Board size, 3-" << PositionKey::kMaxBoardSize << " (default: 5)\n"
                 "  -N <count>      Max transposition-table nodes (default: 20000000)\n"
                 "  -t <seconds>    Wall-clock budget, 0 = unlimited (default: 0)\n"
+                "  -x              Exhaustive: resolve every reachable position (a full\n"
+                "                  book), not just the minimal subset df-pn needs to prove\n"
+                "                  the root - can visit substantially more nodes\n"
                 "  -o <path>       Save resolved positions to this PositionBook file\n"
                 "  -i <path>       Load a PositionBook first; skip solving if the exact\n"
                 "                  root is already resolved there (see limitation above)\n"
@@ -127,9 +132,11 @@ int main(int argc, char *argv[]) {
     std::cout << "Recursion depth budget: " << pnsConfig.maxRecursionDepth << "\n";
     PNS pns(pnsConfig);
 
-    std::cout << "Solving (maxNodes=" << maxNodes << ", maxSeconds=" << maxSeconds << ")...\n" << std::flush;
+    std::cout << "Solving (" << (exhaustive ? "exhaustive" : "proof-driven") << ", maxNodes=" << maxNodes
+              << ", maxSeconds=" << maxSeconds << ")...\n"
+              << std::flush;
     auto t0 = std::chrono::steady_clock::now();
-    bool solved = pns.solve(game);
+    bool solved = exhaustive ? pns.solveExhaustive(game) : pns.solve(game);
     double wallSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
     pns.printProofStats();
