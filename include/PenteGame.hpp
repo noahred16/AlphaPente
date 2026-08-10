@@ -178,6 +178,21 @@ class PenteGame {
     bool makeMove(int x, int y);     // Returns false if illegal
     // void undoMove();               // Undo last move using stack
 
+    // Directly sets this game's state to the given position (window-relative,
+    // row-major cells - same layout PositionKey::Unpacked uses) and rebuilds
+    // every derived internal structure (hash, promising-move index,
+    // moveCount) from scratch. Unlike makeMove(), does NOT run capture
+    // detection - the state is assumed already valid/consistent (e.g.
+    // unpacked from an exact PositionKey rather than reached via incremental
+    // play). `cells` must have exactly (maxIdx()-minIdx())^2 entries. Used
+    // for PNS checkpoint/resume (src/PNS.cpp), where reconstructing a
+    // position directly from its own key is far simpler than replaying an
+    // arbitrary move history that was never actually recorded (a DAG node
+    // may be reachable via many different move orders, none of which are
+    // stored - only the resulting position matters, per PNS.hpp's own
+    // no-true-cycles argument).
+    void loadRawState(const Player *cells, Player sideToMove, int blackCapturesIn, int whiteCapturesIn);
+
     // Game state queries
     Player getCurrentPlayer() const { return currentPlayer; }
     Player getWinner() const;

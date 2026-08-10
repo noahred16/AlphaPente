@@ -1,6 +1,7 @@
 #include "PNS.hpp"
 #include "PenteGame.hpp"
 #include "doctest.h"
+#include <cstdio>
 
 // Mirrors tests/MCTSTests.cpp's "MCTS proves an unwinnable board as a solved
 // draw at the root" case: a 3x3 gomoku board can never produce a five-in-a-row
@@ -101,6 +102,80 @@ TEST_CASE("PNS finds an immediate five-in-a-row win") {
     CHECK(solved);
     CHECK(pns.getRootOutcome() == PNS::Outcome::WIN);
     CHECK(pns.getRootDepth() == 1); // wins on the very next move
+}
+
+// Full checkpoint/resume round trip: cap maxNodes low enough that solve()
+// can't finish on the first pass, load that checkpoint into a fresh PNS
+// instance with a real budget, and confirm resuming reaches the exact same
+// result an uninterrupted solve does. This is the scenario checkpointing
+// exists for - a long run split across two separate processes/sessions.
+TEST_CASE("PNS checkpoint save/load resumes an interrupted solve to the same result as an uninterrupted one") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame game(config);
+    game.reset();
+    game.makeMove(9, 9);
+
+    PNS baseline;
+    REQUIRE(baseline.solve(game));
+    REQUIRE(baseline.getRootOutcome() == PNS::Outcome::DRAW);
+
+    const std::string path = "/tmp/pns_checkpoint_test_resume.bin";
+    std::remove(path.c_str());
+
+    // First pass: maxNodes=20 is far short of the ~264 nodes a full 3x3
+    // solve touches (see the first TEST_CASE's comment above), so this
+    // cannot finish - but solve() still writes a final checkpoint of
+    // whatever partial DAG it built, since checkpointPath is set.
+    PNS::Config cfg1;
+    cfg1.maxNodes = 20;
+    cfg1.checkpointPath = path;
+    PNS pns1(cfg1);
+    bool solved1 = pns1.solve(game);
+    CHECK_FALSE(solved1);
+    CHECK(pns1.getRootOutcome() == PNS::Outcome::UNKNOWN);
+    CHECK(pns1.getNodeCount() > 0);
+    CHECK(pns1.getNodeCount() <= cfg1.maxNodes);
+
+    // Resume in a completely fresh PNS instance with a real budget.
+    PNS pns2;
+    REQUIRE(pns2.loadCheckpoint(path, game));
+    CHECK(pns2.getNodeCount() == pns1.getNodeCount()); // picked up exactly where it left off
+    bool solved2 = pns2.solve(game);
+
+    CHECK(solved2);
+    CHECK(pns2.getRootOutcome() == PNS::Outcome::DRAW);
+    CHECK(pns2.getRootDepth() == baseline.getRootDepth());
+
+    std::remove(path.c_str());
+}
+
+// loadCheckpoint() must refuse a checkpoint written for a different root
+// player rather than silently resuming against a mismatched position - a
+// checkpoint's proof numbers are only meaningful relative to whoever was
+// proving when it was written (see the doc comment on loadCheckpoint()).
+TEST_CASE("PNS::loadCheckpoint rejects a checkpoint whose root player doesn't match rootGame") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame blackToMove(config);
+    blackToMove.reset();
+
+    PenteGame whiteToMove(config);
+    whiteToMove.reset();
+    whiteToMove.makeMove(9, 9);
+
+    const std::string path = "/tmp/pns_checkpoint_test_mismatch.bin";
+    std::remove(path.c_str());
+
+    PNS::Config cfg;
+    cfg.checkpointPath = path;
+    PNS pns(cfg);
+    REQUIRE(pns.solve(whiteToMove)); // writes a final checkpoint keyed to White-to-move
+
+    PNS pns2;
+    CHECK_FALSE(pns2.loadCheckpoint(path, blackToMove)); // Black-to-move root: mismatched
+
+    std::remove(path.c_str());
 }
 
 // Directed test isolating capture-based terminal detection (a distinct code

@@ -139,6 +139,18 @@ class PNS {
         // child whose pn/dn can never change.
         int maxRecursionDepth = 300;
 
+        // If non-empty, periodically writes the ENTIRE in-progress DAG (see
+        // saveCheckpoint()) to this path during solve()/solveExhaustive() -
+        // every checkpointIntervalSeconds (default 10 min), checked on the
+        // same cadence as maxSeconds. Unlike PositionBook/exportResolved()
+        // (which only ever capture resolved positions, for a final shippable
+        // book), this captures unresolved nodes too, so loadCheckpoint() can
+        // genuinely resume mid-search - the actual proof-number state, not
+        // just "skip re-verifying what's already proven". Empty (default) =
+        // no periodic checkpointing.
+        std::string checkpointPath;
+        double checkpointIntervalSeconds = 600;
+
         Config() {}
     };
 
@@ -210,6 +222,29 @@ class PNS {
     };
     std::vector<Record> exportResolved() const;
 
+    // Persists the entire in-progress DAG - every node's pn/dn/outcome/
+    // expanded/children, not just resolved ones - so a later solve()/
+    // solveExhaustive() call from the SAME root position can genuinely
+    // resume (see loadCheckpoint()) rather than starting over. This is a
+    // PNS-internal working format for resuming a specific interrupted run,
+    // not a shippable result - use exportResolved()/PositionBook once you
+    // actually want a book to query externally. Returns false on any I/O
+    // error.
+    bool saveCheckpoint(const std::string &path) const;
+
+    // Loads a checkpoint written by saveCheckpoint() and seeds this
+    // instance's DAG from it, so the next solve()/solveExhaustive(rootGame)
+    // call continues from exactly that state instead of starting fresh.
+    // rootGame's own current player must match the checkpoint's stored root
+    // player (returns false, leaving *this unchanged, otherwise - a
+    // checkpoint's proof numbers are only meaningful relative to whoever was
+    // proving when it was built). Reconstructs each node's position via
+    // PenteGame::loadRawState() rather than needing the original move
+    // history (never recorded - a DAG node may be reachable via many
+    // different move orders, and per this header's own no-true-cycles
+    // argument, only the resulting position ever matters).
+    bool loadCheckpoint(const std::string &path, const PenteGame &rootGame);
+
   private:
     struct Node {
         Number pn = 1;
@@ -237,6 +272,13 @@ class PNS {
     PenteGame::Player rootPlayer_ = PenteGame::NONE;
     bool stopRequested_ = false;
     std::chrono::steady_clock::time_point startTime_;
+    std::chrono::steady_clock::time_point lastCheckpointTime_;
+    // Set by loadCheckpoint(), consumed by the next solve()/solveExhaustive()
+    // call: skip the usual table_.clear()/rootPlayer_ reset (the checkpoint
+    // already populated both correctly), then reset to false so a
+    // subsequent call without an intervening loadCheckpoint() behaves
+    // exactly as it always has.
+    bool resuming_ = false;
 
     static Number pnOf(const Node *n) { return n ? n->pn : 1; }
     static Number dnOf(const Node *n) { return n ? n->dn : 1; }

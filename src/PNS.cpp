@@ -1,6 +1,8 @@
 #include "PNS.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 
@@ -245,12 +247,23 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
     // Clock queries are relatively expensive; only check every 4096 calls to
     // keep this off the hot path. Can overshoot the budget slightly as a
     // result - that's fine, this is a coarse "stop eventually" budget, not a
-    // hard deadline.
-    if (config_.maxSeconds > 0 && (stats_.midCalls & 0xFFF) == 0) {
-        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime_).count();
-        if (elapsed >= config_.maxSeconds) {
-            stopRequested_ = true;
-            return;
+    // hard deadline. Same cadence also drives periodic checkpointing (see
+    // Config::checkpointPath) - one now() call covers both checks.
+    if ((stats_.midCalls & 0xFFF) == 0) {
+        auto now = std::chrono::steady_clock::now();
+        if (config_.maxSeconds > 0) {
+            double elapsed = std::chrono::duration<double>(now - startTime_).count();
+            if (elapsed >= config_.maxSeconds) {
+                stopRequested_ = true;
+                return;
+            }
+        }
+        if (!config_.checkpointPath.empty()) {
+            double sinceCheckpoint = std::chrono::duration<double>(now - lastCheckpointTime_).count();
+            if (sinceCheckpoint >= config_.checkpointIntervalSeconds) {
+                saveCheckpoint(config_.checkpointPath);
+                lastCheckpointTime_ = std::chrono::steady_clock::now();
+            }
         }
     }
 
@@ -325,13 +338,22 @@ bool PNS::solve(const PenteGame &rootGame) {
     assert(rootGame.getConfig().boardSize <= PositionKey::kMaxBoardSize &&
            "PositionKey packing only supports boardSize <= 5");
 
-    table_.clear();
+    if (resuming_) {
+        // loadCheckpoint() already populated table_/rootPlayer_/rootNode_ -
+        // reusing them (instead of clearing) is the entire point of resuming.
+        assert(rootPlayer_ == rootGame.getCurrentPlayer() &&
+               "rootGame must match the position loadCheckpoint() was called with");
+        resuming_ = false;
+    } else {
+        table_.clear();
+        rootPlayer_ = rootGame.getCurrentPlayer();
+        rootNode_ = getOrCreateNode(rootGame);
+    }
     stats_ = Stats{};
     stopRequested_ = false;
     startTime_ = std::chrono::steady_clock::now();
-    rootPlayer_ = rootGame.getCurrentPlayer();
+    lastCheckpointTime_ = startTime_;
 
-    rootNode_ = getOrCreateNode(rootGame);
     // mid() returns after merely expanding a not-yet-expanded node (standard
     // df-pn "MID" behavior - see the class-level comment), relying on its
     // caller to re-invoke it to actually descend. Every recursive call gets
@@ -340,6 +362,11 @@ bool PNS::solve(const PenteGame &rootGame) {
     while (rootNode_->outcome == Outcome::UNKNOWN && !stopRequested_) {
         mid(rootNode_, rootGame, INF, INF, 0);
     }
+
+    // Always write a final checkpoint (not just the periodic ones) so a run
+    // stopped by maxNodes/maxSeconds - the exact scenario this feature exists
+    // for - never loses its last bit of progress.
+    if (!config_.checkpointPath.empty()) saveCheckpoint(config_.checkpointPath);
 
     return rootNode_->outcome != Outcome::UNKNOWN;
 }
@@ -353,11 +380,21 @@ void PNS::dfsExhaustive(Node *n, PenteGame game, int depth) {
         stopRequested_ = true;
         return;
     }
-    if (config_.maxSeconds > 0 && (stats_.midCalls & 0xFFF) == 0) {
-        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime_).count();
-        if (elapsed >= config_.maxSeconds) {
-            stopRequested_ = true;
-            return;
+    if ((stats_.midCalls & 0xFFF) == 0) {
+        auto now = std::chrono::steady_clock::now();
+        if (config_.maxSeconds > 0) {
+            double elapsed = std::chrono::duration<double>(now - startTime_).count();
+            if (elapsed >= config_.maxSeconds) {
+                stopRequested_ = true;
+                return;
+            }
+        }
+        if (!config_.checkpointPath.empty()) {
+            double sinceCheckpoint = std::chrono::duration<double>(now - lastCheckpointTime_).count();
+            if (sinceCheckpoint >= config_.checkpointIntervalSeconds) {
+                saveCheckpoint(config_.checkpointPath);
+                lastCheckpointTime_ = std::chrono::steady_clock::now();
+            }
         }
     }
 
@@ -404,14 +441,23 @@ bool PNS::solveExhaustive(const PenteGame &rootGame) {
     assert(rootGame.getConfig().boardSize <= PositionKey::kMaxBoardSize &&
            "PositionKey packing only supports boardSize <= 5");
 
-    table_.clear();
+    if (resuming_) {
+        assert(rootPlayer_ == rootGame.getCurrentPlayer() &&
+               "rootGame must match the position loadCheckpoint() was called with");
+        resuming_ = false;
+    } else {
+        table_.clear();
+        rootPlayer_ = rootGame.getCurrentPlayer();
+        rootNode_ = getOrCreateNode(rootGame);
+    }
     stats_ = Stats{};
     stopRequested_ = false;
     startTime_ = std::chrono::steady_clock::now();
-    rootPlayer_ = rootGame.getCurrentPlayer();
+    lastCheckpointTime_ = startTime_;
 
-    rootNode_ = getOrCreateNode(rootGame);
     dfsExhaustive(rootNode_, rootGame, 0);
+
+    if (!config_.checkpointPath.empty()) saveCheckpoint(config_.checkpointPath);
 
     return rootNode_->outcome != Outcome::UNKNOWN;
 }
@@ -445,6 +491,165 @@ std::vector<PNS::Record> PNS::exportResolved() const {
         }
     }
     return out;
+}
+
+namespace {
+constexpr uint32_t kCheckpointVersion = 1;
+} // namespace
+
+bool PNS::saveCheckpoint(const std::string &path) const {
+    std::ofstream os(path, std::ios::binary);
+    if (!os) return false;
+
+    os.write("PNSC", 4);
+    os.write(reinterpret_cast<const char *>(&kCheckpointVersion), sizeof(kCheckpointVersion));
+    uint8_t rootPlayerByte = static_cast<uint8_t>(rootPlayer_);
+    os.write(reinterpret_cast<const char *>(&rootPlayerByte), 1);
+    uint64_t nodeCount = table_.size();
+    os.write(reinterpret_cast<const char *>(&nodeCount), sizeof(nodeCount));
+
+    for (const auto &entry : table_) {
+        const PositionKey &key = entry.first;
+        const Node &n = entry.second;
+        os.write(reinterpret_cast<const char *>(&key.bits), sizeof(key.bits));
+        os.write(reinterpret_cast<const char *>(&n.pn), sizeof(n.pn));
+        os.write(reinterpret_cast<const char *>(&n.dn), sizeof(n.dn));
+        uint8_t outcomeByte = static_cast<uint8_t>(n.outcome);
+        uint8_t expandedByte = n.expanded ? 1 : 0;
+        os.write(reinterpret_cast<const char *>(&outcomeByte), 1);
+        os.write(reinterpret_cast<const char *>(&expandedByte), 1);
+        os.write(reinterpret_cast<const char *>(&n.depth), sizeof(n.depth));
+        uint16_t childCount = n.expanded ? static_cast<uint16_t>(n.childMoves.size()) : 0;
+        os.write(reinterpret_cast<const char *>(&childCount), sizeof(childCount));
+        if (n.expanded) {
+            for (const auto &m : n.childMoves) {
+                os.write(reinterpret_cast<const char *>(&m.x), 1);
+                os.write(reinterpret_cast<const char *>(&m.y), 1);
+            }
+        }
+    }
+    os.flush();
+    return static_cast<bool>(os);
+}
+
+bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
+    std::ifstream is(path, std::ios::binary);
+    if (!is) return false;
+
+    char magic[4];
+    is.read(magic, 4);
+    if (!is || std::memcmp(magic, "PNSC", 4) != 0) return false;
+    uint32_t version = 0;
+    is.read(reinterpret_cast<char *>(&version), sizeof(version));
+    if (!is || version != kCheckpointVersion) return false;
+    uint8_t rootPlayerByte = 0;
+    is.read(reinterpret_cast<char *>(&rootPlayerByte), 1);
+    if (!is) return false;
+    PenteGame::Player storedRootPlayer = static_cast<PenteGame::Player>(rootPlayerByte);
+    // A checkpoint's proof numbers are only meaningful relative to whoever
+    // was proving when it was written - refuse rather than silently resuming
+    // against a mismatched root.
+    if (storedRootPlayer != rootGame.getCurrentPlayer()) return false;
+
+    uint64_t nodeCount = 0;
+    is.read(reinterpret_cast<char *>(&nodeCount), sizeof(nodeCount));
+    if (!is) return false;
+
+    struct RawNode {
+        PositionKey key;
+        Number pn = 1, dn = 1;
+        Outcome outcome = Outcome::UNKNOWN;
+        bool expanded = false;
+        uint16_t depth = 0;
+        std::vector<PenteGame::Move> childMoves;
+    };
+    std::vector<RawNode> raw;
+    raw.reserve(nodeCount);
+
+    for (uint64_t i = 0; i < nodeCount; ++i) {
+        RawNode rn;
+        is.read(reinterpret_cast<char *>(&rn.key.bits), sizeof(rn.key.bits));
+        is.read(reinterpret_cast<char *>(&rn.pn), sizeof(rn.pn));
+        is.read(reinterpret_cast<char *>(&rn.dn), sizeof(rn.dn));
+        uint8_t outcomeByte = 0, expandedByte = 0;
+        is.read(reinterpret_cast<char *>(&outcomeByte), 1);
+        is.read(reinterpret_cast<char *>(&expandedByte), 1);
+        is.read(reinterpret_cast<char *>(&rn.depth), sizeof(rn.depth));
+        uint16_t childCount = 0;
+        is.read(reinterpret_cast<char *>(&childCount), sizeof(childCount));
+        if (!is) return false;
+        rn.outcome = static_cast<Outcome>(outcomeByte);
+        rn.expanded = expandedByte != 0;
+        if (rn.expanded) {
+            rn.childMoves.reserve(childCount);
+            for (uint16_t c = 0; c < childCount; ++c) {
+                uint8_t x = 0, y = 0;
+                is.read(reinterpret_cast<char *>(&x), 1);
+                is.read(reinterpret_cast<char *>(&y), 1);
+                if (!is) return false;
+                rn.childMoves.emplace_back(x, y);
+            }
+        }
+        raw.push_back(std::move(rn));
+    }
+
+    // First pass: create every Node verbatim from its raw record.
+    std::unordered_map<PositionKey, Node> newTable;
+    newTable.reserve(nodeCount);
+    for (const auto &rn : raw) {
+        Node n;
+        n.pn = rn.pn;
+        n.dn = rn.dn;
+        n.outcome = rn.outcome;
+        n.depth = rn.depth;
+        n.expanded = rn.expanded;
+        n.childMoves = rn.childMoves;
+        n.childPtr.assign(rn.childMoves.size(), nullptr);
+        newTable.emplace(rn.key, std::move(n));
+    }
+
+    // Second pass: for every expanded node, reconstruct its position (via
+    // PenteGame::loadRawState(), see that method's doc comment) and wire up
+    // childPtr by re-deriving each child's canonical key and looking it up.
+    // A node reconstructed directly from its own canonical key always yields
+    // sym=0 when re-canonicalized, so childMoves - stored canonically, see
+    // Node::childMoves - can be applied directly as physical coordinates
+    // here with no un-rotation needed (unlike mid()'s general case).
+    const int windowSize = rootGame.maxIdx() - rootGame.minIdx();
+    const PenteGame::Config &cfg = rootGame.getConfig();
+    for (auto &entry : newTable) {
+        Node &n = entry.second;
+        if (!n.expanded || n.childMoves.empty()) continue;
+        auto unpacked = PositionKey::unpack(entry.first, windowSize);
+        PenteGame game(cfg);
+        game.loadRawState(unpacked.cell.data(), unpacked.sideToMove, unpacked.blackCaptures, unpacked.whiteCaptures);
+        for (size_t i = 0; i < n.childMoves.size(); ++i) {
+            PenteGame childGame = game;
+            childGame.makeMove(n.childMoves[i].x, n.childMoves[i].y);
+            int childSym = -1;
+            PositionKey childKey = PositionKey::canonical(childGame, childSym);
+            auto it = newTable.find(childKey);
+            if (it != newTable.end()) n.childPtr[i] = &it->second; // else still-untried child: leave nullptr
+        }
+    }
+
+    int rootSym = -1;
+    PositionKey rootKey = PositionKey::canonical(rootGame, rootSym);
+    auto rootIt = newTable.find(rootKey);
+    if (rootIt == newTable.end()) return false; // corrupt/mismatched checkpoint: root itself missing
+
+    // std::unordered_map's move (equal allocators) transfers buckets/nodes
+    // without touching individual elements, so every pointer captured above
+    // (rootNodePtr and every childPtr wired into newTable) stays valid after
+    // this move - same pointer-stability guarantee already relied on
+    // elsewhere (see getOrCreateNode()'s comment).
+    Node *rootNodePtr = &rootIt->second;
+    table_ = std::move(newTable);
+    rootNode_ = rootNodePtr;
+    rootPlayer_ = storedRootPlayer;
+    resuming_ = true;
+    stopRequested_ = false;
+    return true;
 }
 
 void PNS::printProofStats() const {

@@ -41,28 +41,28 @@ uint64_t raiseStackLimitAndPickDepthBudget() {
 
 // Weak-solve driver: runs df-pn (PNS) from a given position (default: the
 // empty board) toward a proven WIN/LOSS/DRAW root, within a time/node budget,
-// and checkpoints whatever got resolved to a PositionBook file.
+// and saves whatever got resolved to a PositionBook file.
 //
-// Known limitation: this does NOT resume a genuinely interrupted search
-// mid-DAG - PNS::solve() only exports its *resolved* nodes (PNS::Record),
-// not the full in-progress proof tree, so a later run starts df-pn over from
-// scratch even with -i pointing at a prior checkpoint. What -i DOES give you:
-// if the exact root position was already fully resolved in a prior run, this
-// reports that immediately without re-solving. Real mid-search resume would
-// need PNS to accept a pre-seeded table_, which is a real chunk of separate
-// work (see the project's solve/5x5 plan, Phase 5) - most of the practical
-// value for now comes from solving individual opening replies independently
-// (each its own bounded, checkpointable run) rather than a giant single call.
+// Long runs can be split across sessions via -c/-C (periodically, and always
+// at exit, write the ENTIRE in-progress DAG - not just resolved positions -
+// to a checkpoint file) and -r (resume df-pn from exactly that state on a
+// later run, rather than starting over). This is distinct from -o/-i's
+// PositionBook: that format only ever holds resolved positions, for a final
+// shippable book; the -c/-r checkpoint is PNS's own working format for
+// genuinely resuming an interrupted proof search (see PNS::saveCheckpoint()).
 int main(int argc, char *argv[]) {
     int boardSize = 5;
     uint64_t maxNodes = 20'000'000;
     double maxSeconds = 0;
     std::string outPath;
     std::string inPath;
+    std::string checkpointOutPath;
+    std::string resumePath;
+    double checkpointIntervalSeconds = 600;
     bool exhaustive = false;
     int trimToMoveCount = -1; // -1 = don't trim
     int opt;
-    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:xh")) != -1) {
+    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:c:C:r:xh")) != -1) {
         if (opt == 'B') boardSize = std::max(3, std::min(PositionKey::kMaxBoardSize, std::atoi(optarg)));
         else if (opt == 'N') maxNodes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 't') maxSeconds = std::atof(optarg);
@@ -70,6 +70,9 @@ int main(int argc, char *argv[]) {
         else if (opt == 'i') inPath = optarg;
         else if (opt == 'x') exhaustive = true;
         else if (opt == 'm') trimToMoveCount = std::atoi(optarg);
+        else if (opt == 'c') checkpointOutPath = optarg;
+        else if (opt == 'C') checkpointIntervalSeconds = std::atof(optarg);
+        else if (opt == 'r') resumePath = optarg;
         else if (opt == 'h') {
             std::cout <<
                 "Usage: solve5x5 [options] [\"move string\"]\n"
@@ -89,7 +92,13 @@ int main(int argc, char *argv[]) {
                 "                  project's calibration notes). Only useful with -x/-o.\n"
                 "  -o <path>       Save resolved positions to this PositionBook file\n"
                 "  -i <path>       Load a PositionBook first; skip solving if the exact\n"
-                "                  root is already resolved there (see limitation above)\n"
+                "                  root is already resolved there\n"
+                "  -c <path>       Periodically (and always at exit) checkpoint the entire\n"
+                "                  in-progress proof DAG to this file, for -r to resume later\n"
+                "  -C <seconds>    Checkpoint interval (default: 600)\n"
+                "  -r <path>       Resume df-pn from a checkpoint written by -c, instead of\n"
+                "                  starting over (the move string must reproduce the exact\n"
+                "                  root position the checkpoint was written from)\n"
                 "  -h              Show this help\n";
             return 0;
         }
@@ -135,8 +144,24 @@ int main(int argc, char *argv[]) {
     pnsConfig.maxSeconds = maxSeconds;
     pnsConfig.maxRecursionDepth = static_cast<int>(std::min<uint64_t>(raiseStackLimitAndPickDepthBudget(),
                                                                        static_cast<uint64_t>(INT32_MAX)));
+    if (!checkpointOutPath.empty()) {
+        pnsConfig.checkpointPath = checkpointOutPath;
+        pnsConfig.checkpointIntervalSeconds = checkpointIntervalSeconds;
+        std::cout << "Checkpointing to " << checkpointOutPath << " every " << checkpointIntervalSeconds
+                  << "s (and at exit)\n";
+    }
     std::cout << "Recursion depth budget: " << pnsConfig.maxRecursionDepth << "\n";
     PNS pns(pnsConfig);
+
+    if (!resumePath.empty()) {
+        if (pns.loadCheckpoint(resumePath, game)) {
+            std::cout << "Resumed from checkpoint: " << resumePath << " (" << pns.getNodeCount() << " nodes)\n";
+        } else {
+            std::cerr << "Could not load checkpoint " << resumePath
+                       << " (missing, corrupt, or root-player mismatch with the move string above) -"
+                          " solving from scratch.\n";
+        }
+    }
 
     std::cout << "Solving (" << (exhaustive ? "exhaustive" : "proof-driven") << ", maxNodes=" << maxNodes
               << ", maxSeconds=" << maxSeconds << ")...\n"

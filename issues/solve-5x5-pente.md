@@ -292,16 +292,92 @@ same proven DRAW as every other check in this project; 30 stress trials
 from random (not AI-optimal) move-10 positions all resolved in 0-20ms, no
 stack overflow.
 
+## First 5x5 calibration run: memory-bound, not time-bound (2026-08-10)
+
+Ran `solve()` (not exhaustive) from the empty board with a 1.5hr wall-clock
+budget and a 60M-node cap (~18GB, sized to this machine's ~29GB available
+RAM). Result: hit the **node cap** after only 995s (16.6 min - 18% of the
+time budget). Root stayed `UNKNOWN`.
+
+Diagnostic pass over the partial DAG (`analyze_5x5_partial.cpp`, reads the
+raw book format directly) showed every one of the 436,469 resolved
+positions clustered at moveCount 8-15 (85% at exactly 10-11) - meaning df-pn
+spent the *entire* budget descending one narrow line and hadn't yet proven
+even a single one of White's 24 possible replies to Black's forced center
+opening. This is the same "one branch absorbs the whole budget" failure
+shape `issues/mcts-draw-not-proven-through-tree.md` already documented for
+MCTS/PUCT, just now showing up through df-pn's threshold mechanics instead
+of visit-count statistics - not surprising in hindsight (both are doing a
+form of best-first descent), but confirms 5x5 needs either a much larger
+combined time+memory budget than one machine/one sitting can provide, or a
+genuinely different strategy (e.g. proving individual opening replies as
+independent, smaller, separately-budgeted subproblems - `solve5x5` already
+supports starting from an arbitrary move string for exactly this).
+
+Since memory was the actual binding constraint here (not time), this
+motivated checkpoint/resume below - reducing per-node memory is a real lever
+too but a secondary one; being able to split a run across sessions matters
+more first.
+
+## Checkpoint/resume: split a long PNS run across sessions (2026-08-10)
+
+`PNS::saveCheckpoint()`/`loadCheckpoint()` persist and restore the ENTIRE
+in-progress proof DAG - not just resolved positions (that's what
+`exportResolved()`/`PositionBook` are for) - so a `solve()`/
+`solveExhaustive()` call stopped by `maxNodes`/`maxSeconds` can genuinely
+pick back up later with the same partial pn/dn state, instead of
+re-deriving it from scratch.
+
+- Binary format: magic `PNSC`, version, root-player byte, node count, then
+  per node `key/pn/dn/outcome/expanded/depth/childMoves` (canonical
+  coordinates, exactly as `Node` already stores them). `loadCheckpoint()`
+  rejects a checkpoint whose stored root player doesn't match the `rootGame`
+  it's asked to resume, since proof numbers only mean anything relative to
+  whoever was proving.
+- Reconstructing each node's actual position uses the same
+  `PenteGame::loadRawState()` this feature added (builds a `PenteGame`
+  directly from a packed key's cells/side-to-move/captures, bypassing
+  incremental `makeMove()`/capture replay - a DAG node has no single
+  canonical move history to replay in the first place). A useful shortcut
+  this unlocked: a node reconstructed straight from its own canonical key
+  always re-canonicalizes to `sym=0`, so `loadCheckpoint()` can apply each
+  node's stored `childMoves` directly as physical coordinates with no
+  un-rotation step, unlike `mid()`'s general case.
+- `solve()`/`solveExhaustive()` skip their usual `table_.clear()`/
+  `rootPlayer_` reset when resuming (a one-shot flag set by
+  `loadCheckpoint()`, consumed on the next `solve()` call). A checkpoint is
+  always written unconditionally at the end of `solve()`/`solveExhaustive()`
+  (not just periodically), so a run stopped by a budget cap - the exact
+  scenario this exists for - never loses its last bit of progress.
+- `apps/Solve5x5.cpp`: `-c <path>`/`-C <seconds>` (periodic + final
+  checkpoint output) and `-r <path>` (resume), distinct from the existing
+  `-o`/`-i` `PositionBook` flags, which only ever hold resolved positions
+  for a final shippable book.
+
+Verified: a new `PNSTests.cpp` case caps `maxNodes=20` on a 3x3 board (far
+short of the ~264 nodes a full solve touches), confirms it can't finish,
+resumes in a *fresh* `PNS` instance from the checkpoint with a real budget,
+and checks the result exactly matches an uninterrupted `solve()` on the
+identical position (same outcome, same depth) - plus a rejection test for a
+root-player mismatch. Also smoke-tested through the real CLI on 4x4: capped
+`-N 5000` run writes a checkpoint mid-DAG, a second process resumes with
+`-N 20000000` and reaches the already-known-correct result (DRAW, depth 16)
+in ~39s. Full suite: 150/150 passing.
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
 than that ratio suggests - no valid extrapolation from 4x4's solve time
-exists yet, exhaustive or otherwise. Next real step: a long single-threaded
-5x5 run (`solve()`, not `solveExhaustive()` - a full 5x5 book is very
-plausibly far too large to be practical, even if the root itself resolves)
-to see how far it gets, now that the engine itself is trustworthy end to
-end. Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
-worker-pool/sharded-table/slab-allocator patterns - a real chunk of
-separate work) is warranted once that lands.
+exists yet, exhaustive or otherwise. With checkpoint/resume in place, the
+next real step is a long, resumable 5x5 `solve()` run (not
+`solveExhaustive()` - a full 5x5 book is very plausibly far too large to be
+practical, even if the root itself resolves) split across sessions, likely
+combined with the "prove individual opening replies independently" strategy
+noted above rather than one from-scratch full-tree call. Decide whether
+Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s worker-pool/
+sharded-table/slab-allocator patterns - a real chunk of separate work) is
+warranted once that lands. Node-size reduction (currently ~300 bytes/node,
+mostly `childMoves`/`childPtr` vectors) remains a secondary lever, worth
+revisiting if checkpoint/resume alone doesn't get 5x5 far enough.
 
 <!-- Update below as longer runs complete. -->

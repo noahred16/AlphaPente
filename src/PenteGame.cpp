@@ -32,6 +32,45 @@ void PenteGame::reset() {
     hash_ = Zobrist::instance().computeFullHash(blackStones, whiteStones, blackCaptures, whiteCaptures);
 }
 
+void PenteGame::loadRawState(const Player *cells, Player sideToMove, int blackCapturesIn, int whiteCapturesIn) {
+    reset();
+
+    const int windowSize = maxIdx() - minIdx();
+    const int lo = minIdx();
+    for (int y = 0; y < windowSize; ++y) {
+        for (int x = 0; x < windowSize; ++x) {
+            Player p = cells[y * windowSize + x];
+            if (p == BLACK) blackStones.setBitUnchecked(lo + x, lo + y);
+            else if (p == WHITE) whiteStones.setBitUnchecked(lo + x, lo + y);
+        }
+    }
+
+    blackCaptures = blackCapturesIn;
+    whiteCaptures = whiteCapturesIn;
+    currentPlayer = sideToMove;
+
+    int stoneCount = 0;
+    blackStones.forEachSetBit([&](int) { stoneCount++; });
+    whiteStones.forEachSetBit([&](int) { stoneCount++; });
+    moveCount = stoneCount + blackCaptures + whiteCaptures;
+
+    hash_ = computeHash();
+
+    // Rebuild the promising-moves index. reset() above seeded it with just
+    // the center (matching "only the center is legal on an empty board");
+    // clearLegalMove(x,y) marks (x,y) non-promising and adds its currently-
+    // empty neighbors as promising, checked against the NOW-fully-set
+    // bitboards above - calling it for every occupied cell (any order, since
+    // every check reads the final bitboards, not intermediate state)
+    // reproduces exactly the promisingMovesVector state incremental play
+    // through captures would have left behind. Not needed for PNS's own
+    // soundness (it enumerates moves exhaustively, not via this - see
+    // PNS.hpp), but keeps this reconstructed game correct for anything else
+    // that touches it (evaluateMove()'s move-ordering, getLegalMoves()).
+    blackStones.forEachSetBit([&](int cell) { clearLegalMove(cell % BOARD_SIZE, cell / BOARD_SIZE); });
+    whiteStones.forEachSetBit([&](int cell) { clearLegalMove(cell % BOARD_SIZE, cell / BOARD_SIZE); });
+}
+
 bool PenteGame::makeMove(const char *move) {
     auto [x, y] = GameUtils::parseMove(move);
     if (blackStones.getBit(x, y) || whiteStones.getBit(x, y)) {

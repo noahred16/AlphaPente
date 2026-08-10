@@ -241,3 +241,77 @@ TEST_CASE("PositionKey's physical symmetry transform round-trips correctly on an
         }
     }
 }
+
+// PenteGame::loadRawState() exists for PNS checkpoint/resume (src/PNS.cpp):
+// reconstructing a position directly from its packed key, rather than
+// needing to replay a move history that was never actually recorded (a DAG
+// node may be reachable via many different move orders). This checks the
+// full round trip - pack a real (capture-involving) game, unpack it,
+// reconstruct via loadRawState, and verify the result is byte-for-byte
+// equivalent for everything that matters: stones, captures, side-to-move,
+// moveCount, and critically the canonical key itself (PNS's resume logic
+// looks nodes up by canonical key, so the reconstruction MUST reproduce it
+// exactly) - plus that the reconstructed game still behaves correctly for
+// further play (a second capture triggers normally).
+TEST_CASE("PenteGame::loadRawState reconstructs a position exactly from its packed key") {
+    PenteGame::Config config = PenteGame::Config::pente();
+    config.boardSize = 5;
+    config.tournamentRule = false;
+    PenteGame original(config);
+    original.reset();
+
+    // Same bracket-capture scenario used elsewhere: B(9,9) forced center,
+    // then B(7,8)-W(8,8)-W(9,8)-B(10,8) captures the two whites.
+    original.makeMove(9, 9);
+    original.makeMove(8, 8);
+    original.makeMove(7, 8);
+    original.makeMove(9, 8);
+    original.makeMove(10, 8);
+    REQUIRE(original.getBlackCaptures() == 2);
+
+    int origSym = -1;
+    PositionKey origCanon = PositionKey::canonical(original, origSym);
+    auto unpacked = PositionKey::unpack(PositionKey::pack(original), 5);
+
+    PenteGame reconstructed(config);
+    reconstructed.loadRawState(unpacked.cell.data(), unpacked.sideToMove, unpacked.blackCaptures, unpacked.whiteCaptures);
+
+    for (int y = 7; y < 12; ++y) {
+        for (int x = 7; x < 12; ++x) {
+            CHECK(reconstructed.getStoneAt(x, y) == original.getStoneAt(x, y));
+        }
+    }
+    CHECK(reconstructed.getCurrentPlayer() == original.getCurrentPlayer());
+    CHECK(reconstructed.getBlackCaptures() == original.getBlackCaptures());
+    CHECK(reconstructed.getWhiteCaptures() == original.getWhiteCaptures());
+    CHECK(reconstructed.getMoveCount() == original.getMoveCount());
+
+    int reconSym = -1;
+    PositionKey reconCanon = PositionKey::canonical(reconstructed, reconSym);
+    CHECK(reconCanon == origCanon);
+
+    // Further play still works correctly on the reconstructed game - a
+    // simple move updates state exactly as it would on a normally-played
+    // game, confirming loadRawState() left it in a genuinely valid state
+    // (correct hash/bitboards/moveCount), not just a snapshot that happens
+    // to read back the same values.
+    REQUIRE(reconstructed.getCurrentPlayer() == PenteGame::WHITE);
+    reconstructed.makeMove(11, 11);
+    CHECK(reconstructed.getStoneAt(11, 11) == PenteGame::WHITE);
+    CHECK(reconstructed.getMoveCount() == original.getMoveCount() + 1);
+    CHECK(reconstructed.getCurrentPlayer() == PenteGame::BLACK);
+
+    // And a genuine second capture still works, confirming captures (which
+    // depend on correctly-set bitboards/hash, not just cosmetics) function
+    // normally on the reconstructed game - a fresh bracket on row y=10
+    // (still within the 5-wide window [7,12)): B(7,10) W(8,10) ... W(9,10)
+    // B(10,10) captures.
+    reconstructed.makeMove(7, 10);  // Black
+    reconstructed.makeMove(8, 10);  // White
+    reconstructed.makeMove(7, 11);  // Black (elsewhere)
+    reconstructed.makeMove(9, 10);  // White
+    reconstructed.makeMove(10, 10); // Black completes bracket B(7,10) W(8,10) W(9,10) B(10,10)
+    CHECK(reconstructed.getBlackCaptures() == original.getBlackCaptures() + 2);
+    CHECK(reconstructed.getStoneAt(8, 10) == PenteGame::NONE);
+    CHECK(reconstructed.getStoneAt(9, 10) == PenteGame::NONE);
+}
