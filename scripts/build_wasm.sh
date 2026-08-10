@@ -3,13 +3,16 @@
 # plus solved-book lookup support) to WebAssembly via the emscripten/emsdk
 # Docker image, no local toolchain needed. Output: docs/wasm/pente.js + .wasm.
 #
-# The solved 4x4 book (docs/data/book4x4.bin) is NOT embedded in this build
-# (no --preload-file) - it's fetched lazily by JS only when the user actually
-# picks the 4x4 board size, and passed into WasmGame::loadBookFromBytes() at
-# runtime. Embedding it here would force every page load to download the
-# whole ~67MB book up front regardless of board size chosen. Regenerate the
-# book itself (from the repo root, native build already configured, ~82s):
+# The solved 4x4 book is NOT embedded in this build (no --preload-file) -
+# it's fetched lazily by JS (gzipped - see docs/js/app.js's fetchBookBytes)
+# only when the user actually picks the 4x4 board size, and passed into
+# WasmGame::loadBookFromBytes() at runtime. Embedding it here would force
+# every page load to download the whole book up front regardless of board
+# size chosen - the actual bug behind an earlier "gets stuck on loading"
+# report. Regenerate the book itself (from the repo root, native build
+# already configured, ~82s to solve + regzip):
 #   ./build/solve5x5 -B 4 -x -o docs/data/book4x4.bin
+#   gzip -kf docs/data/book4x4.bin   # -> docs/data/book4x4.bin.gz, the served asset
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

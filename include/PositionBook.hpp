@@ -13,9 +13,9 @@
 // a flat binary file. This is deliberately NOT an embedded KV store
 // (RocksDB/LevelDB): PositionKey's exact packing (see PositionKey.hpp) means
 // there's no hash-collision-safety argument for reaching for one, and at
-// ~11 bytes/record even 10^8 resolved positions is ~1GB, comfortably within
-// RAM - see the plan doc for the full reasoning. Revisit only if a real solve
-// run's live working set turns out not to fit in memory.
+// ~9 bytes/record even 10^8 resolved positions is under 1GB, comfortably
+// within RAM - see the plan doc for the full reasoning. Revisit only if a
+// real solve run's live working set turns out not to fit in memory.
 class PositionBook {
   public:
     struct Entry {
@@ -41,9 +41,10 @@ class PositionBook {
     size_t size() const { return entries_.size(); }
 
     // Flat binary format: 4-byte magic "PNTB", uint32 version, uint64 count,
-    // then `count` fixed-size records (uint64 key, uint8 outcome, uint16
-    // depth). Fields are written/read individually rather than as a raw
-    // struct dump, so on-disk layout doesn't depend on compiler padding.
+    // then `count` fixed-size records (uint64 key, uint8 packed
+    // outcome<<6|depth - see PositionBook.cpp's kVersion comment). Fields
+    // are written/read individually rather than as a raw struct dump, so
+    // on-disk layout doesn't depend on compiler padding.
     // Returns false (and leaves *this unchanged) on any I/O or format error.
     bool save(const std::string &path) const;
     bool load(const std::string &path);

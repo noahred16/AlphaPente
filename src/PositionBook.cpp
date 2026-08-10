@@ -5,7 +5,17 @@
 
 namespace {
 constexpr char kMagic[4] = {'P', 'N', 'T', 'B'};
-constexpr uint32_t kVersion = 1;
+// v1: uint64 key + uint8 outcome + uint16 depth (11 bytes/record). v2: same
+// key, but outcome (2 bits, 4 values exactly - PNS::Outcome is
+// UNKNOWN/WIN/LOSS/DRAW) and depth (6 bits, 0-63) packed into a single byte
+// (9 bytes/record) - real savings at the ~6M-record scale a full small-board
+// book reaches (67MB->~55MB before any transfer compression), and 63 is
+// comfortably above any reachable depth for PositionKey::kMaxBoardSize<=5
+// (5x5's own worst case is ~43 - see PNS.hpp). save() rejects (returns
+// false) rather than silently truncating if that bound is ever exceeded.
+constexpr uint32_t kVersion = 2;
+constexpr int kDepthBits = 6;
+constexpr uint16_t kMaxPackedDepth = (1u << kDepthBits) - 1; // 63
 
 template <typename T> void writeRaw(std::ostream &os, const T &v) { os.write(reinterpret_cast<const char *>(&v), sizeof(T)); }
 template <typename T> bool readRaw(std::istream &is, T &v) {
@@ -42,9 +52,11 @@ bool PositionBook::save(const std::string &path) const {
     writeRaw(os, static_cast<uint64_t>(entries_.size()));
 
     for (const auto &pair : entries_) {
+        if (pair.second.depth > kMaxPackedDepth) return false; // see kVersion's comment
+        uint8_t packed = static_cast<uint8_t>((static_cast<uint8_t>(pair.second.outcome) << kDepthBits) |
+                                               (pair.second.depth & kMaxPackedDepth));
         writeRaw(os, pair.first.bits);
-        writeRaw(os, static_cast<uint8_t>(pair.second.outcome));
-        writeRaw(os, pair.second.depth);
+        writeRaw(os, packed);
     }
 
     return static_cast<bool>(os);
@@ -80,9 +92,11 @@ bool PositionBook::loadFromStream(std::istream &is) {
     loaded.reserve(count);
     for (uint64_t i = 0; i < count; ++i) {
         uint64_t bits = 0;
-        uint8_t outcomeRaw = 0;
-        uint16_t depth = 0;
-        if (!readRaw(is, bits) || !readRaw(is, outcomeRaw) || !readRaw(is, depth)) return false;
+        uint8_t packed = 0;
+        if (!readRaw(is, bits) || !readRaw(is, packed)) return false;
+
+        uint8_t outcomeRaw = static_cast<uint8_t>(packed >> kDepthBits);
+        uint16_t depth = static_cast<uint16_t>(packed & kMaxPackedDepth);
         if (outcomeRaw > static_cast<uint8_t>(PNS::Outcome::DRAW)) return false; // corrupt/unknown enum value
 
         loaded[PositionKey{bits}] = Entry{static_cast<PNS::Outcome>(outcomeRaw), depth};

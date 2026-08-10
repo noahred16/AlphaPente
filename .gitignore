@@ -2,6 +2,12 @@
 checkpoints/
 !checkpoints/pente/best_model.pt
 
+# Solved-book raw .bin files: only the gzipped copy (docs/data/*.bin.gz) is
+# actually served/committed - see scripts/build_wasm.sh. The raw .bin is
+# just an intermediate, regenerable via `solve5x5 -B 4 -x -o
+# docs/data/book4x4.bin` (~82s).
+docs/data/*.bin
+
 *.pdf
 
 # C++ Build artifacts

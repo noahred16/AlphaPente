@@ -1,5 +1,5 @@
 const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000, ultra: 100000 };
-const BOOK_URL = { 4: 'data/book4x4.bin' }; // board size -> solved-book asset
+const BOOK_URL = { 4: 'data/book4x4.bin.gz' }; // board size -> gzipped solved-book asset
 
 let Module, game, boardSize;
 let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
@@ -50,11 +50,34 @@ function labelEffortButtons() {
 
 // Fetches (or returns the cached copy of) the solved book for `size`, with a
 // live percentage in #loading - a plain "Loading..." message would look just
-// as stuck as no message at all for a ~67MB download on a slow connection.
+// as stuck as no message at all for a multi-MB download on a slow
+// connection. Aborts (and surfaces an error - see newGame()) after 60s of no
+// response at all, so a genuinely stalled connection doesn't hang forever
+// indistinguishably from "still working."
+//
+// The book ships gzipped (see docs/data/book4x4.bin.gz - roughly half the
+// size of the raw .bin on top of the on-disk format itself already being
+// tight, see PositionBook.cpp) and is decompressed client-side via
+// DecompressionStream, widely supported since 2023 (Chrome/Edge 80+,
+// Firefox 113+, Safari 16.4+). No older-browser fallback: on an unsupported
+// browser `new DecompressionStream(...)` throws, which newGame()'s try/catch
+// already turns into a visible error message rather than a silent hang -
+// still a strictly better failure mode than the bug this is fixing.
 async function fetchBookBytes(size) {
   if (bookBytesCache[size]) return bookBytesCache[size];
 
-  const resp = await fetch(BOOK_URL[size]);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  let resp;
+  try {
+    resp = await fetch(BOOK_URL[size], { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!resp.ok) {
+    throw new Error(`Fetching ${BOOK_URL[size]} failed: HTTP ${resp.status}`);
+  }
+
   const total = Number(resp.headers.get('Content-Length')) || 0;
   const reader = resp.body.getReader();
   const chunks = [];
@@ -71,9 +94,10 @@ async function fetchBookBytes(size) {
       setLoading(`Loading solved ${size} x ${size} book… ${(received / 1e6).toFixed(1)}MB`);
     }
   }
-  const bytes = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  setLoading(`Unpacking solved ${size} x ${size} book…`);
+  const compressed = new Blob(chunks);
+  const decompressedStream = compressed.stream().pipeThrough(new DecompressionStream('gzip'));
+  const bytes = new Uint8Array(await new Response(decompressedStream).arrayBuffer());
 
   bookBytesCache[size] = bytes;
   return bytes;
@@ -90,31 +114,41 @@ function clearLoading() {
   appEl.classList.remove('hidden');
 }
 
+// Any failure below (network error, HTTP error status, a stalled connection
+// past fetchBookBytes()'s 60s abort, or a WASM-side exception) used to leave
+// the loading message showing forever with no indication anything went
+// wrong - the actual bug behind "gets stuck on the loading message". Now
+// surfaced as a visible, specific message instead of a silent hang.
 async function newGame() {
   const size = getBoardSizeSetting();
   setLoading(`Loading ${size} x ${size}…`);
 
-  if (game) game.delete();
-  game = new Module.Game(size, getEffortSimulations());
-  boardSize = game.getBoardSize();
+  try {
+    if (game) game.delete();
+    game = new Module.Game(size, getEffortSimulations());
+    boardSize = game.getBoardSize();
 
-  if (BOOK_URL[boardSize]) {
-    const bytes = await fetchBookBytes(boardSize);
-    game.loadBookFromBytes(bytes);
+    if (BOOK_URL[boardSize]) {
+      const bytes = await fetchBookBytes(boardSize);
+      game.loadBookFromBytes(bytes);
+    }
+
+    const usingBook = game.usingBook();
+    const title = `${boardSize} x ${boardSize} Pente` + (usingBook ? ' (solved)' : '');
+    pageTitleEl.textContent = title;
+    pageHeadingEl.textContent = title;
+    lastTopMoves = null;
+    lastAiMove = null;
+    moveHistory = [];
+    aiPending = false;
+    buildBoard();
+    buildTopMovesHeader(usingBook);
+    render();
+    clearLoading();
+  } catch (err) {
+    console.error('newGame failed:', err);
+    setLoading(`Failed to load: ${err.message || err}. Reload the page to retry.`);
   }
-
-  const usingBook = game.usingBook();
-  const title = `${boardSize} x ${boardSize} Pente` + (usingBook ? ' (solved)' : '');
-  pageTitleEl.textContent = title;
-  pageHeadingEl.textContent = title;
-  lastTopMoves = null;
-  lastAiMove = null;
-  moveHistory = [];
-  aiPending = false;
-  buildBoard();
-  buildTopMovesHeader(usingBook);
-  render();
-  clearLoading();
 }
 
 // Book-backed boards show every legal reply's exact outcome + moves-to-result
