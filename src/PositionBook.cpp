@@ -26,6 +26,25 @@ template <typename T> bool readRaw(std::istream &is, T &v) {
 
 void PositionBook::add(PositionKey key, Entry entry) { entries_[key] = entry; }
 
+size_t PositionBook::trimToMoveCount(int windowSize, int maxMoveCount) {
+    size_t removed = 0;
+    for (auto it = entries_.begin(); it != entries_.end();) {
+        auto unpacked = PositionKey::unpack(it->first, windowSize);
+        int stones = 0;
+        for (auto p : unpacked.cell) {
+            if (p != PenteGame::NONE) stones++;
+        }
+        int moveCount = stones + unpacked.blackCaptures + unpacked.whiteCaptures;
+        if (moveCount > maxMoveCount) {
+            it = entries_.erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
 void PositionBook::addAll(const PNS &pns) {
     for (const auto &record : pns.exportResolved()) {
         add(record.key, Entry{record.outcome, record.depth});

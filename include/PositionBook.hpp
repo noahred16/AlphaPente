@@ -40,6 +40,20 @@ class PositionBook {
 
     size_t size() const { return entries_.size(); }
 
+    // Removes every entry whose position is more than maxMoveCount plies
+    // past the empty board (moveCount = occupied-cell count + blackCaptures
+    // + whiteCaptures, all recoverable from the packed key itself - see
+    // PositionKey.hpp). windowSize must be the packing's true window width
+    // (PenteGame::maxIdx()-minIdx(), matching PositionKey::unpack()'s own
+    // parameter - not necessarily config().boardSize for even boardSize).
+    // Returns the number of entries removed. Typical use: a full
+    // solveExhaustive() book is complete but large (every reachable
+    // position, however deep); trimming to a shallow moveCount keeps only
+    // the opening, on the assumption that a live solve() covers whatever's
+    // missing at query time - see apps/Solve5x5.cpp's -m flag and
+    // wasm/PenteWasm.cpp's live-search fallback.
+    size_t trimToMoveCount(int windowSize, int maxMoveCount);
+
     // Flat binary format: 4-byte magic "PNTB", uint32 version, uint64 count,
     // then `count` fixed-size records (uint64 key, uint8 packed
     // outcome<<6|depth - see PositionBook.cpp's kVersion comment). Fields

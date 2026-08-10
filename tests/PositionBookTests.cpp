@@ -105,3 +105,42 @@ TEST_CASE("PositionBook loadFromMemory matches load(path) on the same bytes") {
     CHECK(entry->outcome == pns.getRootOutcome());
     CHECK(entry->depth == pns.getRootDepth());
 }
+
+// trimToMoveCount() exists for apps/Solve5x5.cpp's -m flag (keep only the
+// opening, rely on a live solve() fallback for anything deeper - see
+// wasm/PenteWasm.cpp). Uses solveExhaustive() (not the solved3x3() helper
+// above, which only calls solve()) so every reachable position is actually
+// present to check the trim against, not just the minimal proof subset.
+TEST_CASE("PositionBook trimToMoveCount removes only positions past the cutoff") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame game(config);
+    game.reset();
+
+    PNS pns;
+    REQUIRE(pns.solveExhaustive(game));
+
+    PositionBook book;
+    book.addAll(pns);
+    const size_t fullSize = book.size();
+
+    const int cutoff = 3;
+    size_t removed = book.trimToMoveCount(/*windowSize=*/3, cutoff);
+
+    REQUIRE(removed > 0);
+    CHECK(book.size() == fullSize - removed);
+
+    // Deeper position (forced center, then two more moves = moveCount 3) is
+    // right at the cutoff and must survive; going one further must not.
+    PenteGame atCutoff(config);
+    atCutoff.reset();
+    atCutoff.makeMove(9, 9);
+    atCutoff.makeMove(8, 8);
+    atCutoff.makeMove(10, 10);
+    CHECK(atCutoff.getMoveCount() == cutoff);
+    CHECK(book.lookup(atCutoff).has_value());
+
+    atCutoff.makeMove(8, 10);
+    CHECK(atCutoff.getMoveCount() == cutoff + 1);
+    CHECK_FALSE(book.lookup(atCutoff).has_value());
+}

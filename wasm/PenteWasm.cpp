@@ -3,6 +3,7 @@
 // (Emscripten) — not part of the native CMake build.
 #include "Evaluator.hpp"
 #include "MCTS.hpp"
+#include "PNS.hpp"
 #include "PenteGame.hpp"
 #include "PositionBook.hpp"
 #include <algorithm>
@@ -35,14 +36,45 @@ std::vector<PenteGame::Move> enumerateLegalMoves(const PenteGame &g) {
     return moves;
 }
 
-// Book entries are always stored from Black's perspective (Black is always
-// the root player a book was generated from the empty board with). Ranks a
-// result from the perspective of whoever is actually choosing: 2=mover
-// wins, 1=draw, 0=mover loses.
+// Book/live-solve entries are always from Black's perspective (Black is
+// always the root player either was built/solved from). Ranks a result from
+// the perspective of whoever is actually choosing: 2=mover wins, 1=draw,
+// 0=mover loses.
 int rankForMover(PNS::Outcome outcome, bool moverIsBlack) {
     if (outcome == PNS::Outcome::DRAW) return 1;
     bool blackWins = (outcome == PNS::Outcome::WIN);
     return (blackWins == moverIsBlack) ? 2 : 0;
+}
+
+struct RankedMove {
+    PenteGame::Move move;
+    PNS::Outcome outcome;
+    uint16_t depth;
+};
+
+// Shared by the book path and the live-PNS-fallback path (see WasmGame
+// below) - both are "exact outcome+depth per legal reply", just from
+// different sources. `lookupChild(childGame) -> optional<PositionBook::Entry>`
+// is the only thing that differs between them. Empty return means none of
+// the current position's legal replies were covered by whatever source
+// `lookupChild` draws from.
+template <typename LookupFn>
+std::vector<RankedMove> rankMoves(const PenteGame &game, LookupFn &&lookupChild) {
+    bool moverIsBlack = (game.getCurrentPlayer() == PenteGame::BLACK);
+    std::vector<RankedMove> scored;
+    for (const auto &move : enumerateLegalMoves(game)) {
+        PenteGame child = game.clone();
+        child.makeMove(move.x, move.y);
+        auto entry = lookupChild(child);
+        if (entry) scored.push_back({move, entry->outcome, entry->depth});
+    }
+    std::sort(scored.begin(), scored.end(), [moverIsBlack](const RankedMove &a, const RankedMove &b) {
+        int ra = rankForMover(a.outcome, moverIsBlack);
+        int rb = rankForMover(b.outcome, moverIsBlack);
+        if (ra != rb) return ra > rb;
+        return ra == 0 ? a.depth > b.depth : a.depth < b.depth; // slowest loss, else fastest win/draw
+    });
+    return scored;
 }
 
 } // namespace
@@ -53,16 +85,23 @@ class WasmGame {
   public:
     explicit WasmGame(int boardSize, int simulations)
         : origin_((PenteGame::BOARD_SIZE - boardSize) / 2), simulations_(simulations),
-          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()) {}
+          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()), livePns_(makeLivePnsConfig()) {}
 
     // Loads a solved book (docs/data/book4x4.bin today) from raw bytes the
     // JS side fetched over HTTP - deliberately NOT auto-loaded via
-    // Emscripten's --preload-file, which would force the whole ~67MB book to
+    // Emscripten's --preload-file, which would force the whole book to
     // download before the WASM module is even ready, on every page load,
     // regardless of which board size the user actually picks. JS is
     // expected to only fetch+call this when boardSize()==4 is selected, and
     // can cache the bytes across Game instances to skip re-fetching. Returns
     // whether the book parsed successfully; usingBook() reflects the result.
+    //
+    // The book itself may be TRIMMED to a shallow moveCount (see
+    // apps/Solve5x5.cpp's -m flag) - once play runs past its coverage,
+    // rankedMoves() below falls back to a live PNS::solve() from the
+    // current position, which the calibration notes in the project's
+    // solve-5x5 issue doc found to be cheap (sub-25ms even from a fairly
+    // early, "open" position) for a board this size.
     bool loadBookFromBytes(val jsBytes) {
         std::vector<uint8_t> bytes = vecFromJSArray<uint8_t>(jsBytes);
         hasBook_ = book_.loadFromMemory(bytes.data(), bytes.size());
@@ -75,9 +114,9 @@ class WasmGame {
     }
 
     // Changes AI search strength without touching the board/game state.
-    // No effect when a book is backing this board size (lookups are exact
-    // and instant either way) - kept a no-op rather than an error so the UI
-    // doesn't need to special-case disabling the control.
+    // No effect when a book is backing this board size (lookups/live-solve
+    // fallback are exact either way) - kept a no-op rather than an error so
+    // the UI doesn't need to special-case disabling the control.
     void setSimulations(int simulations) {
         simulations_ = simulations;
         mcts_.setConfig(makeMctsConfig());
@@ -110,39 +149,11 @@ class WasmGame {
         return static_cast<int>(game_.getStoneAt(lx + origin_, ly + origin_));
     }
 
-    // Book-driven lookup: instant, exact, no "search" involved - every legal
-    // reply is already resolved. Returns Move::INVALID if the current
-    // position somehow isn't book-covered (shouldn't happen once hasBook_ is
-    // true, given the book is a full solve, but defensive nonetheless).
-    PenteGame::Move bestBookMove() const {
-        bool moverIsBlack = (game_.getCurrentPlayer() == PenteGame::BLACK);
-        PenteGame::Move best;
-        int bestRank = -1;
-        uint16_t bestDepth = 0;
-        for (const auto &move : enumerateLegalMoves(game_)) {
-            PenteGame child = game_.clone();
-            child.makeMove(move.x, move.y);
-            auto entry = book_.lookup(child);
-            if (!entry) continue;
-            int rank = rankForMover(entry->outcome, moverIsBlack);
-            bool better = bestRank < 0 || rank > bestRank ||
-                          (rank == bestRank && rank != 0 && entry->depth < bestDepth) || // fastest win/draw
-                          (rank == bestRank && rank == 0 && entry->depth > bestDepth);   // slowest loss
-            if (better) {
-                best = move;
-                bestRank = rank;
-                bestDepth = entry->depth;
-            }
-        }
-        return best;
-    }
-
-    // Runs a fresh search (or, with a book, an instant lookup) and returns
-    // the chosen move as {x, y}; does NOT apply it. Call makeMove()
+    // Runs a fresh search (book lookup, live-solve fallback, or MCTS) and
+    // returns the chosen move as {x, y}; does NOT apply it. Call makeMove()
     // separately once the caller is ready to commit it — this leaves the
-    // searched tree (or book selection) in place so getTopMoves() reflects
-    // it. Returns {x: -1, y: -1} if the game is already over (nothing to
-    // search).
+    // searched tree/ranking in place so getTopMoves() reflects it. Returns
+    // {x: -1, y: -1} if the game is already over (nothing to search).
     val computeAIMove() {
         if (isGameOver()) {
             val out = val::object();
@@ -150,46 +161,35 @@ class WasmGame {
             out.set("y", -1);
             return out;
         }
-        PenteGame::Move best = hasBook_ ? bestBookMove() : mcts_.search(game_);
+        auto ranked = rankedMoves();
+        PenteGame::Move best = ranked.empty() ? mcts_.search(game_) : ranked.front().move;
         val out = val::object();
         out.set("x", best.x - origin_);
         out.set("y", best.y - origin_);
         return out;
     }
 
-    // Top N candidate moves. From the book when available (every legal
-    // reply, ranked by outcome then by depth - see rankForMover), otherwise
-    // from the most recent computeAIMove() MCTS search.
+    // Top N candidate moves: book (or, past its coverage, a live PNS solve -
+    // see rankedMoves()) when available, otherwise the most recent
+    // computeAIMove() MCTS search.
     val getTopMoves(int topN) const {
         val out = val::array();
-        if (hasBook_) {
+        auto ranked = rankedMoves();
+        if (!ranked.empty()) {
             bool moverIsBlack = (game_.getCurrentPlayer() == PenteGame::BLACK);
-            std::vector<std::pair<PenteGame::Move, PositionBook::Entry>> scored;
-            for (const auto &move : enumerateLegalMoves(game_)) {
-                PenteGame child = game_.clone();
-                child.makeMove(move.x, move.y);
-                auto entry = book_.lookup(child);
-                if (entry) scored.emplace_back(move, *entry);
-            }
-            std::sort(scored.begin(), scored.end(), [moverIsBlack](const auto &a, const auto &b) {
-                int ra = rankForMover(a.second.outcome, moverIsBlack);
-                int rb = rankForMover(b.second.outcome, moverIsBlack);
-                if (ra != rb) return ra > rb;
-                return ra == 0 ? a.second.depth > b.second.depth : a.second.depth < b.second.depth;
-            });
-            int n = std::min<int>(topN, static_cast<int>(scored.size()));
+            int n = std::min<int>(topN, static_cast<int>(ranked.size()));
             for (int i = 0; i < n; ++i) {
-                const auto &[move, entry] = scored[static_cast<size_t>(i)];
-                int rank = rankForMover(entry.outcome, moverIsBlack);
-                val out_entry = val::object();
-                out_entry.set("x", move.x - origin_);
-                out_entry.set("y", move.y - origin_);
-                out_entry.set("visits", 0);
-                out_entry.set("value", 0.0);
-                out_entry.set("puct", 0.0);
-                out_entry.set("depth", static_cast<int>(entry.depth));
-                out_entry.set("status", rank == 2 ? "WIN" : rank == 1 ? "DRAW" : "LOSS");
-                out.call<void>("push", out_entry);
+                const RankedMove &r = ranked[static_cast<size_t>(i)];
+                int rank = rankForMover(r.outcome, moverIsBlack);
+                val entry = val::object();
+                entry.set("x", r.move.x - origin_);
+                entry.set("y", r.move.y - origin_);
+                entry.set("visits", 0);
+                entry.set("value", 0.0);
+                entry.set("puct", 0.0);
+                entry.set("depth", static_cast<int>(r.depth));
+                entry.set("status", rank == 2 ? "WIN" : rank == 1 ? "DRAW" : "LOSS");
+                out.call<void>("push", entry);
             }
             return out;
         }
@@ -230,6 +230,43 @@ class WasmGame {
         return cfg;
     }
 
+    // Generous relative to what a live query actually needs (see this
+    // class's loadBookFromBytes() comment: sub-25ms/under 3000 nodes even
+    // from an early, unfavorable position in practice) - these are safety
+    // caps against a pathological case freezing the browser tab, not
+    // expected to bind in normal play. maxRecursionDepth must stay within
+    // what scripts/build_wasm.sh's -s STACK_SIZE actually grants (each level
+    // takes a full PenteGame - 8KB+ - by value; see PNS::Config's own
+    // comment for the underlying reason this exists at all).
+    static PNS::Config makeLivePnsConfig() {
+        PNS::Config cfg;
+        cfg.maxNodes = 5'000'000;
+        cfg.maxSeconds = 5.0;
+        cfg.maxRecursionDepth = 60;
+        return cfg;
+    }
+
+    // Book lookup first; if the current position's replies aren't covered
+    // (either no book at all, or - if the book was trimmed, see
+    // apps/Solve5x5.cpp's -m flag - play has gone past its depth), and a
+    // book exists at all (so we're on a board size PNS actually supports),
+    // falls back to a fresh live PNS::solve() from the current position.
+    // Empty return means neither source covers it (no book at all - the
+    // MCTS callers already handle that).
+    std::vector<RankedMove> rankedMoves() const {
+        if (!hasBook_) return {};
+
+        auto bookRanked = rankMoves(game_, [this](const PenteGame &child) { return book_.lookup(child); });
+        if (!bookRanked.empty()) return bookRanked;
+
+        if (!livePns_.solve(game_)) return {}; // budget exceeded (see makeLivePnsConfig) - falls back to MCTS
+        return rankMoves(game_, [this](const PenteGame &child) -> std::optional<PositionBook::Entry> {
+            PNS::Outcome outcome = livePns_.getOutcome(child);
+            if (outcome == PNS::Outcome::UNKNOWN) return std::nullopt;
+            return PositionBook::Entry{outcome, static_cast<uint16_t>(livePns_.getDepth(child))};
+        });
+    }
+
     int origin_;
     int simulations_;
     PenteGame game_;
@@ -237,6 +274,7 @@ class WasmGame {
     MCTS mcts_;
     PositionBook book_;
     bool hasBook_ = false;
+    mutable PNS livePns_; // rankedMoves() is logically read-only but solve() mutates PNS's internal DAG
 };
 
 EMSCRIPTEN_BINDINGS(pente_module) {

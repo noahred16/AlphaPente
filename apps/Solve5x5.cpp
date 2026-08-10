@@ -60,14 +60,16 @@ int main(int argc, char *argv[]) {
     std::string outPath;
     std::string inPath;
     bool exhaustive = false;
+    int trimToMoveCount = -1; // -1 = don't trim
     int opt;
-    while ((opt = getopt(argc, argv, "B:N:t:o:i:xh")) != -1) {
+    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:xh")) != -1) {
         if (opt == 'B') boardSize = std::max(3, std::min(PositionKey::kMaxBoardSize, std::atoi(optarg)));
         else if (opt == 'N') maxNodes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 't') maxSeconds = std::atof(optarg);
         else if (opt == 'o') outPath = optarg;
         else if (opt == 'i') inPath = optarg;
         else if (opt == 'x') exhaustive = true;
+        else if (opt == 'm') trimToMoveCount = std::atoi(optarg);
         else if (opt == 'h') {
             std::cout <<
                 "Usage: solve5x5 [options] [\"move string\"]\n"
@@ -81,6 +83,10 @@ int main(int argc, char *argv[]) {
                 "  -x              Exhaustive: resolve every reachable position (a full\n"
                 "                  book), not just the minimal subset df-pn needs to prove\n"
                 "                  the root - can visit substantially more nodes\n"
+                "  -m <moveCount>  Trim the book to only positions within moveCount plies\n"
+                "                  of the root before saving - a live solve() covers\n"
+                "                  whatever's past that at query time (cheap - see the\n"
+                "                  project's calibration notes). Only useful with -x/-o.\n"
                 "  -o <path>       Save resolved positions to this PositionBook file\n"
                 "  -i <path>       Load a PositionBook first; skip solving if the exact\n"
                 "                  root is already resolved there (see limitation above)\n"
@@ -150,6 +156,15 @@ int main(int argc, char *argv[]) {
 
     book.addAll(pns);
     std::cout << "Resolved positions this run: " << pns.exportResolved().size() << "\n";
+
+    if (trimToMoveCount >= 0) {
+        // book's true window width matches PenteGame's own (maxIdx()-minIdx()),
+        // not necessarily boardSize for even sizes - see PositionKey.hpp.
+        int windowSize = game.maxIdx() - game.minIdx();
+        size_t removed = book.trimToMoveCount(windowSize, trimToMoveCount);
+        std::cout << "Trimmed to moveCount<=" << trimToMoveCount << ": removed " << removed
+                  << " positions, " << book.size() << " remain\n";
+    }
 
     if (!outPath.empty()) {
         if (book.save(outPath)) {
