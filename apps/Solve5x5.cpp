@@ -2,9 +2,42 @@
 #include "PNS.hpp"
 #include "PenteGame.hpp"
 #include "PositionBook.hpp"
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
+#include <sys/resource.h>
 #include <unistd.h>
+
+// mid()'s recursion crashed a real long run (SIGSEGV) once df-pn committed
+// deep into one narrow line: PenteGame is 8128 bytes (mostly its embedded
+// mt19937) and is passed by value per recursion level, so a default ~8MB
+// thread stack only has headroom for a few hundred levels - see
+// PNS::Config::maxRecursionDepth's comment for the full explanation. Raise
+// this process's stack limit (falls back to whatever the OS actually grants)
+// and size maxRecursionDepth to match, rather than relying on PNS's
+// conservative small-stack-safe default.
+uint64_t raiseStackLimitAndPickDepthBudget() {
+    constexpr rlim_t kDesiredStackBytes = 1ULL << 30; // 1 GB
+    struct rlimit lim;
+    if (getrlimit(RLIMIT_STACK, &lim) != 0) {
+        std::cerr << "Warning: getrlimit(RLIMIT_STACK) failed; using PNS's small-stack-safe default depth budget.\n";
+        return 300;
+    }
+    rlim_t target = (lim.rlim_max == RLIM_INFINITY) ? kDesiredStackBytes : std::min(kDesiredStackBytes, lim.rlim_max);
+    if (target > lim.rlim_cur) {
+        lim.rlim_cur = target;
+        if (setrlimit(RLIMIT_STACK, &lim) != 0) {
+            std::cerr << "Warning: setrlimit(RLIMIT_STACK) failed; using PNS's small-stack-safe default depth budget.\n";
+            return 300;
+        }
+    }
+    std::cout << "Stack limit: " << (target / (1024 * 1024)) << " MB\n";
+    // ~20KB/level budgeted (empirically ~2x sizeof(PenteGame) plus overhead
+    // for the game param + local childGame coexisting), leaving real margin
+    // under what the raised stack can actually support.
+    return static_cast<uint64_t>(target) / 20000;
+}
 
 // Weak-solve driver: runs df-pn (PNS) from a given position (default: the
 // empty board) toward a proven WIN/LOSS/DRAW root, within a time/node budget,
@@ -89,6 +122,9 @@ int main(int argc, char *argv[]) {
     PNS::Config pnsConfig;
     pnsConfig.maxNodes = maxNodes;
     pnsConfig.maxSeconds = maxSeconds;
+    pnsConfig.maxRecursionDepth = static_cast<int>(std::min<uint64_t>(raiseStackLimitAndPickDepthBudget(),
+                                                                       static_cast<uint64_t>(INT32_MAX)));
+    std::cout << "Recursion depth budget: " << pnsConfig.maxRecursionDepth << "\n";
     PNS pns(pnsConfig);
 
     std::cout << "Solving (maxNodes=" << maxNodes << ", maxSeconds=" << maxSeconds << ")...\n" << std::flush;

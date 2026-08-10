@@ -231,9 +231,18 @@ void PNS::selectChildAnd(const Node *n, int &bestIdx, Number &secondDn) const {
     secondDn = second;
 }
 
-void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn) {
+void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
     if (stopRequested_) return;
     stats_.midCalls++;
+
+    // See Config::maxRecursionDepth's comment: a genuinely deep line here
+    // would otherwise silently stack-overflow (SIGSEGV, uncatchable) rather
+    // than fail gracefully. Stops the whole search, not just this line - see
+    // that comment for why a narrower stop isn't safe.
+    if (depth >= config_.maxRecursionDepth) {
+        stopRequested_ = true;
+        return;
+    }
 
     // Clock queries are relatively expensive; only check every 4096 calls to
     // keep this off the hot path. Can overshoot the budget slightly as a
@@ -305,7 +314,7 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn) {
             childThPn = (thpn >= INF) ? INF : std::min(INF, thpn - n->pn + pnOf(child));
         }
 
-        mid(child, std::move(childGame), childThPn, childThDn);
+        mid(child, std::move(childGame), childThPn, childThDn, depth + 1);
         // Loop back: re-derive this node's pn/dn from (possibly now-updated)
         // children and either resolve, bail on thresholds, or pick again.
     }
@@ -332,7 +341,7 @@ bool PNS::solve(const PenteGame &rootGame) {
     // this for free from its parent's own while(true) loop; the root has no
     // such parent, so solve() must play that role itself.
     while (rootNode_->outcome == Outcome::UNKNOWN && !stopRequested_) {
-        mid(rootNode_, rootGame, INF, INF);
+        mid(rootNode_, rootGame, INF, INF, 0);
     }
 
     return rootNode_->outcome != Outcome::UNKNOWN;

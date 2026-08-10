@@ -123,6 +123,22 @@ class PNS {
         // state - solve() returns false rather than crashing or looping.
         double maxSeconds = 0;
 
+        // Hard cap on mid()'s recursion depth (df-pn's threshold-driven
+        // descent can legitimately commit very deep into one narrow line -
+        // observed in practice on a long 4x4 run). mid() recurses once per
+        // ply and takes a full PenteGame by value each level (>8KB, mostly
+        // its embedded mt19937), so stack use per level is real; a crash
+        // here is a silent stack overflow (SIGSEGV), not a catchable
+        // exception. This default is sized to stay safe on an UNRAISED
+        // default ~8MB thread stack (empirically ~8KB/level observed =>
+        // headroom well under ~1000); callers who raise their own stack
+        // size (see apps/Solve5x5.cpp) should raise this correspondingly.
+        // Hitting it stops the whole search (like maxNodes/maxSeconds) -
+        // not just the offending line - since a capped-but-still-selected
+        // child would otherwise make the parent spin forever reselecting a
+        // child whose pn/dn can never change.
+        int maxRecursionDepth = 300;
+
         Config() {}
     };
 
@@ -215,7 +231,7 @@ class PNS {
     void resolveOutcome(Node *n, bool isOrNode) const;
     void selectChildOr(const Node *n, int &bestIdx, Number &secondPn) const;
     void selectChildAnd(const Node *n, int &bestIdx, Number &secondDn) const;
-    void mid(Node *n, PenteGame game, Number thpn, Number thdn);
+    void mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth);
 
     static std::vector<PenteGame::Move> enumerateLegalMoves(const PenteGame &game);
 };

@@ -28,6 +28,29 @@ TEST_CASE("PNS proves an unwinnable 3x3 board as a draw at the root") {
     CHECK(pns.getRootDepth() <= 8);
 }
 
+// Regression test for the recursion-depth safety valve (Config::maxRecursionDepth):
+// a real long single-threaded 4x4 run once SIGSEGV'd (stack overflow - mid()
+// recurses per-ply, passing a full PenteGame >8KB by value each level) once
+// df-pn committed deep into one narrow line. Forcing a tiny depth budget here
+// makes that condition trivially reachable without needing an actually-deep
+// search, and checks it stops gracefully (like maxNodes/maxSeconds) instead
+// of crashing or hanging.
+TEST_CASE("PNS stops gracefully when maxRecursionDepth is hit, rather than crashing") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame game(config);
+    game.reset();
+    game.makeMove(9, 9);
+
+    PNS::Config pnsConfig;
+    pnsConfig.maxRecursionDepth = 2; // far too shallow to solve 3x3
+    PNS pns(pnsConfig);
+    bool solved = pns.solve(game);
+
+    CHECK_FALSE(solved);
+    CHECK(pns.getRootOutcome() == PNS::Outcome::UNKNOWN);
+}
+
 // Directed test isolating the OR-node WIN short-circuit and real five-in-a-row
 // terminal detection (impossible to exercise on a 3x3 board, whose longest
 // line is only 3 cells). Black has four in a row (8,9)-(11,9) on row y=9 with
