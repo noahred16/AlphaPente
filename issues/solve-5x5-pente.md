@@ -227,14 +227,53 @@ This is the first genuinely trustworthy calibration data point past the
 trivial 3x3 case, and validates the whole PNS/df-pn approach end-to-end on
 a real (if small) Pente-with-captures board.
 
+## 4x4 fully solved and shipped: complete book + web UI (2026-08-10)
+
+Asked for the complete picture (every position's result + moves-to-result,
+not just enough to prove the root), and to wire it into the web UI.
+
+**`PNS::solveExhaustive()`** (new, alongside `solve()`): a full memoized
+postorder traversal - visit every child, no proof-number pruning - instead
+of df-pn's threshold-guided descent. Reused `expandNode()`/`updatePnDn()`/
+`resolveOutcome()` completely unchanged (provable: once every child is
+resolved, a node's pn/dn are always exactly 0 in whichever direction
+`resolveOutcome()` already expects), so this was a new traversal strategy,
+not new combine logic. `solve5x5 -B 4 -x` result: **6,136,048 distinct
+positions, every single one resolved**, root DRAW at depth 16 - exactly
+matching `solve()`'s own root result, a real cross-check.
+
+**Web UI**: 4x4 is now a board-size option, backed by the book instead of
+live MCTS search. `wasm/PenteWasm.cpp`'s `WasmGame` loads the book
+(preloaded into the WASM virtual FS) when `boardSize==4`; `computeAIMove()`
+becomes an instant exact lookup (enumerate every legal reply, rank by
+outcome then depth) rather than a search, and `getTopMoves()` shows every
+legal reply's real result, not just MCTS's top-10-by-visits. Along the way,
+fixed a pre-existing, unrelated WASM build breakage (`scripts/build_wasm.sh`
+was missing `RenjuForbiddenPointFinder.cpp`/`RenjuRules.cpp`, which
+`PenteGame.cpp` has depended on since Renju support was added - the WASM
+build had apparently not been run since).
+
+Verified: a native program mirroring `WasmGame`'s exact lookup/ranking logic
+against the real book confirms full coverage (all 15 of White's replies to
+Black's forced center are book-covered) and a real cross-check (White's best
+achievable result is DRAW, consistent with the whole game being proven a
+draw). Could not test actual browser rendering in-session (no browser tool
+available) - worth a manual visual check.
+
+The book ships as `docs/wasm/pente.data` (67MB, embedded via
+`--preload-file`; `docs/data/book4x4.bin` is gitignored - cheaply
+regenerable, not worth duplicating in git).
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
-than that ratio suggests - no valid extrapolation from 4x4's 40s solve time
-exists yet. Next real step: a long single-threaded 5x5 run to see how far
-it gets, now that the engine itself is trustworthy. Decide whether Phase 6
-(multithreaded df-pn, reusing `ParallelMCTS`'s worker-pool/sharded-table/
-slab-allocator patterns - a real chunk of separate work) is warranted once
-that lands.
+than that ratio suggests - no valid extrapolation from 4x4's solve time
+exists yet, exhaustive or otherwise. Next real step: a long single-threaded
+5x5 run (`solve()`, not `solveExhaustive()` - a full 5x5 book is very
+plausibly far too large to be practical, even if the root itself resolves)
+to see how far it gets, now that the engine itself is trustworthy end to
+end. Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
+worker-pool/sharded-table/slab-allocator patterns - a real chunk of
+separate work) is warranted once that lands.
 
 <!-- Update below as longer runs complete. -->
