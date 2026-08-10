@@ -9,6 +9,7 @@ let aiPending = false; // true from when the AI's turn is scheduled until its mo
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const capturesEl = document.getElementById('captures');
+const topMovesHead = document.querySelector('#top-moves thead');
 const topMovesBody = document.querySelector('#top-moves tbody');
 const resetBtn = document.getElementById('reset');
 const undoBtn = document.getElementById('undo');
@@ -47,7 +48,8 @@ function newGame() {
   if (game) game.delete();
   game = new Module.Game(getBoardSizeSetting(), getEffortSimulations());
   boardSize = game.getBoardSize();
-  const title = `${boardSize} x ${boardSize} Pente`;
+  const usingBook = game.usingBook();
+  const title = `${boardSize} x ${boardSize} Pente` + (usingBook ? ' (solved)' : '');
   pageTitleEl.textContent = title;
   pageHeadingEl.textContent = title;
   lastTopMoves = null;
@@ -55,7 +57,17 @@ function newGame() {
   moveHistory = [];
   aiPending = false;
   buildBoard();
+  buildTopMovesHeader(usingBook);
   render();
+}
+
+// Book-backed boards show every legal reply's exact outcome + moves-to-result
+// instead of MCTS's visit/value/PUCT stats, which don't apply to an exact
+// lookup - see WasmGame::getTopMoves() (wasm/PenteWasm.cpp) for the C++ side.
+function buildTopMovesHeader(usingBook) {
+  topMovesHead.innerHTML = usingBook
+    ? '<tr><th>Move</th><th>Result</th><th>Moves to result</th></tr>'
+    : '<tr><th>Move</th><th>Visits</th><th>Avg Value</th><th>PUCT</th><th>Status</th></tr>';
 }
 
 function buildBoard() {
@@ -105,10 +117,13 @@ function render(topMoves) {
 function renderTopMoves(topMoves) {
   topMovesBody.innerHTML = '';
   if (!topMoves) return;
+  const usingBook = game.usingBook();
   for (const m of topMoves) {
     const row = document.createElement('tr');
-    row.innerHTML = `<td>(${m.x}, ${m.y})</td><td>${m.visits}</td>` +
-      `<td>${m.value.toFixed(3)}</td><td>${m.puct.toFixed(3)}</td><td>${m.status}</td>`;
+    row.innerHTML = usingBook
+      ? `<td>(${m.x}, ${m.y})</td><td>${m.status}</td><td>${m.depth}</td>`
+      : `<td>(${m.x}, ${m.y})</td><td>${m.visits}</td>` +
+        `<td>${m.value.toFixed(3)}</td><td>${m.puct.toFixed(3)}</td><td>${m.status}</td>`;
     topMovesBody.appendChild(row);
   }
 }
@@ -146,7 +161,9 @@ function onCellClick(x, y) {
 function aiTurn() {
   const move = game.computeAIMove();
   if (move.x < 0) { aiPending = false; lastTopMoves = null; render(); return; } // no moves left (draw)
-  lastTopMoves = game.getTopMoves(10);
+  // A solved book covers every legal reply, not just the top few - show all
+  // of them (25 comfortably covers any board size up to 5x5).
+  lastTopMoves = game.getTopMoves(game.usingBook() ? 25 : 10);
   render(lastTopMoves);
   setTimeout(() => {
     game.makeMove(move.x, move.y);

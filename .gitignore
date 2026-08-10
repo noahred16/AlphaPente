@@ -1,6 +1,13 @@
 # Project ignores (all checkpoints except checkpoints/pente/best_model.pt)
 checkpoints/
 !checkpoints/pente/best_model.pt
+
+# Solved-position book source files (build input for scripts/build_wasm.sh's
+# --preload-file): regenerable on demand (`solve5x5 -B 4 -x -o
+# docs/data/book4x4.bin`, ~82s) so not worth duplicating in git alongside the
+# actual served artifact, docs/wasm/pente.data, which IS committed like the
+# rest of docs/wasm/ (no build step in the GitHub Pages deploy).
+docs/data/*.bin
 *.pdf
 
 # C++ Build artifacts

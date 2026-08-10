@@ -4,9 +4,47 @@
 #include "Evaluator.hpp"
 #include "MCTS.hpp"
 #include "PenteGame.hpp"
+#include "PositionBook.hpp"
+#include <algorithm>
 #include <emscripten/bind.h>
 
 using namespace emscripten;
+
+namespace {
+
+// Move enumeration must match PNS's own exhaustive enumeration exactly
+// (every empty cell in the logical window, forced center on move 0) - the
+// book was built by PNS::solveExhaustive() using exactly this, not
+// PenteGame::getLegalMoves() (a heuristic neighborhood restriction - see
+// PNS.hpp's class comment for why that's unsound for a solved-position
+// lookup, even though it's fine for MCTS's own heuristic play elsewhere in
+// this same file).
+std::vector<PenteGame::Move> enumerateLegalMoves(const PenteGame &g) {
+    std::vector<PenteGame::Move> moves;
+    if (g.getMoveCount() == 0) {
+        int c = PenteGame::BOARD_SIZE / 2;
+        moves.emplace_back(c, c);
+        return moves;
+    }
+    for (int y = g.minIdx(); y < g.maxIdx(); ++y) {
+        for (int x = g.minIdx(); x < g.maxIdx(); ++x) {
+            if (g.getStoneAt(x, y) == PenteGame::NONE) moves.emplace_back(x, y);
+        }
+    }
+    return moves;
+}
+
+// Book entries are always stored from Black's perspective (Black is always
+// the root player a book was generated from the empty board with). Ranks a
+// result from the perspective of whoever is actually choosing: 2=mover
+// wins, 1=draw, 0=mover loses.
+int rankForMover(PNS::Outcome outcome, bool moverIsBlack) {
+    if (outcome == PNS::Outcome::DRAW) return 1;
+    bool blackWins = (outcome == PNS::Outcome::WIN);
+    return (blackWins == moverIsBlack) ? 2 : 0;
+}
+
+} // namespace
 
 // Coordinates crossing this API are "local" (0..boardSize-1), not the physical
 // 0..18 grid PenteGame centers the logical play area within.
@@ -14,7 +52,16 @@ class WasmGame {
   public:
     explicit WasmGame(int boardSize, int simulations)
         : origin_((PenteGame::BOARD_SIZE - boardSize) / 2), simulations_(simulations),
-          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()) {}
+          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()) {
+        // Only 4x4 has a solved book today (see docs/data/book4x4.bin,
+        // preloaded into the WASM virtual FS at /book4x4.bin by
+        // scripts/build_wasm.sh's --preload-file). Falls back to MCTS
+        // (hasBook_ stays false) for any other board size, or if the file
+        // somehow isn't there.
+        if (boardSize == 4) {
+            hasBook_ = book_.load("/book4x4.bin");
+        }
+    }
 
     void reset() {
         game_.reset();
@@ -22,13 +69,22 @@ class WasmGame {
     }
 
     // Changes AI search strength without touching the board/game state.
+    // No effect when a book is backing this board size (lookups are exact
+    // and instant either way) - kept a no-op rather than an error so the UI
+    // doesn't need to special-case disabling the control.
     void setSimulations(int simulations) {
         simulations_ = simulations;
         mcts_.setConfig(makeMctsConfig());
     }
 
     bool makeMove(int lx, int ly) {
-        bool ok = game_.makeMove(lx + origin_, ly + origin_);
+        int x = lx + origin_, y = ly + origin_;
+        // PenteGame::makeMove(x, y) is a trusted low-level primitive that skips
+        // legality checks (relied on by MCTS/tests); the UI boundary must check
+        // isLegalMove() itself, e.g. to enforce the center-only opening move.
+        if (!game_.isLegalMove(x, y))
+            return false;
+        bool ok = game_.makeMove(x, y);
         if (ok)
             mcts_.clearTree(); // last search's tree no longer matches the position
         return ok;
@@ -42,15 +98,45 @@ class WasmGame {
     int getBoardSize() const { return game_.getConfig().boardSize; }
     int getBlackCaptures() const { return game_.getBlackCaptures(); }
     int getWhiteCaptures() const { return game_.getWhiteCaptures(); }
+    bool usingBook() const { return hasBook_; }
 
     int getStoneAt(int lx, int ly) const {
         return static_cast<int>(game_.getStoneAt(lx + origin_, ly + origin_));
     }
 
-    // Runs a fresh search and returns the chosen move as {x, y}; does NOT apply
-    // it. Call makeMove() separately once the caller is ready to commit it —
-    // this leaves the searched tree in place so getTopMoves() reflects it.
-    // Returns {x: -1, y: -1} if the game is already over (nothing to search).
+    // Book-driven lookup: instant, exact, no "search" involved - every legal
+    // reply is already resolved. Returns Move::INVALID if the current
+    // position somehow isn't book-covered (shouldn't happen once hasBook_ is
+    // true, given the book is a full solve, but defensive nonetheless).
+    PenteGame::Move bestBookMove() const {
+        bool moverIsBlack = (game_.getCurrentPlayer() == PenteGame::BLACK);
+        PenteGame::Move best;
+        int bestRank = -1;
+        uint16_t bestDepth = 0;
+        for (const auto &move : enumerateLegalMoves(game_)) {
+            PenteGame child = game_.clone();
+            child.makeMove(move.x, move.y);
+            auto entry = book_.lookup(child);
+            if (!entry) continue;
+            int rank = rankForMover(entry->outcome, moverIsBlack);
+            bool better = bestRank < 0 || rank > bestRank ||
+                          (rank == bestRank && rank != 0 && entry->depth < bestDepth) || // fastest win/draw
+                          (rank == bestRank && rank == 0 && entry->depth > bestDepth);   // slowest loss
+            if (better) {
+                best = move;
+                bestRank = rank;
+                bestDepth = entry->depth;
+            }
+        }
+        return best;
+    }
+
+    // Runs a fresh search (or, with a book, an instant lookup) and returns
+    // the chosen move as {x, y}; does NOT apply it. Call makeMove()
+    // separately once the caller is ready to commit it — this leaves the
+    // searched tree (or book selection) in place so getTopMoves() reflects
+    // it. Returns {x: -1, y: -1} if the game is already over (nothing to
+    // search).
     val computeAIMove() {
         if (isGameOver()) {
             val out = val::object();
@@ -58,16 +144,49 @@ class WasmGame {
             out.set("y", -1);
             return out;
         }
-        PenteGame::Move best = mcts_.search(game_);
+        PenteGame::Move best = hasBook_ ? bestBookMove() : mcts_.search(game_);
         val out = val::object();
         out.set("x", best.x - origin_);
         out.set("y", best.y - origin_);
         return out;
     }
 
-    // Top N candidate moves from the most recent computeAIMove() search.
+    // Top N candidate moves. From the book when available (every legal
+    // reply, ranked by outcome then by depth - see rankForMover), otherwise
+    // from the most recent computeAIMove() MCTS search.
     val getTopMoves(int topN) const {
         val out = val::array();
+        if (hasBook_) {
+            bool moverIsBlack = (game_.getCurrentPlayer() == PenteGame::BLACK);
+            std::vector<std::pair<PenteGame::Move, PositionBook::Entry>> scored;
+            for (const auto &move : enumerateLegalMoves(game_)) {
+                PenteGame child = game_.clone();
+                child.makeMove(move.x, move.y);
+                auto entry = book_.lookup(child);
+                if (entry) scored.emplace_back(move, *entry);
+            }
+            std::sort(scored.begin(), scored.end(), [moverIsBlack](const auto &a, const auto &b) {
+                int ra = rankForMover(a.second.outcome, moverIsBlack);
+                int rb = rankForMover(b.second.outcome, moverIsBlack);
+                if (ra != rb) return ra > rb;
+                return ra == 0 ? a.second.depth > b.second.depth : a.second.depth < b.second.depth;
+            });
+            int n = std::min<int>(topN, static_cast<int>(scored.size()));
+            for (int i = 0; i < n; ++i) {
+                const auto &[move, entry] = scored[static_cast<size_t>(i)];
+                int rank = rankForMover(entry.outcome, moverIsBlack);
+                val out_entry = val::object();
+                out_entry.set("x", move.x - origin_);
+                out_entry.set("y", move.y - origin_);
+                out_entry.set("visits", 0);
+                out_entry.set("value", 0.0);
+                out_entry.set("puct", 0.0);
+                out_entry.set("depth", static_cast<int>(entry.depth));
+                out_entry.set("status", rank == 2 ? "WIN" : rank == 1 ? "DRAW" : "LOSS");
+                out.call<void>("push", out_entry);
+            }
+            return out;
+        }
         for (const MCTS::TopMove &m : mcts_.getTopMoves(topN)) {
             val entry = val::object();
             entry.set("x", m.move.x - origin_);
@@ -75,6 +194,7 @@ class WasmGame {
             entry.set("visits", m.visits);
             entry.set("value", m.avgValue);
             entry.set("puct", m.puct);
+            entry.set("depth", 0);
             entry.set("status", m.solvedStatus == MCTS::SolvedStatus::SOLVED_WIN    ? "WIN"
                                  : m.solvedStatus == MCTS::SolvedStatus::SOLVED_LOSS ? "LOSS"
                                  : m.solvedStatus == MCTS::SolvedStatus::SOLVED_DRAW ? "DRAW"
@@ -109,6 +229,8 @@ class WasmGame {
     PenteGame game_;
     HeuristicEvaluator evaluator_;
     MCTS mcts_;
+    PositionBook book_;
+    bool hasBook_ = false;
 };
 
 EMSCRIPTEN_BINDINGS(pente_module) {
@@ -123,6 +245,7 @@ EMSCRIPTEN_BINDINGS(pente_module) {
         .function("getBoardSize", &WasmGame::getBoardSize)
         .function("getBlackCaptures", &WasmGame::getBlackCaptures)
         .function("getWhiteCaptures", &WasmGame::getWhiteCaptures)
+        .function("usingBook", &WasmGame::usingBook)
         .function("getStoneAt", &WasmGame::getStoneAt)
         .function("computeAIMove", &WasmGame::computeAIMove)
         .function("getTopMoves", &WasmGame::getTopMoves);
