@@ -264,6 +264,34 @@ The book ships as `docs/wasm/pente.data` (67MB, embedded via
 `--preload-file`; `docs/data/book4x4.bin` is gitignored - cheaply
 regenerable, not worth duplicating in git).
 
+## Trimmed the 4x4 book to move 10, live-search fallback for the rest (2026-08-10)
+
+Asked "how large is the book, broken down by move depth" then "how long
+would a live search take for the rest if we cut at move 20" then, once the
+math showed the live-search side was essentially free (sub-25ms even from
+move 10, since the board only has 16 cells so the remaining game is small
+regardless of depth), "let's do move 10 instead."
+
+- `PositionBook::trimToMoveCount()` (new) drops every entry past a given
+  moveCount, computed straight from the packed key (occupied cells +
+  captures - no extra bookkeeping). `apps/Solve5x5.cpp -m 10` applies it.
+- `wasm/PenteWasm.cpp`: book lookup first; if it doesn't cover the current
+  position (past move 10), a fresh bounded `PNS::solve()` runs right there
+  in the browser and gets ranked the same way. Only falls through to MCTS
+  if there's no book at all or the live solve itself fails (generous
+  5M-node/5s cap that the calibration numbers say should never bind).
+  `scripts/build_wasm.sh` now compiles `PNS.cpp` into the WASM build and
+  explicitly raises the WASM stack to 8MB (no runtime-adjustable stack in
+  WASM the way the native build's setrlimit trick has).
+- Book: 6,136,048 -> 614,772 positions, **28.3MB -> 2.4MB gzipped** (92%
+  smaller than the full solve).
+
+Verified under Node (pente.js runs there too): a full AI-vs-AI game
+correctly triggers the live fallback right at move 11 (6ms) and reaches the
+same proven DRAW as every other check in this project; 30 stress trials
+from random (not AI-optimal) move-10 positions all resolved in 0-20ms, no
+stack overflow.
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
