@@ -161,3 +161,39 @@ TEST_CASE("PositionKey canonicalization picks the same key regardless of which s
         }
     }
 }
+
+// Regression test for a real bug: PenteGame::minIdx()/maxIdx() truncate
+// asymmetrically for even boardSize (BOARD_SIZE=19 is odd), so boardSize=4
+// actually yields a 5-wide window (physical [7,12), not [7,11)). Packing
+// against the requested boardSize=4 instead of that true width silently
+// dropped the 5th row/column from the key, aliasing distinct positions
+// together - this was the actual root cause of an "impossible" recursion
+// depth (>50000, far beyond any legally reachable 4x4 game length) seen in a
+// real long solve5x5 run. The real 5x5/3x3 targets are odd-sized and
+// unaffected (no truncation), but PositionKey must still be correct for any
+// supported boardSize.
+TEST_CASE("PositionKey packs the true (possibly wider-than-requested) window for even boardSize") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 4;
+    PenteGame gameA(config);
+    gameA.reset();
+    gameA.makeMove(9, 9); // forced center
+
+    PenteGame gameB = gameA.clone();
+
+    // (11, 9) is inside the true 5-wide window (physical [7,12)) but outside
+    // the naive 4-wide interpretation [7,11) - exactly the cell the bug
+    // dropped. A stone there must still affect the packed key. This is
+    // White's move (move index 1, right after Black's forced-center index 0).
+    gameA.makeMove(11, 9);
+    gameB.makeMove(10, 9); // a different, in-bounds-either-way move instead
+
+    PositionKey keyA = PositionKey::pack(gameA);
+    PositionKey keyB = PositionKey::pack(gameB);
+    CHECK(keyA != keyB);
+
+    const int trueWindowSize = 5; // maxIdx() - minIdx() for boardSize=4, not config.boardSize
+    auto unpacked = PositionKey::unpack(keyA, trueWindowSize);
+    const int lo = 7;
+    CHECK(unpacked.cell[static_cast<size_t>((9 - lo) * trueWindowSize + (11 - lo))] == PenteGame::WHITE);
+}

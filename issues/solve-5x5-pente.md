@@ -55,6 +55,11 @@ Built and unit-tested (`./unit_tests`, 141/141 passing throughout):
 
 ## Calibration results
 
+**The 4x4 rows below are invalidated by the even-boardSize key-corruption
+bug found later in this doc - see "Two real bugs found chasing that longer
+run." Left here only as a historical record of the investigation; don't
+cite these numbers.** The 3x3 and 5x5 rows are odd-sized and unaffected.
+
 Single-threaded, one machine (8-core, per `nproc`), Release build.
 
 | Board | Budget | Nodes created | mid() calls | Nodes/sec | Resolved | Root status |
@@ -73,7 +78,7 @@ rest of the budget (`dn=1` at the 4x4/300s mark means the search has
 narrowed to essentially one unresolved line - encouraging, looks close to a
 full proof rather than stuck, though not yet confirmed).
 
-## Longer 4x4 run (2026-08-09)
+## Longer 4x4 run (2026-08-09) - also invalidated, see below
 
 `./solve5x5 -B 4 -t 3600 -o book4x4_1hr.bin`. Actually ran only **715s**, not
 the intended hour - `-N` wasn't raised alongside `-t`, so the default
@@ -121,13 +126,68 @@ shows bit-identical root pn/dn while node count keeps climbing, that would
 be the point to actually distrust this conclusion and instrument further
 (e.g. dump the specific child/grandchild chain currently absorbing effort).
 
+## Two real bugs found chasing that longer run (2026-08-09)
+
+Asked to actually let a long run go: it crashed (SIGSEGV) the first time,
+and even after fixing that, the resulting "successful" run turned out to
+also be invalid. Both are fixed now; **all 4x4 calibration data above and
+below predating this section should be considered unreliable** - it was
+unknowingly exercising a corrupted key space (see bug 2). The real 5x5/3x3
+targets are odd-sized and were never affected by either bug.
+
+**Bug 1 - stack overflow (SIGSEGV, exit 139).** `mid()` recurses once per
+ply and takes a full `PenteGame` by value each level - `sizeof(PenteGame)`
+is 8128 bytes, almost entirely its embedded `std::mt19937` (5000 bytes) -
+and df-pn's threshold-driven descent can legitimately commit very deep into
+one narrow line. A default ~8MB thread stack only had headroom for a few
+hundred levels. Fixed: `PNS::Config::maxRecursionDepth` (new safety valve,
+stops the whole search gracefully rather than crashing) plus
+`apps/Solve5x5.cpp` raising `RLIMIT_STACK` and sizing the depth budget to
+match. See the commit for full detail.
+
+**Bug 2 - even boardSize silently corrupted the key space.** Re-running
+after the stack fix "succeeded" (exit 0) but hit the *new* depth cap at
+depth=53,687 - and that number is itself impossible: on a 4x4 board,
+`capturesToWin=10` bounds total captured stones to ≤18 and stonesOnBoard to
+≤16, so `moveCount = stonesOnBoard + totalCaptured ≤ 34` for any genuinely
+non-terminal position. A depth 1500x past that theoretical ceiling meant
+the DAG wasn't representing real game states faithfully.
+
+Root cause: `PenteGame::minIdx()`/`maxIdx()` truncate asymmetrically for
+even `boardSize` (`BOARD_SIZE=19` is odd, so `(19-boardSize)/2` truncates) -
+`boardSize=4` actually yields a **5-wide** window (`minIdx=7, maxIdx=12`),
+not 4. `PositionKey::packSym` packed against the requested
+`config().boardSize` instead of the true window width
+(`maxIdx()-minIdx()`), silently dropping a whole row/column from the key.
+Two physically distinct positions differing only in that dropped
+row/column collapsed to the *same* key - a genuine collision defeating the
+entire "exact, collision-free" design premise, and the actual explanation
+for the impossible depth: the DAG could "progress" the underlying game
+indefinitely along the un-keyed dimension without the (corrupted) key ever
+registering it as a new/different position, so termination logic never
+kicked in as it should have. `PositionKeyTests.cpp` had never exercised an
+even `boardSize` (only 3 and 5, both odd) - a real test-coverage gap that
+let this ship undetected through all of Phase 1-5.
+
+Fixed: `PositionKey::packSym`/`unpack` now compute the window from
+`maxIdx()-minIdx()` rather than trusting `config().boardSize`. Regression
+test added (`PositionKeyTests.cpp`) packing a stone into the specific cell
+the bug used to drop and confirming it now changes the key. The actual
+5x5/3x3 targets are odd, where `(19-boardSize)/2` never truncates - no
+discrepancy, unaffected by either bug.
+
+All prior 4x4 numbers/artifacts in this doc and the scratchpad were deleted
+rather than "corrected" - they don't describe a real 4x4 game and aren't
+worth preserving even as a labeled caveat.
+
 ## Next
 
-A genuinely longer, node-unbounded 4x4 run (get one real full-resolution
-data point) before deciding whether Phase 6 (multithreaded df-pn, reusing
-`ParallelMCTS`'s worker-pool/sharded-table/slab-allocator patterns - a real
-chunk of separate work) is warranted, or whether patience alone gets there
-at this board size. 5x5's true difficulty remains unknown; 2M-node-scale
-probes are nowhere near enough data to extrapolate from.
+Re-run calibration on a genuinely trustworthy target. Given 4x4's own
+result is now unknown again (never validly measured) and 5x5 is the actual
+goal, the more useful next step is probably a long run directly on 5x5
+rather than re-doing 4x4 first - 4x4 was only ever a cheaper stand-in.
+Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
+worker-pool/sharded-table/slab-allocator patterns - a real chunk of
+separate work) is warranted once that lands.
 
 <!-- Update below as longer runs complete. -->

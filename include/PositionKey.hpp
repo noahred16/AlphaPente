@@ -17,16 +17,23 @@
 // board exactly: no two distinct positions can ever produce the same key, so
 // there is nothing to argue statistically about collisions.
 //
-// Layout (LSB first), for a boardSize x boardSize logical window:
+// Layout (LSB first), for the TRUE logical window (PenteGame::maxIdx() -
+// minIdx(); this is config().boardSize cells wide for odd boardSize, e.g.
+// the actual 5x5/3x3 targets, but can be one cell wider for even boardSize -
+// minIdx()=(BOARD_SIZE-boardSize)/2 truncates since BOARD_SIZE=19 is odd, so
+// e.g. boardSize=4 actually yields a 5-wide window. Packing must always use
+// this true width, not config().boardSize directly, or distinct positions
+// differing only in the "extra" row/column would silently alias to the same
+// key):
 //   2 bits per cell (00=empty, 01=black, 10=white), row-major over the window
-//                                              -> 2 * boardSize * boardSize bits
+//                                              -> 2 * windowSize * windowSize bits
 //   1 bit  side-to-move   (0=BLACK, 1=WHITE)
 //   4 bits black stones captured (PenteGame::getBlackCaptures(), 0 until just
 //                                  under capturesToWin, e.g. 0-9 for Pente's
 //                                  default capturesToWin=10)
 //   4 bits white stones captured (symmetric)
-// For boardSize=5: 2*25 + 1 + 4 + 4 = 59 bits, fits a uint64_t. This scheme
-// only fits boardSize <= 5 (boardSize=6 would need 2*36+9=81 bits); pack()
+// For a 5-wide window: 2*25 + 1 + 4 + 4 = 59 bits, fits a uint64_t. This
+// scheme only fits windows <= 5 wide (6 would need 2*36+9=81 bits); pack()
 // asserts on that bound rather than silently overflowing.
 class PositionKey {
   public:
@@ -54,14 +61,17 @@ class PositionKey {
     static PositionKey canonical(const PenteGame &game, int &outSym);
 
     // Reconstructed contents of a packed key, for round-trip testing and
-    // (later) book export. boardSize must match what the key was packed with.
+    // (later) book export. `windowSize` must be the TRUE window width the
+    // key was packed with (PenteGame::maxIdx()-minIdx(), NOT necessarily
+    // config().boardSize - see the class comment above) or this silently
+    // misreads the bit layout.
     struct Unpacked {
         std::array<PenteGame::Player, kMaxBoardSize * kMaxBoardSize> cell{};
         PenteGame::Player sideToMove = PenteGame::BLACK;
         int blackCaptures = 0;
         int whiteCaptures = 0;
     };
-    static Unpacked unpack(const PositionKey &key, int boardSize);
+    static Unpacked unpack(const PositionKey &key, int windowSize);
 };
 
 namespace std {
