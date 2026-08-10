@@ -1,5 +1,4 @@
 #include "PNS.hpp"
-#include "Zobrist.hpp"
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -96,11 +95,10 @@ void PNS::expandNode(Node *n, const PenteGame &game) {
     // mirrors MCTS::expand()'s identical rotation-to-canonical step.
     int canonSym = -1;
     PositionKey::canonical(game, canonSym);
-    const auto &zob = Zobrist::instance();
     n->childMoves.reserve(scored.size());
     for (const auto &entry : scored) {
         int cx, cy;
-        zob.applySymToMove(canonSym, entry.first.x, entry.first.y, cx, cy);
+        PositionKey::applySymToPhysical(game, canonSym, entry.first.x, entry.first.y, cx, cy);
         n->childMoves.emplace_back(cx, cy);
     }
     n->childPtr.assign(n->childMoves.size(), nullptr);
@@ -272,7 +270,6 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
     // duration of this call (game doesn't change outside the loop below).
     int currentSym = -1;
     PositionKey::canonical(game, currentSym);
-    const auto &zob = Zobrist::instance();
 
     while (true) {
         if (stopRequested_) return;
@@ -292,7 +289,7 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
         const size_t bi = static_cast<size_t>(bestIdx);
 
         int physX, physY;
-        zob.applyInverseSym(currentSym, n->childMoves[bi].x, n->childMoves[bi].y, physX, physY);
+        PositionKey::applyInverseSymToPhysical(game, currentSym, n->childMoves[bi].x, n->childMoves[bi].y, physX, physY);
         PenteGame childGame = game;
         childGame.makeMove(physX, physY);
 

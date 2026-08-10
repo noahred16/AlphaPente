@@ -94,6 +94,22 @@ PositionKey PositionKey::packSym(const PenteGame &game, int sym) {
 
 PositionKey PositionKey::pack(const PenteGame &game) { return packSym(game, 0); }
 
+void PositionKey::applySymToPhysical(const PenteGame &game, int sym, int px, int py, int &outX, int &outY) {
+    const int lo = game.minIdx();
+    const int n = (game.maxIdx() - lo) - 1;
+    int ox, oy;
+    applySym(sym, n, px - lo, py - lo, ox, oy);
+    outX = ox + lo;
+    outY = oy + lo;
+}
+
+void PositionKey::applyInverseSymToPhysical(const PenteGame &game, int sym, int px, int py, int &outX, int &outY) {
+    // D4 group inverses: sym 1 (rot90CW) <-> sym 3 (rot270CW); the rest are
+    // self-inverse. Same convention as Zobrist's inverseSym table.
+    static constexpr int inv[8] = {0, 3, 2, 1, 4, 5, 6, 7};
+    applySymToPhysical(game, inv[sym], px, py, outX, outY);
+}
+
 PositionKey PositionKey::canonical(const PenteGame &game, int &outSym) {
     PositionKey best = packSym(game, 0);
     outSym = 0;

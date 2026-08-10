@@ -60,6 +60,22 @@ class PositionKey {
     // coordinates.
     static PositionKey canonical(const PenteGame &game, int &outSym);
 
+    // Applies (or un-applies) D4 symmetry `sym` to a PHYSICAL board
+    // coordinate, converting to/from window-relative coordinates using
+    // `game`'s current logical window - guaranteed self-consistent with
+    // whatever pack()/canonical() actually did, unlike Zobrist's D4 group
+    // (applySymToMove/applyInverseSym), which is defined relative to the
+    // full 19x19 physical grid's own center. Those only coincide with this
+    // window-relative transform when the window is centered on the grid's
+    // center - true for odd boardSize (minIdx()=(BOARD_SIZE-boardSize)/2
+    // divides evenly), NOT necessarily true for even boardSize (that
+    // division truncates, so the window can sit off-center relative to the
+    // grid even though it's still the correct boardSize wide). Use these,
+    // not Zobrist's, for any physical<->canonical move translation tied to
+    // a PositionKey-canonicalized position.
+    static void applySymToPhysical(const PenteGame &game, int sym, int px, int py, int &outX, int &outY);
+    static void applyInverseSymToPhysical(const PenteGame &game, int sym, int px, int py, int &outX, int &outY);
+
     // Reconstructed contents of a packed key, for round-trip testing and
     // (later) book export. `windowSize` must be the TRUE window width the
     // key was packed with (PenteGame::maxIdx()-minIdx(), NOT necessarily

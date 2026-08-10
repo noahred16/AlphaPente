@@ -191,3 +191,53 @@ TEST_CASE("PositionKey packs a genuinely 4-wide window correctly") {
     CHECK(unpacked.cell[static_cast<size_t>((9 - lo) * 4 + (9 - lo))] == PenteGame::BLACK);
     CHECK(unpacked.cell[static_cast<size_t>((10 - lo) * 4 + (10 - lo))] == PenteGame::WHITE);
 }
+
+// Regression test for a second bug that followed directly from fixing the
+// first one: a genuinely 4-wide window sits at physical [7,11), which is
+// NOT centered on the full 19x19 grid's own center (9) - true 4-wide window
+// center would be 8.5, unlike odd boardSize where minIdx()/maxIdx() divide
+// evenly and the window is grid-centered. PNS used to bridge canonical<->
+// physical coordinates via Zobrist::applySymToMove/applyInverseSym, which
+// is defined relative to the *grid's* center - correct only when the window
+// happens to be grid-centered (odd boardSize), silently wrong for this
+// asymmetric even-boardSize window. That produced wrong physical
+// coordinates fed into PenteGame::makeMove() (which has no occupancy check
+// of its own), corrupting real solve5x5 runs in a way that looked like an
+// "impossible" recursion depth (>50000 on a board that can't legally exceed
+// ~34 plies) rather than an obvious crash.
+//
+// PositionKey::applySymToPhysical/applyInverseSymToPhysical replace that
+// bridge with a window-relative transform, guaranteed self-consistent with
+// pack()/canonical() by construction regardless of grid-centering. This
+// checks exactly the property that broke: round-tripping through apply then
+// inverse-apply recovers the original physical coordinate, and the image
+// never leaves the window, for every symmetry and every cell of a
+// genuinely-asymmetric (even boardSize) window.
+TEST_CASE("PositionKey's physical symmetry transform round-trips correctly on an asymmetric even window") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 4;
+    PenteGame game(config);
+    game.reset();
+
+    const int lo = game.minIdx();
+    const int hi = game.maxIdx();
+    REQUIRE(hi - lo == 4);
+
+    for (int sym = 0; sym < 8; ++sym) {
+        for (int py = lo; py < hi; ++py) {
+            for (int px = lo; px < hi; ++px) {
+                int fx, fy;
+                PositionKey::applySymToPhysical(game, sym, px, py, fx, fy);
+                CHECK(fx >= lo);
+                CHECK(fx < hi);
+                CHECK(fy >= lo);
+                CHECK(fy < hi);
+
+                int rx, ry;
+                PositionKey::applyInverseSymToPhysical(game, sym, fx, fy, rx, ry);
+                CHECK(rx == px);
+                CHECK(ry == py);
+            }
+        }
+    }
+}
