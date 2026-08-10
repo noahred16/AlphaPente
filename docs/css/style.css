@@ -23,6 +23,16 @@ h1 {
   color: var(--green-dark);
 }
 
+#loading {
+  font-weight: bold;
+  color: var(--green-dark);
+  padding: 2em 1em;
+}
+
+#app.hidden {
+  display: none;
+}
+
 #toolbar {
   margin-bottom: 0.5em;
   display: flex;

@@ -4,6 +4,7 @@
 #include "PNS.hpp"
 #include "PenteGame.hpp"
 #include "PositionKey.hpp"
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -47,7 +48,17 @@ class PositionBook {
     bool save(const std::string &path) const;
     bool load(const std::string &path);
 
+    // Same format as load(), read from an in-memory buffer instead of a
+    // file - e.g. WasmGame (wasm/PenteWasm.cpp) fetches the book bytes over
+    // HTTP in JS and passes them in directly, rather than relying on
+    // Emscripten's --preload-file (which would force every page load to
+    // download the whole book up front, regardless of whether the user ever
+    // picks the board size it's for).
+    bool loadFromMemory(const uint8_t *data, size_t len);
+
   private:
+    bool loadFromStream(std::istream &is);
+
     std::unordered_map<PositionKey, Entry> entries_;
 };
 

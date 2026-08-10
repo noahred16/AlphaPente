@@ -1,11 +1,15 @@
 const EFFORT_SIMULATIONS = { low: 3000, medium: 10000, high: 30000, ultra: 100000 };
+const BOOK_URL = { 4: 'data/book4x4.bin' }; // board size -> solved-book asset
 
 let Module, game, boardSize;
 let lastTopMoves = null; // kept visible (table + highlight) until the next AI search
 let lastAiMove = null; // {x, y} of the AI's most recent move, kept highlighted until its next move
 let moveHistory = []; // [{x, y}, ...] in play order, Black first; used to replay after undo
 let aiPending = false; // true from when the AI's turn is scheduled until its move commits
+const bookBytesCache = {}; // board size -> fetched Uint8Array, so switching sizes doesn't re-fetch
 
+const loadingEl = document.getElementById('loading');
+const appEl = document.getElementById('app');
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const capturesEl = document.getElementById('captures');
@@ -44,10 +48,61 @@ function labelEffortButtons() {
   });
 }
 
-function newGame() {
+// Fetches (or returns the cached copy of) the solved book for `size`, with a
+// live percentage in #loading - a plain "Loading..." message would look just
+// as stuck as no message at all for a ~67MB download on a slow connection.
+async function fetchBookBytes(size) {
+  if (bookBytesCache[size]) return bookBytesCache[size];
+
+  const resp = await fetch(BOOK_URL[size]);
+  const total = Number(resp.headers.get('Content-Length')) || 0;
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total) {
+      const pct = Math.round((received / total) * 100);
+      setLoading(`Loading solved ${size} x ${size} book… ${pct}%`);
+    } else {
+      setLoading(`Loading solved ${size} x ${size} book… ${(received / 1e6).toFixed(1)}MB`);
+    }
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+
+  bookBytesCache[size] = bytes;
+  return bytes;
+}
+
+function setLoading(text) {
+  loadingEl.textContent = text;
+  loadingEl.classList.remove('hidden');
+  appEl.classList.add('hidden');
+}
+
+function clearLoading() {
+  loadingEl.classList.add('hidden');
+  appEl.classList.remove('hidden');
+}
+
+async function newGame() {
+  const size = getBoardSizeSetting();
+  setLoading(`Loading ${size} x ${size}…`);
+
   if (game) game.delete();
-  game = new Module.Game(getBoardSizeSetting(), getEffortSimulations());
+  game = new Module.Game(size, getEffortSimulations());
   boardSize = game.getBoardSize();
+
+  if (BOOK_URL[boardSize]) {
+    const bytes = await fetchBookBytes(boardSize);
+    game.loadBookFromBytes(bytes);
+  }
+
   const usingBook = game.usingBook();
   const title = `${boardSize} x ${boardSize} Pente` + (usingBook ? ' (solved)' : '');
   pageTitleEl.textContent = title;
@@ -59,6 +114,7 @@ function newGame() {
   buildBoard();
   buildTopMovesHeader(usingBook);
   render();
+  clearLoading();
 }
 
 // Book-backed boards show every legal reply's exact outcome + moves-to-result
@@ -203,6 +259,7 @@ document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener(
 document.querySelectorAll('input[name="effort"]').forEach(r =>
   r.addEventListener('change', () => game.setSimulations(getEffortSimulations())));
 
+setLoading('Loading engine…');
 PenteModule().then(mod => {
   Module = mod;
   newGame();

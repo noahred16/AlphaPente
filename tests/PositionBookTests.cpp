@@ -3,6 +3,8 @@
 #include "PenteGame.hpp"
 #include "doctest.h"
 #include <cstdio>
+#include <fstream>
+#include <vector>
 
 namespace {
 // Solves the same 3x3 gomoku scenario PNSTests.cpp uses, so this file can
@@ -73,4 +75,33 @@ TEST_CASE("PositionBook save/load round-trips to disk") {
 TEST_CASE("PositionBook load rejects a missing file") {
     PositionBook book;
     CHECK_FALSE(book.load("/tmp/positionbook_test_does_not_exist.bin"));
+}
+
+// loadFromMemory() exists specifically for WasmGame (wasm/PenteWasm.cpp),
+// which fetches the book's bytes over HTTP in JS rather than reading a file
+// - this checks it parses identically to load(path) given the exact same
+// bytes.
+TEST_CASE("PositionBook loadFromMemory matches load(path) on the same bytes") {
+    PNS pns;
+    PenteGame game = solved3x3(pns);
+
+    PositionBook book;
+    book.addAll(pns);
+
+    const std::string path = "/tmp/positionbook_test_frommemory.bin";
+    REQUIRE(book.save(path));
+
+    std::ifstream is(path, std::ios::binary);
+    REQUIRE(is);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
+    std::remove(path.c_str());
+
+    PositionBook loaded;
+    REQUIRE(loaded.loadFromMemory(bytes.data(), bytes.size()));
+    CHECK(loaded.size() == book.size());
+
+    auto entry = loaded.lookup(game);
+    REQUIRE(entry.has_value());
+    CHECK(entry->outcome == pns.getRootOutcome());
+    CHECK(entry->depth == pns.getRootDepth());
 }

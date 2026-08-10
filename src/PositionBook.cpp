@@ -1,6 +1,7 @@
 #include "PositionBook.hpp"
 #include <cstring>
 #include <fstream>
+#include <sstream>
 
 namespace {
 constexpr char kMagic[4] = {'P', 'N', 'T', 'B'};
@@ -52,7 +53,19 @@ bool PositionBook::save(const std::string &path) const {
 bool PositionBook::load(const std::string &path) {
     std::ifstream is(path, std::ios::binary);
     if (!is) return false;
+    return loadFromStream(is);
+}
 
+bool PositionBook::loadFromMemory(const uint8_t *data, size_t len) {
+    // One extra copy (into the istringstream's internal string) - simple and
+    // correct, and only ever runs once per page load in the WASM use case
+    // this exists for (see wasm/PenteWasm.cpp), not worth optimizing away
+    // with a custom streambuf over `data` directly.
+    std::istringstream is(std::string(reinterpret_cast<const char *>(data), len), std::ios::binary);
+    return loadFromStream(is);
+}
+
+bool PositionBook::loadFromStream(std::istream &is) {
     char magic[4];
     is.read(magic, sizeof(magic));
     if (!is || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) return false;

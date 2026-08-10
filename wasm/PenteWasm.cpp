@@ -7,6 +7,7 @@
 #include "PositionBook.hpp"
 #include <algorithm>
 #include <emscripten/bind.h>
+#include <emscripten/val.h>
 
 using namespace emscripten;
 
@@ -52,15 +53,20 @@ class WasmGame {
   public:
     explicit WasmGame(int boardSize, int simulations)
         : origin_((PenteGame::BOARD_SIZE - boardSize) / 2), simulations_(simulations),
-          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()) {
-        // Only 4x4 has a solved book today (see docs/data/book4x4.bin,
-        // preloaded into the WASM virtual FS at /book4x4.bin by
-        // scripts/build_wasm.sh's --preload-file). Falls back to MCTS
-        // (hasBook_ stays false) for any other board size, or if the file
-        // somehow isn't there.
-        if (boardSize == 4) {
-            hasBook_ = book_.load("/book4x4.bin");
-        }
+          game_(makeConfig(boardSize)), mcts_(makeMctsConfig()) {}
+
+    // Loads a solved book (docs/data/book4x4.bin today) from raw bytes the
+    // JS side fetched over HTTP - deliberately NOT auto-loaded via
+    // Emscripten's --preload-file, which would force the whole ~67MB book to
+    // download before the WASM module is even ready, on every page load,
+    // regardless of which board size the user actually picks. JS is
+    // expected to only fetch+call this when boardSize()==4 is selected, and
+    // can cache the bytes across Game instances to skip re-fetching. Returns
+    // whether the book parsed successfully; usingBook() reflects the result.
+    bool loadBookFromBytes(val jsBytes) {
+        std::vector<uint8_t> bytes = vecFromJSArray<uint8_t>(jsBytes);
+        hasBook_ = book_.loadFromMemory(bytes.data(), bytes.size());
+        return hasBook_;
     }
 
     void reset() {
@@ -246,6 +252,7 @@ EMSCRIPTEN_BINDINGS(pente_module) {
         .function("getBlackCaptures", &WasmGame::getBlackCaptures)
         .function("getWhiteCaptures", &WasmGame::getWhiteCaptures)
         .function("usingBook", &WasmGame::usingBook)
+        .function("loadBookFromBytes", &WasmGame::loadBookFromBytes)
         .function("getStoneAt", &WasmGame::getStoneAt)
         .function("computeAIMove", &WasmGame::computeAIMove)
         .function("getTopMoves", &WasmGame::getTopMoves);

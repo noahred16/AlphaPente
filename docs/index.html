@@ -3,11 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title id="page-title">5 x 5 Pente</title>
+<title id="page-title">4 x 4 Pente</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<h1 id="page-heading">5 x 5 Pente</h1>
+<h1 id="page-heading">4 x 4 Pente</h1>
+
+<div id="loading">Loading engine…</div>
+
+<div id="app" class="hidden">
 
 <div id="toolbar">
   <button id="reset">Reset</button>
@@ -22,8 +26,8 @@
   <div class="settings-group">
     <div class="settings-label">Board Size</div>
     <select id="board-size">
-      <option value="4">4 x 4 (solved)</option>
-      <option value="5" selected>5 x 5</option>
+      <option value="4" selected>4 x 4 (solved)</option>
+      <option value="5">5 x 5</option>
       <option value="7">7 x 7</option>
       <option value="9">9 x 9</option>
     </select>
@@ -57,6 +61,8 @@
   <thead></thead>
   <tbody></tbody>
 </table>
+</div>
+
 </div>
 
 <script src="wasm/pente.js"></script>
