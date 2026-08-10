@@ -180,14 +180,61 @@ All prior 4x4 numbers/artifacts in this doc and the scratchpad were deleted
 rather than "corrected" - they don't describe a real 4x4 game and aren't
 worth preserving even as a labeled caveat.
 
+## Fixed PenteGame's window sizing, then a 3rd bug, then 4x4 actually solved (2026-08-09)
+
+Asked to fix "4x4" properly rather than route around it. Two changes, in order:
+
+1. **`PenteGame::maxIdx()`** was `BOARD_SIZE - minIdx()`, which only equals
+   `minIdx() + boardSize` for odd `boardSize` - for even sizes it silently
+   widened the window by one cell (`boardSize=4` produced the *exact same*
+   5-wide window as `boardSize=5` - there was no genuinely-smaller-than-5x5
+   target at all before this). Fixed to `minIdx() + config_.boardSize`
+   directly. Confirmed via grep that nothing else in the repo relied on the
+   old even-size behavior. The forced-center-move rule needed no changes -
+   physical `(9,9)` is still in-bounds for a genuine 4-wide window
+   `{7,8,9,10}`, just not exactly centered (nothing can be, for an even
+   width) - exactly the semi-arbitrary rounding this was expected to need.
+   Also fixed a matching cosmetic bug in `GameUtils::printBoard` (it had its
+   own stale inline copy of the old formula).
+
+2. That surfaced a **third** bug, more subtle: a genuine 4-wide window sits
+   at physical `[7,11)`, not centered on the full 19x19 grid's center (9) -
+   true center of a 4-wide range is 8.5. `PNS` bridged canonical<->physical
+   move coordinates via `Zobrist::applySymToMove`/`applyInverseSym`, which
+   is defined relative to the *grid's* center - only correct when the window
+   happens to be grid-centered, true for every odd `boardSize` (never
+   exercised against an even one before). This produced wrong physical
+   coordinates fed straight into `PenteGame::makeMove()` (no occupancy check
+   of its own, by design), corrupting the game in a way that looked exactly
+   like the "impossible" depth=53687 finding above, but this time with
+   `blackCap=0, whiteCap=0` - impossible even by the simplest possible bound
+   (16 cells, no captures, so moveCount can't exceed 16 without something
+   placing moves on already-occupied cells). Fixed by adding
+   `PositionKey::applySymToPhysical`/`applyInverseSymToPhysical` - a
+   window-relative transform guaranteed self-consistent with
+   `pack()`/`canonical()` by construction - and switching `PNS` to use those
+   instead of `Zobrist`'s grid-relative ones.
+
+**4x4 Pente (real rules, captures on) is now fully, validatedly solved:
+root is DRAW, depth 16** (board-full - sane, since five-in-a-row can't fit
+on a 4-wide board, and apparently neither side can force `capturesToWin=10`
+first). 1,487,913 nodes, 13,973,801 `mid()` calls, 40.4s single-threaded,
+75,524 positions resolved. Reproduced identically twice (deterministic
+search, as expected). Checkpoint and log kept in the scratchpad
+(`book4x4_solved.bin`), not committed (large binary, not repo material).
+
+This is the first genuinely trustworthy calibration data point past the
+trivial 3x3 case, and validates the whole PNS/df-pn approach end-to-end on
+a real (if small) Pente-with-captures board.
+
 ## Next
 
-Re-run calibration on a genuinely trustworthy target. Given 4x4's own
-result is now unknown again (never validly measured) and 5x5 is the actual
-goal, the more useful next step is probably a long run directly on 5x5
-rather than re-doing 4x4 first - 4x4 was only ever a cheaper stand-in.
-Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
-worker-pool/sharded-table/slab-allocator patterns - a real chunk of
-separate work) is warranted once that lands.
+5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
+than that ratio suggests - no valid extrapolation from 4x4's 40s solve time
+exists yet. Next real step: a long single-threaded 5x5 run to see how far
+it gets, now that the engine itself is trustworthy. Decide whether Phase 6
+(multithreaded df-pn, reusing `ParallelMCTS`'s worker-pool/sharded-table/
+slab-allocator patterns - a real chunk of separate work) is warranted once
+that lands.
 
 <!-- Update below as longer runs complete. -->
