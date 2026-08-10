@@ -293,8 +293,23 @@ document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener(
 document.querySelectorAll('input[name="effort"]').forEach(r =>
   r.addEventListener('change', () => game.setSimulations(getEffortSimulations())));
 
+// Same class of bug as newGame()'s try/catch (see its comment): this outer
+// promise/call had no error handling at all, so a failure here - PenteModule
+// undefined (wasm/pente.js itself failed to load/parse), a WASM
+// instantiation error, anything - left "Loading engine…" showing forever
+// with nothing in the UI to explain why. try/catch covers a synchronous
+// throw from the PenteModule() call itself (e.g. it not being a function at
+// all); .catch() covers the promise it returns actually rejecting.
 setLoading('Loading engine…');
-PenteModule().then(mod => {
-  Module = mod;
-  newGame();
-});
+function failEngineLoad(err) {
+  console.error('Failed to load the WASM engine:', err);
+  setLoading(`Failed to load engine: ${err && err.message ? err.message : err}. Reload the page to retry.`);
+}
+try {
+  PenteModule().then(mod => {
+    Module = mod;
+    newGame();
+  }).catch(failEngineLoad);
+} catch (err) {
+  failEngineLoad(err);
+}

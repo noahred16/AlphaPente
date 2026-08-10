@@ -65,7 +65,11 @@
 
 </div>
 
-<script src="wasm/pente.js"></script>
-<script src="js/app.js"></script>
+<!-- Cache-busting query param: bump on every change to wasm/pente.js or
+     js/app.js, since browsers cache these aggressively and there's no build
+     step to do this automatically. Without it, a returning visitor can keep
+     running stale JS/WASM indefinitely even after a fix is deployed. -->
+<script src="wasm/pente.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>
