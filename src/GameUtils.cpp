@@ -178,10 +178,9 @@ void GameUtils::printBoard(const PenteGame &game) {
 
     // Only print the configured play area, not the full physical BOARD_SIZE grid
     // it's centered within -- a -B 5 board would otherwise still render as 19x19
-    // of mostly unusable border cells. minIdx()/maxIdx() aren't public, so mirror
-    // their formula here from the (public) boardSize config.
-    int lo = (PenteGame::BOARD_SIZE - game.getConfig().boardSize) / 2;
-    int hi = PenteGame::BOARD_SIZE - lo;
+    // of mostly unusable border cells.
+    int lo = game.minIdx();
+    int hi = game.maxIdx();
 
     // Helper to handle skipping 'I'
     auto getColChar = [](int x) {

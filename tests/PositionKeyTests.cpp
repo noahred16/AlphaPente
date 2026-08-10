@@ -162,38 +162,32 @@ TEST_CASE("PositionKey canonicalization picks the same key regardless of which s
     }
 }
 
-// Regression test for a real bug: PenteGame::minIdx()/maxIdx() truncate
-// asymmetrically for even boardSize (BOARD_SIZE=19 is odd), so boardSize=4
-// actually yields a 5-wide window (physical [7,12), not [7,11)). Packing
-// against the requested boardSize=4 instead of that true width silently
-// dropped the 5th row/column from the key, aliasing distinct positions
-// together - this was the actual root cause of an "impossible" recursion
-// depth (>50000, far beyond any legally reachable 4x4 game length) seen in a
-// real long solve5x5 run. The real 5x5/3x3 targets are odd-sized and
-// unaffected (no truncation), but PositionKey must still be correct for any
-// supported boardSize.
-TEST_CASE("PositionKey packs the true (possibly wider-than-requested) window for even boardSize") {
+// Regression test for a real bug (now fixed at the source): PenteGame's
+// minIdx()/maxIdx() used to truncate asymmetrically for even boardSize
+// (BOARD_SIZE=19 is odd), so boardSize=4 used to actually yield a 5-wide
+// window (physical [7,12), not [7,11)) - PositionKey packing against the
+// requested boardSize=4 instead of that (wrong) true width silently dropped
+// the 5th row/column from the key, aliasing distinct positions together.
+// PenteGame::maxIdx() is now minIdx()+boardSize, giving a genuinely 4-wide
+// window - this checks PositionKey packs all 16 cells of it correctly (no
+// off-by-one gaps at the far edge) and that a cell outside the true window
+// (physical x/y=11) is correctly out of bounds.
+TEST_CASE("PositionKey packs a genuinely 4-wide window correctly") {
     PenteGame::Config config = PenteGame::Config::gomoku();
     config.boardSize = 4;
-    PenteGame gameA(config);
-    gameA.reset();
-    gameA.makeMove(9, 9); // forced center
+    PenteGame game(config);
+    game.reset();
 
-    PenteGame gameB = gameA.clone();
+    REQUIRE(game.minIdx() == 7);
+    REQUIRE(game.maxIdx() == 11); // exclusive: window is {7,8,9,10}, genuinely 4 wide
 
-    // (11, 9) is inside the true 5-wide window (physical [7,12)) but outside
-    // the naive 4-wide interpretation [7,11) - exactly the cell the bug
-    // dropped. A stone there must still affect the packed key. This is
-    // White's move (move index 1, right after Black's forced-center index 0).
-    gameA.makeMove(11, 9);
-    gameB.makeMove(10, 9); // a different, in-bounds-either-way move instead
+    game.makeMove(9, 9);   // forced center - still in-bounds for the 4-wide window
+    game.makeMove(10, 10); // farthest legal corner of the true 4-wide window (White)
 
-    PositionKey keyA = PositionKey::pack(gameA);
-    PositionKey keyB = PositionKey::pack(gameB);
-    CHECK(keyA != keyB);
+    PositionKey key = PositionKey::pack(game);
+    auto unpacked = PositionKey::unpack(key, 4);
 
-    const int trueWindowSize = 5; // maxIdx() - minIdx() for boardSize=4, not config.boardSize
-    auto unpacked = PositionKey::unpack(keyA, trueWindowSize);
     const int lo = 7;
-    CHECK(unpacked.cell[static_cast<size_t>((9 - lo) * trueWindowSize + (11 - lo))] == PenteGame::WHITE);
+    CHECK(unpacked.cell[static_cast<size_t>((9 - lo) * 4 + (9 - lo))] == PenteGame::BLACK);
+    CHECK(unpacked.cell[static_cast<size_t>((10 - lo) * 4 + (10 - lo))] == PenteGame::WHITE);
 }

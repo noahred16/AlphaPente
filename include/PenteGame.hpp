@@ -214,7 +214,12 @@ class PenteGame {
 
     // Logical play area is a square of config_.boardSize centered within the physical BOARD_SIZE grid.
     int minIdx() const { return (BOARD_SIZE - config_.boardSize) / 2; }
-    int maxIdx() const { return BOARD_SIZE - minIdx(); } // exclusive
+    // Exclusive. minIdx() + boardSize, not BOARD_SIZE - minIdx(): those only
+    // coincide when boardSize is odd (BOARD_SIZE=19 is odd, so
+    // (BOARD_SIZE-boardSize)/2 only divides evenly for odd boardSize) - for
+    // even boardSize, BOARD_SIZE-minIdx() silently widens the window by one
+    // cell instead of giving exactly boardSize cells.
+    int maxIdx() const { return minIdx() + config_.boardSize; }
 
     // Config access
     const Config &getConfig() const { return config_; }
