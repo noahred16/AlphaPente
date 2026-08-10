@@ -2,6 +2,7 @@
 #include "PenteGame.hpp"
 #include "doctest.h"
 #include <cstdio>
+#include <fstream>
 
 // Mirrors tests/MCTSTests.cpp's "MCTS proves an unwinnable board as a solved
 // draw at the root" case: a 3x3 gomoku board can never produce a five-in-a-row
@@ -174,6 +175,66 @@ TEST_CASE("PNS::loadCheckpoint rejects a checkpoint whose root player doesn't ma
 
     PNS pns2;
     CHECK_FALSE(pns2.loadCheckpoint(path, blackToMove)); // Black-to-move root: mismatched
+
+    std::remove(path.c_str());
+}
+
+// Regression test for the Number uint64_t->uint32_t shrink (memory-footprint
+// reduction - see issues/solve-5x5-pente.md): checkpoint files written before
+// that change stored pn/dn as 8 bytes each (with a correspondingly larger INF
+// sentinel, 1ULL<<40). loadCheckpoint() must still read those files rather
+// than corrupt/misalign on them - a real 70M-node checkpoint from an actual
+// 5x5 run existed when this change landed and was worth preserving. This
+// hand-builds a minimal v1-format file (rather than depending on a stale
+// prebuilt binary fixture) and checks a legacy-sized "infinite" dn value
+// doesn't break loading.
+TEST_CASE("PNS::loadCheckpoint reads a legacy v1 (uint64 Number) checkpoint file") {
+    PenteGame::Config config = PenteGame::Config::gomoku();
+    config.boardSize = 3;
+    PenteGame whiteToMove(config);
+    whiteToMove.reset();
+    whiteToMove.makeMove(9, 9); // White to move
+
+    int sym = -1;
+    PositionKey rootKey = PositionKey::canonical(whiteToMove, sym);
+
+    const std::string path = "/tmp/pns_checkpoint_test_legacy_v1.bin";
+    std::remove(path.c_str());
+    {
+        std::ofstream os(path, std::ios::binary);
+        REQUIRE(os);
+        os.write("PNSC", 4);
+        uint32_t version = 1; // legacy: pn/dn as uint64_t
+        os.write(reinterpret_cast<const char *>(&version), sizeof(version));
+        uint8_t rootPlayerByte = static_cast<uint8_t>(PenteGame::WHITE);
+        os.write(reinterpret_cast<const char *>(&rootPlayerByte), 1);
+        uint64_t nodeCount = 1;
+        os.write(reinterpret_cast<const char *>(&nodeCount), sizeof(nodeCount));
+
+        // Single terminal, already-resolved root node (matches expandNode()'s
+        // real terminal path: no children).
+        os.write(reinterpret_cast<const char *>(&rootKey.bits), sizeof(rootKey.bits));
+        uint64_t pn = 0;              // WIN
+        uint64_t dn = 1ULL << 40;     // legacy INF - must map to the new (smaller) INF, not truncate/corrupt
+        os.write(reinterpret_cast<const char *>(&pn), sizeof(pn));
+        os.write(reinterpret_cast<const char *>(&dn), sizeof(dn));
+        uint8_t outcomeByte = static_cast<uint8_t>(PNS::Outcome::WIN);
+        uint8_t expandedByte = 1;
+        os.write(reinterpret_cast<const char *>(&outcomeByte), 1);
+        os.write(reinterpret_cast<const char *>(&expandedByte), 1);
+        uint16_t depth = 1;
+        os.write(reinterpret_cast<const char *>(&depth), sizeof(depth));
+        uint16_t childCount = 0;
+        os.write(reinterpret_cast<const char *>(&childCount), sizeof(childCount));
+    }
+
+    PNS pns;
+    REQUIRE(pns.loadCheckpoint(path, whiteToMove));
+    CHECK(pns.getRootOutcome() == PNS::Outcome::WIN);
+    CHECK(pns.getRootDepth() == 1);
+    // Root is already resolved, so solve() should return true immediately
+    // without needing to expand anything further.
+    CHECK(pns.solve(whiteToMove));
 
     std::remove(path.c_str());
 }

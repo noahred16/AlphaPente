@@ -94,6 +94,7 @@ Stages:
 #include "PositionKey.hpp"
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <unordered_map>
 #include <vector>
 
@@ -101,13 +102,24 @@ class PNS {
   public:
     enum class Outcome : uint8_t { UNKNOWN = 0, WIN, LOSS, DRAW };
 
-    using Number = uint64_t;
+    // uint32_t, not uint64_t: pn/dn are two of the most repeated fields in
+    // the whole DAG (one pair per node), so their width directly drives
+    // total memory - see the Node/Child comments below for the rest of the
+    // per-node footprint story. Real observed pn/dn values on 5x5 stay in
+    // the low hundreds of thousands even after 70M nodes (see
+    // issues/solve-5x5-pente.md's checkpoint/resume section) - INF below
+    // leaves enormous headroom above that.
+    using Number = uint32_t;
     // Sentinel for "infinite" proof/disproof number. Deliberately far below
     // Number's actual range so sums across a modest branching factor can
     // never wrap; comparisons should test `>= INF`, not `== INF`, since
     // intermediate threshold arithmetic can legitimately produce values
     // slightly above INF without that meaning anything different.
-    static constexpr Number INF = 1ULL << 40;
+    // updatePnDn() clamps to INF after every single child's contribution
+    // (not just once at the end), so the worst-case pre-clamp intermediate
+    // is only ever INF + one child's value (<= 2*INF) - comfortably under
+    // uint32_t's range for this INF.
+    static constexpr Number INF = 1u << 28;
 
     struct Config {
         // Hard cap on transposition-table size (one entry per distinct
@@ -246,6 +258,23 @@ class PNS {
     bool loadCheckpoint(const std::string &path, const PenteGame &rootGame);
 
   private:
+    // Sentinel childIdx meaning "not yet materialized" (untried; treated the
+    // same as the old nullptr childPtr entries - default pn=dn=1). uint32_t
+    // caps the DAG at ~4.3 billion nodes, far above anything maxNodes would
+    // ever be set to in practice (see Config::maxNodes).
+    static constexpr uint32_t kInvalidIdx = 0xFFFFFFFFu;
+
+    // One child slot: the move (canonical coordinates - see Node::children)
+    // plus an index into nodeArena_, not a raw Node* (see nodeArena_'s own
+    // comment for why). 8 bytes total (2-byte Move padded to align the
+    // following uint32_t), half of the old childMoves+childPtr pairing's
+    // 10 bytes AND merges what used to be two separate vector allocations
+    // (two 24-byte headers, two malloc calls) into one.
+    struct Child {
+        PenteGame::Move move;
+        uint32_t idx = kInvalidIdx;
+    };
+
     struct Node {
         Number pn = 1;
         Number dn = 1;
@@ -261,13 +290,24 @@ class PNS {
         // table) with parents reached through different physical
         // orientations. mid() re-derives the current orientation and
         // un-rotates before calling makeMove() - see the comment there.
-        std::vector<PenteGame::Move> childMoves;
-        std::vector<Node *> childPtr; // lazily materialized; nullptr = untried (default pn=dn=1)
+        std::vector<Child> children;
     };
 
     Config config_;
     Stats stats_;
-    std::unordered_map<PositionKey, Node> table_;
+    // Node storage. std::deque, not std::vector: like the old
+    // unordered_map<PositionKey, Node>'s own guarantee (see
+    // getOrCreateNode()'s original comment), deque never invalidates
+    // references/pointers to existing elements on push_back/emplace_back
+    // (only iterators can be) - so a Node* obtained before a deeper
+    // recursive call that grows the arena (e.g. mid() creating a child mid-
+    // descent) stays valid throughout. A plain vector would NOT give this
+    // guarantee (reallocation on growth invalidates everything).
+    std::deque<Node> nodeArena_;
+    // Canonical key -> index into nodeArena_ (not the Node itself - that's
+    // what shrank childPtr from an 8-byte raw pointer to a 4-byte index in
+    // the first place: children reference nodes via this same index).
+    std::unordered_map<PositionKey, uint32_t> table_;
     Node *rootNode_ = nullptr;
     PenteGame::Player rootPlayer_ = PenteGame::NONE;
     bool stopRequested_ = false;
@@ -280,16 +320,26 @@ class PNS {
     // exactly as it always has.
     bool resuming_ = false;
 
+    Node *nodeAt(uint32_t idx) { return idx == kInvalidIdx ? nullptr : &nodeArena_[idx]; }
+    const Node *nodeAt(uint32_t idx) const { return idx == kInvalidIdx ? nullptr : &nodeArena_[idx]; }
+
     static Number pnOf(const Node *n) { return n ? n->pn : 1; }
     static Number dnOf(const Node *n) { return n ? n->dn : 1; }
 
     // Depth helper: min/max over resolved children matching `want`, +1 for
     // this ply. Mirrors standard chess-engine mate-distance convention: the
     // side steering TOWARD an outcome takes the fastest line (min), the side
-    // forced INTO it delays as long as possible (max).
+    // forced INTO it delays as long as possible (max). Instance method (not
+    // static, unlike the old childPtr-vector version) since it now needs
+    // nodeAt() to resolve each child's idx to a Node.
     template <typename Predicate>
-    static uint16_t depthFrom(const std::vector<Node *> &children, bool useMax, Predicate want);
+    uint16_t depthFrom(const std::vector<Child> &children, bool useMax, Predicate want) const;
 
+    // Returns the arena index (for wiring into a parent's Child::idx) and/or
+    // a pointer (for convenience at call sites that don't need the index,
+    // e.g. the root). Both stay valid across further nodeArena_ growth - see
+    // nodeArena_'s own comment.
+    uint32_t getOrCreateNodeIdx(const PenteGame &game);
     Node *getOrCreateNode(const PenteGame &game);
     void expandNode(Node *n, const PenteGame &game);
     void updatePnDn(Node *n, bool isOrNode) const;

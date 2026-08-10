@@ -42,22 +42,22 @@ std::vector<PenteGame::Move> PNS::enumerateLegalMoves(const PenteGame &game) {
     return moves;
 }
 
-PNS::Node *PNS::getOrCreateNode(const PenteGame &game) {
+uint32_t PNS::getOrCreateNodeIdx(const PenteGame &game) {
     int sym = -1;
     PositionKey key = PositionKey::canonical(game, sym);
     auto it = table_.find(key);
     if (it != table_.end()) {
         stats_.transpositionHits++;
-        return &it->second;
+        return it->second;
     }
-    // std::unordered_map guarantees reference/pointer stability across
-    // insertion and rehashing (only erasure invalidates), so this pointer
-    // stays valid for the lifetime of the map even as more nodes are added.
-    auto [insertedIt, inserted] = table_.emplace(key, Node{});
-    assert(inserted);
+    uint32_t idx = static_cast<uint32_t>(nodeArena_.size());
+    nodeArena_.emplace_back();
+    table_.emplace(key, idx);
     stats_.nodesCreated++;
-    return &insertedIt->second;
+    return idx;
 }
+
+PNS::Node *PNS::getOrCreateNode(const PenteGame &game) { return &nodeArena_[getOrCreateNodeIdx(game)]; }
 
 void PNS::expandNode(Node *n, const PenteGame &game) {
     n->expanded = true;
@@ -83,27 +83,27 @@ void PNS::expandNode(Node *n, const PenteGame &game) {
 
     // Order best-first by the mover's own heuristic score, purely to help
     // df-pn's descent find proofs/disproofs faster - every legal move is
-    // still present in childMoves, so this doesn't affect completeness.
+    // still present in children, so this doesn't affect completeness.
     std::vector<std::pair<PenteGame::Move, float>> scored;
     scored.reserve(moves.size());
     for (const auto &m : moves) scored.emplace_back(m, game.evaluateMove(m));
     std::sort(scored.begin(), scored.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
 
-    // Store childMoves in CANONICAL coordinates, not physical: this node may
-    // be shared (via the transposition table) with a parent reached through a
-    // different physical orientation than the one doing this particular
-    // expansion. mid() re-derives each visiting parent's own symmetry fresh
-    // and un-rotates before calling makeMove() - see the comment there. This
-    // mirrors MCTS::expand()'s identical rotation-to-canonical step.
+    // Store each child's move in CANONICAL coordinates, not physical: this
+    // node may be shared (via the transposition table) with a parent reached
+    // through a different physical orientation than the one doing this
+    // particular expansion. mid() re-derives each visiting parent's own
+    // symmetry fresh and un-rotates before calling makeMove() - see the
+    // comment there. This mirrors MCTS::expand()'s identical
+    // rotation-to-canonical step.
     int canonSym = -1;
     PositionKey::canonical(game, canonSym);
-    n->childMoves.reserve(scored.size());
+    n->children.reserve(scored.size());
     for (const auto &entry : scored) {
         int cx, cy;
         PositionKey::applySymToPhysical(game, canonSym, entry.first.x, entry.first.y, cx, cy);
-        n->childMoves.emplace_back(cx, cy);
+        n->children.push_back(Child{PenteGame::Move(cx, cy), kInvalidIdx});
     }
-    n->childPtr.assign(n->childMoves.size(), nullptr);
 
     bool isOr = (game.getCurrentPlayer() == rootPlayer_);
     updatePnDn(n, isOr); // every child still untried (default pn=dn=1)
@@ -112,17 +112,19 @@ void PNS::expandNode(Node *n, const PenteGame &game) {
 void PNS::updatePnDn(Node *n, bool isOrNode) const {
     if (isOrNode) {
         Number pn = INF, dn = 0;
-        for (Node *c : n->childPtr) {
-            pn = std::min(pn, pnOf(c));
-            dn = std::min(INF, dn + dnOf(c));
+        for (const Child &c : n->children) {
+            const Node *cn = nodeAt(c.idx);
+            pn = std::min(pn, pnOf(cn));
+            dn = std::min(INF, dn + dnOf(cn));
         }
         n->pn = pn;
         n->dn = dn;
     } else {
         Number pn = 0, dn = INF;
-        for (Node *c : n->childPtr) {
-            pn = std::min(INF, pn + pnOf(c));
-            dn = std::min(dn, dnOf(c));
+        for (const Child &c : n->children) {
+            const Node *cn = nodeAt(c.idx);
+            pn = std::min(INF, pn + pnOf(cn));
+            dn = std::min(dn, dnOf(cn));
         }
         n->pn = pn;
         n->dn = dn;
@@ -130,13 +132,14 @@ void PNS::updatePnDn(Node *n, bool isOrNode) const {
 }
 
 template <typename Predicate>
-uint16_t PNS::depthFrom(const std::vector<Node *> &children, bool useMax, Predicate want) {
+uint16_t PNS::depthFrom(const std::vector<Child> &children, bool useMax, Predicate want) const {
     bool any = false;
     uint16_t best = useMax ? 0 : std::numeric_limits<uint16_t>::max();
-    for (Node *c : children) {
-        if (!c || !want(c)) continue;
+    for (const Child &c : children) {
+        const Node *cn = nodeAt(c.idx);
+        if (!cn || !want(cn)) continue;
         any = true;
-        best = useMax ? std::max(best, c->depth) : std::min(best, c->depth);
+        best = useMax ? std::max(best, cn->depth) : std::min(best, cn->depth);
     }
     assert(any);
     return static_cast<uint16_t>(best + 1);
@@ -149,8 +152,8 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
         // reply already forces a win (pn=sum==0 needs every term 0), so the
         // guarantee is only as fast as the opponent's best (slowest) defense
         // (max).
-        n->depth = depthFrom(n->childPtr, /*useMax=*/!isOrNode,
-                              [](Node *c) { return c->outcome == Outcome::WIN; });
+        n->depth = depthFrom(n->children, /*useMax=*/!isOrNode,
+                              [](const Node *c) { return c->outcome == Outcome::WIN; });
         return;
     }
     // dn == 0 here (mid()'s caller only calls this when pn==0 or dn==0).
@@ -158,20 +161,23 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
         // dn = sum(children dn) == 0 requires every child individually
         // resolved to non-WIN (a WIN child would have set pn=0 above already).
         bool anyDraw = false;
-        for (Node *c : n->childPtr) {
-            assert(c != nullptr && c->outcome != Outcome::UNKNOWN && c->outcome != Outcome::WIN);
-            if (c->outcome == Outcome::DRAW) anyDraw = true;
+        for (const Child &c : n->children) {
+            const Node *cn = nodeAt(c.idx);
+            assert(cn != nullptr && cn->outcome != Outcome::UNKNOWN && cn->outcome != Outcome::WIN);
+            if (cn->outcome == Outcome::DRAW) anyDraw = true;
         }
         // Root, moving here, simply avoids the losing replies: DRAW if any
         // move preserves one, else every move loses.
         if (anyDraw) {
             n->outcome = Outcome::DRAW;
             // Root picks the fastest draw among its options.
-            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::DRAW; });
+            n->depth =
+                depthFrom(n->children, /*useMax=*/false, [](const Node *c) { return c->outcome == Outcome::DRAW; });
         } else {
             n->outcome = Outcome::LOSS;
             // Every move loses; root delays the inevitable as long as possible.
-            n->depth = depthFrom(n->childPtr, /*useMax=*/true, [](Node *c) { return c->outcome == Outcome::LOSS; });
+            n->depth =
+                depthFrom(n->children, /*useMax=*/true, [](const Node *c) { return c->outcome == Outcome::LOSS; });
         }
     } else {
         // dn = min(children dn) == 0 needs only one resolved non-WIN child;
@@ -180,19 +186,22 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
         // an escape is found). Opponent is adversarial to root: prefers a
         // LOSS-for-root escape over a DRAW-for-root one if both are known.
         bool anyLoss = false, anyDraw = false;
-        for (Node *c : n->childPtr) {
-            if (!c) continue;
-            if (c->outcome == Outcome::LOSS) anyLoss = true;
-            else if (c->outcome == Outcome::DRAW) anyDraw = true;
+        for (const Child &c : n->children) {
+            const Node *cn = nodeAt(c.idx);
+            if (!cn) continue;
+            if (cn->outcome == Outcome::LOSS) anyLoss = true;
+            else if (cn->outcome == Outcome::DRAW) anyDraw = true;
         }
         assert(anyLoss || anyDraw);
         if (anyLoss) {
             n->outcome = Outcome::LOSS;
             // Opponent takes their fastest win (root's fastest loss).
-            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::LOSS; });
+            n->depth =
+                depthFrom(n->children, /*useMax=*/false, [](const Node *c) { return c->outcome == Outcome::LOSS; });
         } else {
             n->outcome = Outcome::DRAW;
-            n->depth = depthFrom(n->childPtr, /*useMax=*/false, [](Node *c) { return c->outcome == Outcome::DRAW; });
+            n->depth =
+                depthFrom(n->children, /*useMax=*/false, [](const Node *c) { return c->outcome == Outcome::DRAW; });
         }
     }
 }
@@ -200,8 +209,8 @@ void PNS::resolveOutcome(Node *n, bool isOrNode) const {
 void PNS::selectChildOr(const Node *n, int &bestIdx, Number &secondPn) const {
     Number best = INF, second = INF;
     int bi = -1;
-    for (size_t i = 0; i < n->childPtr.size(); ++i) {
-        Number p = pnOf(n->childPtr[i]);
+    for (size_t i = 0; i < n->children.size(); ++i) {
+        Number p = pnOf(nodeAt(n->children[i].idx));
         if (p < best) {
             second = best;
             best = p;
@@ -217,8 +226,8 @@ void PNS::selectChildOr(const Node *n, int &bestIdx, Number &secondPn) const {
 void PNS::selectChildAnd(const Node *n, int &bestIdx, Number &secondDn) const {
     Number best = INF, second = INF;
     int bi = -1;
-    for (size_t i = 0; i < n->childPtr.size(); ++i) {
-        Number d = dnOf(n->childPtr[i]);
+    for (size_t i = 0; i < n->children.size(); ++i) {
+        Number d = dnOf(nodeAt(n->children[i].idx));
         if (d < best) {
             second = best;
             best = d;
@@ -275,7 +284,7 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
 
     const bool isOr = (game.getCurrentPlayer() == rootPlayer_);
 
-    // childMoves are stored in canonical coordinates (see expandNode); this
+    // Child moves are stored in canonical coordinates (see expandNode); this
     // parent's own `game` may be a different physical orientation than
     // whichever parent first expanded this (possibly shared) node, so always
     // re-derive the current orientation's symmetry fresh here - never assume
@@ -302,18 +311,24 @@ void PNS::mid(Node *n, PenteGame game, Number thpn, Number thdn, int depth) {
         const size_t bi = static_cast<size_t>(bestIdx);
 
         int physX, physY;
-        PositionKey::applyInverseSymToPhysical(game, currentSym, n->childMoves[bi].x, n->childMoves[bi].y, physX, physY);
+        PositionKey::applyInverseSymToPhysical(game, currentSym, n->children[bi].move.x, n->children[bi].move.y,
+                                                physX, physY);
         PenteGame childGame = game;
         childGame.makeMove(physX, physY);
 
-        if (!n->childPtr[bi]) {
-            if (table_.size() >= config_.maxNodes) {
+        if (n->children[bi].idx == kInvalidIdx) {
+            if (nodeArena_.size() >= config_.maxNodes) {
                 stopRequested_ = true;
                 return;
             }
-            n->childPtr[bi] = getOrCreateNode(childGame);
+            // getOrCreateNodeIdx() can grow nodeArena_ (emplace_back), which
+            // is exactly why nodeArena_ is a deque, not a vector: `n` (and
+            // any other Node* held across this call, e.g. by an ancestor
+            // frame's own `n`) stays valid regardless - see nodeArena_'s
+            // comment in PNS.hpp.
+            n->children[bi].idx = getOrCreateNodeIdx(childGame);
         }
-        Node *child = n->childPtr[bi];
+        Node *child = &nodeArena_[n->children[bi].idx];
 
         Number childThPn, childThDn;
         if (isOr) {
@@ -339,13 +354,15 @@ bool PNS::solve(const PenteGame &rootGame) {
            "PositionKey packing only supports boardSize <= 5");
 
     if (resuming_) {
-        // loadCheckpoint() already populated table_/rootPlayer_/rootNode_ -
-        // reusing them (instead of clearing) is the entire point of resuming.
+        // loadCheckpoint() already populated table_/nodeArena_/rootPlayer_/
+        // rootNode_ - reusing them (instead of clearing) is the entire point
+        // of resuming.
         assert(rootPlayer_ == rootGame.getCurrentPlayer() &&
                "rootGame must match the position loadCheckpoint() was called with");
         resuming_ = false;
     } else {
         table_.clear();
+        nodeArena_.clear();
         rootPlayer_ = rootGame.getCurrentPlayer();
         rootNode_ = getOrCreateNode(rootGame);
     }
@@ -407,20 +424,23 @@ void PNS::dfsExhaustive(Node *n, PenteGame game, int depth) {
     int currentSym = -1;
     PositionKey::canonical(game, currentSym);
 
-    for (size_t bi = 0; bi < n->childMoves.size(); ++bi) {
+    for (size_t bi = 0; bi < n->children.size(); ++bi) {
         int physX, physY;
-        PositionKey::applyInverseSymToPhysical(game, currentSym, n->childMoves[bi].x, n->childMoves[bi].y, physX, physY);
+        PositionKey::applyInverseSymToPhysical(game, currentSym, n->children[bi].move.x, n->children[bi].move.y,
+                                                physX, physY);
         PenteGame childGame = game;
         childGame.makeMove(physX, physY);
 
-        if (!n->childPtr[bi]) {
-            if (table_.size() >= config_.maxNodes) {
+        if (n->children[bi].idx == kInvalidIdx) {
+            if (nodeArena_.size() >= config_.maxNodes) {
                 stopRequested_ = true;
                 return;
             }
-            n->childPtr[bi] = getOrCreateNode(childGame);
+            // See mid()'s identical comment: safe across nodeArena_ growth
+            // because nodeArena_ is a deque.
+            n->children[bi].idx = getOrCreateNodeIdx(childGame);
         }
-        dfsExhaustive(n->childPtr[bi], std::move(childGame), depth + 1);
+        dfsExhaustive(&nodeArena_[n->children[bi].idx], std::move(childGame), depth + 1);
         if (stopRequested_) return;
     }
 
@@ -447,6 +467,7 @@ bool PNS::solveExhaustive(const PenteGame &rootGame) {
         resuming_ = false;
     } else {
         table_.clear();
+        nodeArena_.clear();
         rootPlayer_ = rootGame.getCurrentPlayer();
         rootNode_ = getOrCreateNode(rootGame);
     }
@@ -470,31 +491,37 @@ PNS::Outcome PNS::getOutcome(const PenteGame &game) const {
     int sym = -1;
     PositionKey key = PositionKey::canonical(game, sym);
     auto it = table_.find(key);
-    return (it != table_.end()) ? it->second.outcome : Outcome::UNKNOWN;
+    return (it != table_.end()) ? nodeArena_[it->second].outcome : Outcome::UNKNOWN;
 }
 
 int PNS::getDepth(const PenteGame &game) const {
     int sym = -1;
     PositionKey key = PositionKey::canonical(game, sym);
     auto it = table_.find(key);
-    return (it != table_.end()) ? static_cast<int>(it->second.depth) : 0;
+    return (it != table_.end()) ? static_cast<int>(nodeArena_[it->second].depth) : 0;
 }
 
-uint64_t PNS::getNodeCount() const { return table_.size(); }
+uint64_t PNS::getNodeCount() const { return nodeArena_.size(); }
 
 std::vector<PNS::Record> PNS::exportResolved() const {
     std::vector<Record> out;
     out.reserve(table_.size());
     for (const auto &entry : table_) {
-        if (entry.second.outcome != Outcome::UNKNOWN) {
-            out.push_back({entry.first, entry.second.outcome, entry.second.depth});
+        const Node &n = nodeArena_[entry.second];
+        if (n.outcome != Outcome::UNKNOWN) {
+            out.push_back({entry.first, n.outcome, n.depth});
         }
     }
     return out;
 }
 
 namespace {
-constexpr uint32_t kCheckpointVersion = 1;
+// v1: pn/dn written as 8 bytes each (from when Number was uint64_t). v2
+// (current): pn/dn written as 4 bytes each (Number is now uint32_t - see
+// PNS.hpp's Number/INF comments). loadCheckpoint() reads either; saved files
+// are always written as the current version.
+constexpr uint32_t kCheckpointVersionLegacyU64Number = 1;
+constexpr uint32_t kCheckpointVersion = 2;
 } // namespace
 
 bool PNS::saveCheckpoint(const std::string &path) const {
@@ -510,7 +537,7 @@ bool PNS::saveCheckpoint(const std::string &path) const {
 
     for (const auto &entry : table_) {
         const PositionKey &key = entry.first;
-        const Node &n = entry.second;
+        const Node &n = nodeArena_[entry.second];
         os.write(reinterpret_cast<const char *>(&key.bits), sizeof(key.bits));
         os.write(reinterpret_cast<const char *>(&n.pn), sizeof(n.pn));
         os.write(reinterpret_cast<const char *>(&n.dn), sizeof(n.dn));
@@ -519,12 +546,12 @@ bool PNS::saveCheckpoint(const std::string &path) const {
         os.write(reinterpret_cast<const char *>(&outcomeByte), 1);
         os.write(reinterpret_cast<const char *>(&expandedByte), 1);
         os.write(reinterpret_cast<const char *>(&n.depth), sizeof(n.depth));
-        uint16_t childCount = n.expanded ? static_cast<uint16_t>(n.childMoves.size()) : 0;
+        uint16_t childCount = n.expanded ? static_cast<uint16_t>(n.children.size()) : 0;
         os.write(reinterpret_cast<const char *>(&childCount), sizeof(childCount));
         if (n.expanded) {
-            for (const auto &m : n.childMoves) {
-                os.write(reinterpret_cast<const char *>(&m.x), 1);
-                os.write(reinterpret_cast<const char *>(&m.y), 1);
+            for (const auto &c : n.children) {
+                os.write(reinterpret_cast<const char *>(&c.move.x), 1);
+                os.write(reinterpret_cast<const char *>(&c.move.y), 1);
             }
         }
     }
@@ -541,7 +568,8 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
     if (!is || std::memcmp(magic, "PNSC", 4) != 0) return false;
     uint32_t version = 0;
     is.read(reinterpret_cast<char *>(&version), sizeof(version));
-    if (!is || version != kCheckpointVersion) return false;
+    if (!is || (version != kCheckpointVersion && version != kCheckpointVersionLegacyU64Number)) return false;
+    const bool legacyU64Number = (version == kCheckpointVersionLegacyU64Number);
     uint8_t rootPlayerByte = 0;
     is.read(reinterpret_cast<char *>(&rootPlayerByte), 1);
     if (!is) return false;
@@ -555,6 +583,10 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
     is.read(reinterpret_cast<char *>(&nodeCount), sizeof(nodeCount));
     if (!is) return false;
 
+    // Raw per-record data as read from disk (still keyed by array position,
+    // not yet linked into a DAG) - childMoves only, same on-disk shape as
+    // before this refactor: the file never stored raw pointers/indices, only
+    // move coordinates, so the format itself didn't need to change.
     struct RawNode {
         PositionKey key;
         Number pn = 1, dn = 1;
@@ -566,11 +598,31 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
     std::vector<RawNode> raw;
     raw.reserve(nodeCount);
 
+    // v1 wrote pn/dn as 8 bytes (Number was uint64_t then, INF=1ULL<<40 -
+    // bigger than the current Number type can hold); v2 writes 4 bytes
+    // (current Number/INF, see PNS.hpp). Map any legacy value at/above the
+    // old INF to the current (smaller) INF sentinel rather than truncating
+    // into a bogus wrapped 32-bit value - real finite proof numbers observed
+    // on this project's actual 5x5 runs stay in the low hundreds of
+    // thousands (see issues/solve-5x5-pente.md), far below either INF, so
+    // this only ever affects genuinely-infinite sentinel values.
+    auto readNumber = [&is](bool legacy) -> Number {
+        if (legacy) {
+            uint64_t v = 0;
+            is.read(reinterpret_cast<char *>(&v), sizeof(v));
+            constexpr uint64_t kLegacyInf = 1ULL << 40;
+            return (v >= kLegacyInf) ? PNS::INF : static_cast<Number>(v);
+        }
+        uint32_t v = 0;
+        is.read(reinterpret_cast<char *>(&v), sizeof(v));
+        return static_cast<Number>(v);
+    };
+
     for (uint64_t i = 0; i < nodeCount; ++i) {
         RawNode rn;
         is.read(reinterpret_cast<char *>(&rn.key.bits), sizeof(rn.key.bits));
-        is.read(reinterpret_cast<char *>(&rn.pn), sizeof(rn.pn));
-        is.read(reinterpret_cast<char *>(&rn.dn), sizeof(rn.dn));
+        rn.pn = readNumber(legacyU64Number);
+        rn.dn = readNumber(legacyU64Number);
         uint8_t outcomeByte = 0, expandedByte = 0;
         is.read(reinterpret_cast<char *>(&outcomeByte), 1);
         is.read(reinterpret_cast<char *>(&expandedByte), 1);
@@ -593,8 +645,11 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
         raw.push_back(std::move(rn));
     }
 
-    // First pass: create every Node verbatim from its raw record.
-    std::unordered_map<PositionKey, Node> newTable;
+    // First pass: create every Node verbatim from its raw record, in the
+    // same order as `raw` - so raw[i].key is i's key throughout pass two
+    // below, no separate index->key reverse-lookup needed.
+    std::deque<Node> newArena;
+    std::unordered_map<PositionKey, uint32_t> newTable;
     newTable.reserve(nodeCount);
     for (const auto &rn : raw) {
         Node n;
@@ -603,33 +658,35 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
         n.outcome = rn.outcome;
         n.depth = rn.depth;
         n.expanded = rn.expanded;
-        n.childMoves = rn.childMoves;
-        n.childPtr.assign(rn.childMoves.size(), nullptr);
-        newTable.emplace(rn.key, std::move(n));
+        n.children.reserve(rn.childMoves.size());
+        for (const auto &m : rn.childMoves) n.children.push_back(Child{m, kInvalidIdx});
+        uint32_t idx = static_cast<uint32_t>(newArena.size());
+        newArena.push_back(std::move(n));
+        newTable.emplace(rn.key, idx);
     }
 
     // Second pass: for every expanded node, reconstruct its position (via
     // PenteGame::loadRawState(), see that method's doc comment) and wire up
-    // childPtr by re-deriving each child's canonical key and looking it up.
+    // each child's idx by re-deriving its canonical key and looking it up.
     // A node reconstructed directly from its own canonical key always yields
-    // sym=0 when re-canonicalized, so childMoves - stored canonically, see
-    // Node::childMoves - can be applied directly as physical coordinates
+    // sym=0 when re-canonicalized, so each child's move - stored canonically,
+    // see Node::children - can be applied directly as physical coordinates
     // here with no un-rotation needed (unlike mid()'s general case).
     const int windowSize = rootGame.maxIdx() - rootGame.minIdx();
     const PenteGame::Config &cfg = rootGame.getConfig();
-    for (auto &entry : newTable) {
-        Node &n = entry.second;
-        if (!n.expanded || n.childMoves.empty()) continue;
-        auto unpacked = PositionKey::unpack(entry.first, windowSize);
+    for (size_t i = 0; i < raw.size(); ++i) {
+        Node &n = newArena[i];
+        if (!n.expanded || n.children.empty()) continue;
+        auto unpacked = PositionKey::unpack(raw[i].key, windowSize);
         PenteGame game(cfg);
         game.loadRawState(unpacked.cell.data(), unpacked.sideToMove, unpacked.blackCaptures, unpacked.whiteCaptures);
-        for (size_t i = 0; i < n.childMoves.size(); ++i) {
+        for (auto &child : n.children) {
             PenteGame childGame = game;
-            childGame.makeMove(n.childMoves[i].x, n.childMoves[i].y);
+            childGame.makeMove(child.move.x, child.move.y);
             int childSym = -1;
             PositionKey childKey = PositionKey::canonical(childGame, childSym);
             auto it = newTable.find(childKey);
-            if (it != newTable.end()) n.childPtr[i] = &it->second; // else still-untried child: leave nullptr
+            if (it != newTable.end()) child.idx = it->second; // else still-untried child: leave kInvalidIdx
         }
     }
 
@@ -637,15 +694,15 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
     PositionKey rootKey = PositionKey::canonical(rootGame, rootSym);
     auto rootIt = newTable.find(rootKey);
     if (rootIt == newTable.end()) return false; // corrupt/mismatched checkpoint: root itself missing
+    uint32_t rootIdx = rootIt->second;
 
-    // std::unordered_map's move (equal allocators) transfers buckets/nodes
-    // without touching individual elements, so every pointer captured above
-    // (rootNodePtr and every childPtr wired into newTable) stays valid after
-    // this move - same pointer-stability guarantee already relied on
-    // elsewhere (see getOrCreateNode()'s comment).
-    Node *rootNodePtr = &rootIt->second;
+    // Plain integer index, not a pointer, captured before the moves below -
+    // so it's trivially unaffected by whatever std::deque/unordered_map::
+    // operator=(&&) does or doesn't do to element addresses; look it up
+    // fresh in nodeArena_ after the move completes.
+    nodeArena_ = std::move(newArena);
     table_ = std::move(newTable);
-    rootNode_ = rootNodePtr;
+    rootNode_ = &nodeArena_[rootIdx];
     rootPlayer_ = storedRootPlayer;
     resuming_ = true;
     stopRequested_ = false;
@@ -653,7 +710,7 @@ bool PNS::loadCheckpoint(const std::string &path, const PenteGame &rootGame) {
 }
 
 void PNS::printProofStats() const {
-    std::cout << "PNS: nodes=" << table_.size() << " midCalls=" << stats_.midCalls
+    std::cout << "PNS: nodes=" << nodeArena_.size() << " midCalls=" << stats_.midCalls
               << " transpositionHits=" << stats_.transpositionHits;
     if (rootNode_) {
         std::cout << " root(pn=" << rootNode_->pn << ", dn=" << rootNode_->dn

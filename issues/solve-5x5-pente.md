@@ -364,20 +364,112 @@ root-player mismatch. Also smoke-tested through the real CLI on 4x4: capped
 `-N 20000000` and reaches the already-known-correct result (DRAW, depth 16)
 in ~39s. Full suite: 150/150 passing.
 
+## Branch-splitting strategy + first long run: memory wall, not a proof (2026-08-10)
+
+Asked "what would be a good plan to tackle the 5x5 board" given checkpoint/
+resume was now in place. Verified empirically (not assumed) that Black's
+forced center opening leaves only **5 distinct canonical positions** among
+White's 24 replies (D4 orbits of sizes 4/8/4/4/4 around the fixed center) -
+`PositionKey::canonical()` already collapses these internally, but the
+strategic point is that the root's AND node only needs **one** of the 5 to
+resolve non-WIN (dn = min, not sum) for the whole root to prove DRAW; proving
+a Black WIN outright would need all 5. That reframes the earlier 1.5hr run's
+"one branch absorbed the whole budget" finding as not necessarily wrong
+behavior - df-pn correctly commits to disproving one promising line - just
+that the *chosen* line's true size was unknown.
+
+Triage: ran `solve()` on each of the 5 canonical replies independently
+(8M-node/15min cap each, ~132-189s actual). None resolved, but pn/dn
+differed meaningfully - White's reply J8 (the size-8 orbit: not adjacent, not
+on-axis or on-diagonal from center) stood out with ~40% lower pn/dn and the
+most resolved positions of the five, a real signal worth acting on rather
+than trusting the move-ordering heuristic's default pick blindly (which is
+what silently happened in the earlier 1.5hr run).
+
+Committed a long run to J8 specifically: resumed from the 8M-node triage
+checkpoint with a 70M-node budget (~sized to this machine's ~29GB available
+RAM). Result: hit the node cap again after 1142s (19min), still unresolved.
+pn/dn actually *grew* (16,878/126,305 -> 114,906/732,823) rather than
+shrinking - not necessarily bad (untried children default to an optimistic
+pn=dn=1, so real subtrees routinely correct the estimate upward as they're
+expanded) - but the resolved-position fraction only grew from 0.24% to 1.06%
+of touched nodes. Bottom line: **this machine's RAM caps one continuous run
+around 70-75M nodes at the format used at the time, and that wasn't enough
+even for the best-looking branch.**
+
+## Node memory footprint reduction (2026-08-10)
+
+Given the memory wall above, reduced PNS's per-node footprint rather than
+just accepting the ~70M-node ceiling:
+
+- `childMoves`/`childPtr` (two separate `std::vector`s per node - a 2-byte
+  `Move` array and an 8-byte raw `Node*` array) merged into one
+  `std::vector<Child>` where `Child{Move move; uint32_t idx;}` indexes into
+  a new `std::deque<Node> nodeArena_` instead of storing a raw pointer.
+  Halves the per-child cost (10 bytes -> ~8 bytes with alignment) and merges
+  two heap allocations (two vector headers + two mallocs) into one.
+  `std::deque`, not `std::vector`, for the arena - it never invalidates
+  references/pointers to existing elements on `emplace_back` (unlike
+  vector's reallocate-on-growth), the same guarantee `table_` relied on as
+  an `unordered_map` before this change, needed since `mid()`/
+  `dfsExhaustive()` hold a `Node*` across recursive calls that can grow the
+  arena.
+- `Number` (pn/dn) shrunk from `uint64_t` to `uint32_t`, with `INF` scaled
+  down from `1<<40` to `1<<28` - still enormous headroom above real observed
+  values (low hundreds of thousands even after 70M nodes, per the run
+  above).
+- `table_` changed from `unordered_map<PositionKey, Node>` (storing the
+  whole heavy Node as the map value) to `unordered_map<PositionKey,
+  uint32_t>` (key -> arena index) - shrinks what the map itself has to store
+  per entry.
+
+**Verified, apples-to-apples** (same J8 branch, same 8M-node point as the
+triage run above): peak RSS **1.77GB now vs ~3.0GB before - a real ~40%
+reduction** (~237 bytes/node vs ~380 before). That turns the ~29GB machine's
+ceiling from ~75M nodes into roughly ~120M.
+
+**Compatibility note**: the on-disk `PNSC` checkpoint format's `pn`/`dn`
+field width changed with `Number`'s shrink (8 bytes -> 4 bytes), so
+`loadCheckpoint()` is now version-aware (reads either width, mapping any
+legacy value at/above the old `1<<40` INF to the new smaller INF rather than
+truncating into garbage) specifically so the existing 70M-node J8 checkpoint
+from the run above didn't have to be thrown away. Verified against that real
+file: loaded correctly, pn/dn continued progressing sensibly
+(114,906/732,823 -> 116,300/754,786 after 1M more nodes) - not corrupted.
+New checkpoints always save in the current (smaller) format going forward.
+
+**New cost discovered, worth knowing about**: loading that same 70M-node
+legacy checkpoint took ~46 minutes (`loadCheckpoint()`'s second pass replays
+every child move and recomputes a canonical key for it, to re-derive each
+`Child::idx` - O(nodes x avg branching), and 70M x ~20 is a lot of clone+
+hash operations). This is a real, so-far-unaddressed cost of the full-DAG
+resume design (independent of the memory-footprint work above) - fine for
+now since the whole point is fewer, longer-lived resumes rather than
+frequent restarts, but worth remembering if resume cadence ever needs to
+tighten. New (post-refactor-format) checkpoints haven't been measured for
+reload cost yet - likely faster, since node construction itself is cheaper,
+but the child re-linking pass's cost is unchanged either way.
+
+Added a regression test (`PNSTests.cpp`) that hand-builds a minimal legacy
+v1 checkpoint file and confirms `loadCheckpoint()` still reads it correctly,
+independent of any real prebuilt fixture. Full suite: 151/151 passing.
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
 than that ratio suggests - no valid extrapolation from 4x4's solve time
-exists yet, exhaustive or otherwise. With checkpoint/resume in place, the
-next real step is a long, resumable 5x5 `solve()` run (not
-`solveExhaustive()` - a full 5x5 book is very plausibly far too large to be
-practical, even if the root itself resolves) split across sessions, likely
-combined with the "prove individual opening replies independently" strategy
-noted above rather than one from-scratch full-tree call. Decide whether
-Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s worker-pool/
-sharded-table/slab-allocator patterns - a real chunk of separate work) is
-warranted once that lands. Node-size reduction (currently ~300 bytes/node,
-mostly `childMoves`/`childPtr` vectors) remains a secondary lever, worth
-revisiting if checkpoint/resume alone doesn't get 5x5 far enough.
+exists yet, exhaustive or otherwise. With checkpoint/resume, branch-splitting
+via symmetry, and the node-size reduction all in place, the concrete next
+step is pushing the J8 branch further with the new ~120M-node headroom
+(resuming `checkpoints/solve5x5/orbit8_j8.bin`, ideally converting it to the
+new compact format first in one `-r`/`-c` pass so future resumes skip the
+~46min legacy-load tax documented above). If J8 still doesn't close out at
+~120M nodes, the other 4 canonical branches (corner/axis-far/axis-near/
+diag-near) are the fallback candidates, each independently checkpointable.
+Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
+worker-pool/sharded-table/slab-allocator patterns - a real chunk of separate
+work) or moving long runs to a bigger-RAM machine (same pattern already used
+for training runs) is warranted if even that isn't enough - both remain
+open, undecided options, not yet committed to.
 
 <!-- Update below as longer runs complete. -->
