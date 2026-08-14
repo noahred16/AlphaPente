@@ -1,6 +1,13 @@
 # Project ignores (all checkpoints except checkpoints/pente/best_model.pt)
 checkpoints/
 !checkpoints/pente/best_model.pt
+
+# Solved-book raw .bin files: only the gzipped copy (docs/data/*.bin.gz) is
+# actually served/committed - see scripts/build_wasm.sh. The raw .bin is
+# just an intermediate, regenerable via `solve5x5 -B 4 -x -o
+# docs/data/book4x4.bin` (~82s).
+docs/data/*.bin
+
 *.pdf
 
 # C++ Build artifacts
@@ -41,6 +48,13 @@ conan_toolchain.cmake
 conan_deps.cmake
 CMakeUserPresets.json
 CMakePresets.json
+# Local Conan install for RocksDB (see conanfile.txt): conan/pip weren't
+# preinstalled and sudo apt needs a password this project doesn't have, so
+# CONAN_HOME points at .conan2/ (Conan's package cache/downloads - can get
+# large) and .venv-conan/ is the bootstrapped Python venv the `conan` CLI
+# itself lives in. Neither belongs in version control.
+.conan2/
+.venv-conan/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
