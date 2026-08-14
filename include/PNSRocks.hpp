@@ -113,6 +113,32 @@ class PNSRocks {
     // backed by the "rocksdb.estimate-num-keys" property.
     uint64_t getApproxNodeCount() const;
 
+    // Bulk-imports a checkpoint written by PNS::saveCheckpoint() (see
+    // PNS.hpp) directly into this store, so a fast in-RAM run's progress
+    // (up to wherever the RAM ceiling stopped it - see
+    // issues/solve-5x5-pente.md) isn't thrown away when switching to
+    // disk-backed search past that point: run fast in RAM first, then
+    // migrate once and keep extending on disk, rather than re-deriving the
+    // same ground ~10x slower from scratch.
+    //
+    // Deliberately does NOT go through PNS/PNS::loadCheckpoint() - this
+    // reads the PNSC file format directly (mirroring PNS::loadCheckpoint()'s
+    // own parsing - see that function if the format ever changes, the two
+    // must be kept in sync manually) and streams straight to RocksDB,
+    // reconstructing each node's children as canonical PositionKeys (see
+    // Node::children's comment) rather than PNS's arena indices. This is
+    // simpler AND lighter than loadCheckpoint()+export would be: PNSRocks
+    // children are self-describing (their own key), so unlike PNS's
+    // idx-based Child, nothing needs a second global key->index resolution
+    // pass, and the whole DAG never needs to be held in RAM at once - each
+    // record is reconstructed, written, and discarded in a streaming batch.
+    //
+    // rootGame must match the checkpoint's stored root player (same
+    // constraint as PNS::loadCheckpoint(), same reason - a checkpoint's
+    // proof numbers are only meaningful relative to whoever was proving).
+    // Returns false on any I/O error, format mismatch, or player mismatch.
+    bool importFromPNSCheckpoint(const std::string &checkpointPath, const PenteGame &rootGame);
+
     const Stats &getStats() const { return stats_; }
     void printProofStats() const;
 

@@ -66,8 +66,9 @@ int main(int argc, char *argv[]) {
     int trimToMoveCount = -1; // -1 = don't trim
     std::string rocksDbPath; // -R: use PNSRocks (disk-backed) instead of in-RAM PNS
     uint64_t rocksBlockCacheBytes = 4ULL << 30;
+    std::string rocksImportPath; // -X: one-time import of a PNS (-c) checkpoint into -R's db, then continue
     int opt;
-    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:c:C:r:R:M:xh")) != -1) {
+    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:c:C:r:R:M:X:xh")) != -1) {
         if (opt == 'B') boardSize = std::max(3, std::min(PositionKey::kMaxBoardSize, std::atoi(optarg)));
         else if (opt == 'N') maxNodes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 't') maxSeconds = std::atof(optarg);
@@ -80,6 +81,7 @@ int main(int argc, char *argv[]) {
         else if (opt == 'r') resumePath = optarg;
         else if (opt == 'R') rocksDbPath = optarg;
         else if (opt == 'M') rocksBlockCacheBytes = std::strtoull(optarg, nullptr, 10);
+        else if (opt == 'X') rocksImportPath = optarg;
         else if (opt == 'h') {
             std::cout <<
                 "Usage: solve5x5 [options] [\"move string\"]\n"
@@ -113,6 +115,13 @@ int main(int argc, char *argv[]) {
                 "                  PNSRocks.hpp). Reopening the same path resumes\n"
                 "                  automatically - no separate checkpoint needed.\n"
                 "  -M <bytes>      RocksDB block cache size for -R (default: 4294967296 = 4GB)\n"
+                "  -X <path>       One-time import: bulk-load a PNS checkpoint written by -c\n"
+                "                  into the -R database before solving, so a fast in-RAM run's\n"
+                "                  progress isn't thrown away when switching to disk-backed\n"
+                "                  search past the RAM ceiling. Only meaningful with -R; no-op\n"
+                "                  if the database already has this checkpoint's data (re-\n"
+                "                  running -X on the same pair re-imports, which is safe but\n"
+                "                  wasted work).\n"
 #endif
                 "  -h              Show this help\n";
             return 0;
@@ -148,6 +157,21 @@ int main(int argc, char *argv[]) {
         std::cout << "Disk-backed mode: db=" << rocksDbPath << " blockCache=" << (rocksBlockCacheBytes >> 20)
                   << "MB (reopening this path later resumes automatically)\n";
         PNSRocks pns(rocksConfig);
+
+        if (!rocksImportPath.empty()) {
+            std::cout << "Importing PNS checkpoint " << rocksImportPath << " into " << rocksDbPath << "...\n"
+                       << std::flush;
+            auto tImport0 = std::chrono::steady_clock::now();
+            bool imported = pns.importFromPNSCheckpoint(rocksImportPath, game);
+            double importSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tImport0).count();
+            if (!imported) {
+                std::cerr << "Import failed (missing, corrupt, or root-player mismatch with the move string "
+                              "above) - aborting rather than solving from an unknown state.\n";
+                return 1;
+            }
+            std::cout << "Import done in " << importSeconds << "s (approxNodes=" << pns.getApproxNodeCount()
+                       << ")\n";
+        }
 
         std::cout << "Solving (disk-backed, maxNodes budget this run=" << maxNodes << ", maxSeconds=" << maxSeconds
                    << ")...\n"

@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/table.h>
+#include <rocksdb/write_batch.h>
 #include <stdexcept>
 
 namespace {
@@ -428,6 +430,144 @@ uint64_t PNSRocks::getApproxNodeCount() const {
         return std::strtoull(value.c_str(), nullptr, 10);
     }
     return 0;
+}
+
+namespace {
+// Mirrors PNS.cpp's identical anonymous-namespace constants - see
+// importFromPNSCheckpoint()'s doc comment for why this file re-parses the
+// PNSC format directly instead of going through PNS::loadCheckpoint().
+constexpr uint32_t kCheckpointVersionLegacyU64Number = 1;
+constexpr uint32_t kCheckpointVersion = 2;
+} // namespace
+
+bool PNSRocks::importFromPNSCheckpoint(const std::string &checkpointPath, const PenteGame &rootGame) {
+    std::ifstream is(checkpointPath, std::ios::binary);
+    if (!is) return false;
+
+    char magic[4];
+    is.read(magic, 4);
+    if (!is || std::memcmp(magic, "PNSC", 4) != 0) return false;
+    uint32_t version = 0;
+    is.read(reinterpret_cast<char *>(&version), sizeof(version));
+    if (!is || (version != kCheckpointVersion && version != kCheckpointVersionLegacyU64Number)) return false;
+    const bool legacyU64Number = (version == kCheckpointVersionLegacyU64Number);
+    uint8_t rootPlayerByte = 0;
+    is.read(reinterpret_cast<char *>(&rootPlayerByte), 1);
+    if (!is) return false;
+    if (static_cast<PenteGame::Player>(rootPlayerByte) != rootGame.getCurrentPlayer()) return false;
+
+    uint64_t nodeCount = 0;
+    is.read(reinterpret_cast<char *>(&nodeCount), sizeof(nodeCount));
+    if (!is) return false;
+
+    // See PNS.cpp's loadCheckpoint() for why this legacy/current split exists
+    // (Number shrank from uint64_t to uint32_t - see PNS.hpp's Number/INF
+    // comments).
+    auto readNumber = [&is](bool legacy) -> Number {
+        if (legacy) {
+            uint64_t v = 0;
+            is.read(reinterpret_cast<char *>(&v), sizeof(v));
+            constexpr uint64_t kLegacyInf = 1ULL << 40;
+            return (v >= kLegacyInf) ? INF : static_cast<Number>(v);
+        }
+        uint32_t v = 0;
+        is.read(reinterpret_cast<char *>(&v), sizeof(v));
+        return static_cast<Number>(v);
+    };
+
+    const int windowSize = rootGame.maxIdx() - rootGame.minIdx();
+    const PenteGame::Config &cfg = rootGame.getConfig();
+    int rootSym = -1;
+    const PositionKey rootKey = PositionKey::canonical(rootGame, rootSym);
+    bool sawRoot = false;
+
+    // Batched via WriteBatch rather than one Put() per record - each record
+    // is reconstructed, staged, and discarded immediately (never held with
+    // the rest of the DAG in RAM at once - see the doc comment).
+    constexpr uint64_t kBatchSize = 100'000;
+    rocksdb::WriteBatch batch;
+    uint64_t inBatch = 0;
+    uint64_t imported = 0;
+
+    for (uint64_t i = 0; i < nodeCount; ++i) {
+        PositionKey key;
+        is.read(reinterpret_cast<char *>(&key.bits), sizeof(key.bits));
+        Number pn = readNumber(legacyU64Number);
+        Number dn = readNumber(legacyU64Number);
+        uint8_t outcomeByte = 0, expandedByte = 0;
+        is.read(reinterpret_cast<char *>(&outcomeByte), 1);
+        is.read(reinterpret_cast<char *>(&expandedByte), 1);
+        uint16_t depth = 0;
+        is.read(reinterpret_cast<char *>(&depth), sizeof(depth));
+        uint16_t childCount = 0;
+        is.read(reinterpret_cast<char *>(&childCount), sizeof(childCount));
+        if (!is) return false;
+        bool expanded = expandedByte != 0;
+
+        Node n;
+        n.pn = pn;
+        n.dn = dn;
+        n.outcome = static_cast<Outcome>(outcomeByte);
+        n.depth = depth;
+        n.expanded = expanded;
+
+        if (expanded && childCount > 0) {
+            std::vector<PenteGame::Move> childMoves;
+            childMoves.reserve(childCount);
+            for (uint16_t c = 0; c < childCount; ++c) {
+                uint8_t x = 0, y = 0;
+                is.read(reinterpret_cast<char *>(&x), 1);
+                is.read(reinterpret_cast<char *>(&y), 1);
+                if (!is) return false;
+                childMoves.emplace_back(x, y);
+            }
+            // Reconstruct this node's own position and simulate each child
+            // move to derive its canonical key - see PNS::loadCheckpoint()'s
+            // pass 2 for the identical reasoning (a node reconstructed
+            // directly from its own canonical key always yields sym=0 when
+            // re-canonicalized, so each stored child move - already
+            // canonical coordinates, see PNS::Node::children - applies
+            // directly as a physical coordinate here, no un-rotation).
+            auto unpacked = PositionKey::unpack(key, windowSize);
+            PenteGame game(cfg);
+            game.loadRawState(unpacked.cell.data(), unpacked.sideToMove, unpacked.blackCaptures,
+                               unpacked.whiteCaptures);
+            n.children.reserve(childMoves.size());
+            for (const auto &m : childMoves) {
+                PenteGame childGame = game;
+                childGame.makeMove(m.x, m.y);
+                int childSym = -1;
+                PositionKey childKey = PositionKey::canonical(childGame, childSym);
+                n.children.push_back(Child{m, childKey});
+            }
+        }
+        // expanded && childCount==0: terminal node (win/loss/draw with no
+        // legal replies) - nothing further to reconstruct, n.children stays
+        // empty as it should.
+
+        rocksdb::Slice slice(reinterpret_cast<const char *>(&key.bits), sizeof(key.bits));
+        batch.Put(slice, serialize(n));
+        ++inBatch;
+        ++imported;
+        if (key == rootKey) sawRoot = true;
+
+        if (inBatch >= kBatchSize) {
+            rocksdb::Status s = db_->Write(rocksdb::WriteOptions(), &batch);
+            if (!s.ok()) return false;
+            batch.Clear();
+            inBatch = 0;
+            std::cout << "  imported " << imported << "/" << nodeCount << " records...\n" << std::flush;
+        }
+    }
+    if (inBatch > 0) {
+        rocksdb::Status s = db_->Write(rocksdb::WriteOptions(), &batch);
+        if (!s.ok()) return false;
+    }
+
+    if (!sawRoot) return false; // corrupt/mismatched checkpoint: root itself missing
+    rootPlayer_ = rootGame.getCurrentPlayer();
+    rootKey_ = rootKey;
+    return true;
 }
 
 void PNSRocks::printProofStats() const {

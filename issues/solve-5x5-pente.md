@@ -589,6 +589,29 @@ convert checkpoint formats), which is what was actually asked for. Worth
 running a real multi-hour calibration before deciding whether to commit a
 long run this way, rather than trusting a 120s sample.
 
+## Import a RAM checkpoint into PNSRocks instead of re-deriving on disk (2026-08-13)
+
+Rather than starting a disk-backed search from scratch (paying the ~10x
+per-node cost for ground already covered in RAM), added
+`PNSRocks::importFromPNSCheckpoint()`: reads a `PNS::saveCheckpoint()` file
+directly (re-parsing the PNSC format rather than going through
+`PNS::loadCheckpoint()`) and streams it straight into RocksDB, one batch of
+100K records at a time - each record's children are resolved to canonical
+`PositionKey`s by reconstructing its position and simulating each move, the
+same way `loadCheckpoint()`'s own pass 2 does, but without ever holding the
+whole DAG in RAM at once (PNSRocks children are self-describing keys, so -
+unlike `PNS`'s arena-index children - nothing needs a second global
+key->index resolution pass). Wired into `solve5x5` as `-X <checkpointPath>`,
+used together with `-R <dbPath>`: import once, then keep solving from
+exactly where the RAM run left off.
+
+Verified end-to-end on a small 3x3 checkpoint (capped at 15 nodes so the RAM
+run couldn't finish): import completed correctly, and continuing with
+PNSRocks resolved the root to the same DRAW result the algorithm is known to
+produce for that scenario. Not yet run against the real 110M-node
+`orbit8_j8_v2.bin` checkpoint - that's the natural next step before
+committing to a long disk-backed run on J8.
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
