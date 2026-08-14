@@ -454,22 +454,155 @@ Added a regression test (`PNSTests.cpp`) that hand-builds a minimal legacy
 v1 checkpoint file and confirms `loadCheckpoint()` still reads it correctly,
 independent of any real prebuilt fixture. Full suite: 151/151 passing.
 
+## Converted J8 to the compact format and pushed to 110M nodes (2026-08-10)
+
+Loaded the legacy 70M-node `orbit8_j8.bin` once (the ~46min tax above),
+re-saved it immediately in the new v2 format, then kept searching up to a
+110M-node cap:
+
+| run | pn | dn | resolved | resolved / touched |
+|---|---|---|---|---|
+| triage (8M cap) | 16,878 | 126,305 | 19,303 | 0.24% |
+| push to 70M (legacy format) | 114,906 | 732,823 | 742,047 | 1.06% |
+| push to 110M (v2 format) | 160,425 | 1,376,780 | 1,324,137 | 1.20% |
+
+Still unresolved at 110M nodes, cap hit after 704s of search (plus the ~46min
+legacy load - the v2 checkpoint itself is ~5.5GB on disk).
+
+**Worth stating plainly rather than glossing over**: the resolved-fraction
+growth is *decelerating*, not accelerating - 0.24% -> 1.06% -> 1.20%. Each
+additional batch of nodes is closing out a smaller marginal share of what's
+been touched than the batch before it. That's a real signal, not noise: it
+suggests J8's true proof size is very large relative to what three runs
+totaling ~190M cumulative node-visits have covered so far, and that simply
+running longer on this one branch - even with the ~40% memory win above - may
+keep hitting the same wall rather than converging. This is what motivated
+looking past RAM-bound search entirely rather than requesting a bigger
+machine or grinding further on J8 as-is.
+
+## Pivoting to disk-backed node storage via RocksDB (2026-08-13)
+
+Even with the ~40% per-node memory cut, the fundamental constraint is that
+`nodeArena_`/`table_` must fit entirely in RAM - the ~29GB machine caps out
+around 120M nodes no matter how tight the struct packing gets, and the
+decelerating-resolved-fraction trend above suggests 5x5 (or even just the J8
+branch) may need well beyond that to close out. Decided to make node storage
+genuinely disk-backed instead of RAM-bound, using RocksDB as the underlying
+KV store (chosen over a custom mmap'd-file scheme - more mature, handles
+compaction/caching/crash-safety that would otherwise need reinventing).
+
+Key constraints for the design:
+- `PNS.cpp`/`PNS.hpp` are shared with the WASM build
+  (`scripts/build_wasm.sh` compiles `src/PNS.cpp` directly, listing sources
+  explicitly rather than going through CMake/`pente_core`) for the
+  in-browser live-search fallback past the book's coverage - small, bounded
+  budgets (5M nodes / 5s), no persistence needed, and it must never pull in
+  RocksDB. Since the WASM build already lists its own source files rather
+  than linking `pente_core`, gating RocksDB behind a compile-time macro that
+  the WASM build simply never defines keeps the two builds cleanly separate
+  without needing a runtime storage-interface abstraction.
+- Real performance risk: `updatePnDn()`/`selectChildOr()`/`selectChildAnd()`
+  run on every `mid()` iteration and scan all of a node's children (~20 avg)
+  for pn/dn - if a disk-backed backend turns each of those into a full
+  RocksDB `Get()`, and a real run does hundreds of millions of `mid()`
+  calls, that could be far slower than today's in-RAM pointer chase. Plan:
+  build the simplest correct version first (direct `Get`/`Put`, relying on
+  RocksDB's own configurable block cache rather than a custom write-back
+  layer), measure real throughput, only add custom caching if measurements
+  show it's needed.
+- RocksDB obtained via Conan (added `conanfile.txt`; `conan`/pip/venv
+  weren't preinstalled and `sudo apt` needs a password this session doesn't
+  have, so bootstrapped a local venv + pip + Conan 2 rather than blocking on
+  that).
+
+RocksDB itself was obtained via Conan (no system package manager access -
+`sudo apt` needs a password this session doesn't have): bootstrapped a local
+Python venv (`.venv-conan/`, since the system Python is externally-managed
+and `ensurepip` is disabled on Debian) with pip installed via
+`get-pip.py --user` -> `python3 -m venv` -> `pip install conan`, then
+`conan install . --output-folder=build --build=missing` (with `conanfile.txt`
+requiring `rocksdb/9.7.3`) built RocksDB itself from source (~10 min,
+`-j8`). Both `.venv-conan/` and `.conan2/` (`CONAN_HOME`) are gitignored -
+local tooling, not repo content. `CMakeLists.txt` gates everything on
+`find_package(RocksDB CONFIG QUIET)` + `RocksDB_FOUND`, so a plain `cmake ..`
+without the Conan toolchain (or the WASM build, which lists its own sources
+directly and never touches CMakeLists.txt at all) is completely unaffected.
+
+**Implementation** (`include/PNSRocks.hpp` / `src/PNSRocks.cpp`, gated behind
+`#ifdef WITH_ROCKSDB`): a deliberately separate class from `PNS`, not a
+shared storage interface - see the class comment for why (mainly: it would
+force `PNS::Node::children` to grow from a 4-byte arena index back to an
+8-byte `PositionKey` for the in-RAM/WASM path too, undoing the memory
+footprint work above for a build that will never use the disk backend).
+Same df-pn algorithm (OR/AND pn/dn, 3-outcome resolution, GHI stance),
+copied rather than shared. Key differences from `PNS`:
+- Every node lives in RocksDB, keyed by its 8-byte `PositionKey`, instead of
+  an arena+hashmap. `get()`/`put()` replace pointer dereferences.
+- No separate checkpoint format needed - reopening the same `dbPath` resumes
+  automatically, since the DAG *is* the persistent store. Verified via a
+  real reopen-and-continue test, both a small unit test and a real
+  calibration DB (see below).
+- Each child's canonical `PositionKey` is computed once at expand time
+  (simulating every candidate move immediately, rather than lazily on first
+  descent like `PNS`) so pn/dn reads never need a separate "materialize this
+  child" step - just a `Get()`.
+- Deliberately no in-RAM caching of sibling pn/dn values across `mid()`
+  calls: every `updatePnDn()`/`selectChildOr()`/`selectChildAnd()` call
+  re-`Get()`s every child, always. Caching would risk staleness for a
+  transposition-shared node updated via a different path mid-recursion,
+  which `PNS`'s always-current shared pointers don't risk - see
+  `updatePnDn()`'s comment. Relies entirely on RocksDB's own configurable
+  block cache (`Config::blockCacheBytes`) for hot-data caching, per the
+  simplest-correct-first plan above.
+- Wired into `solve5x5` via a new `-R <dir>` flag (disk-backed mode,
+  ignores `-o/-i/-c/-r/-x/-m` since PNSRocks doesn't support book
+  export/exhaustive mode/yet) and `-M <bytes>` for the block cache size.
+
+**Correctness**: 3 new tests (`PNSRocksTests.cpp`) mirror existing `PNS`
+tests on identical scenarios (3x3 draw, an immediate five-in-a-row win) plus
+a reopen-and-resume test - all pass, and the full suite (154 tests, up from
+151) still passes with no regressions. Confirmed via `bash
+scripts/build_wasm.sh` that the WASM build still compiles with no RocksDB
+involvement at all (the resulting `docs/wasm/pente.wasm` was discarded, not
+committed - this was a buildability check, not an intentional asset update).
+
+**First real throughput measurement** (small, honest, not yet a real run):
+120s smoke test on the J8 branch, 200K new nodes created:
+
+| metric | PNSRocks (disk) | PNS (in-RAM, from the 70M run above) |
+|---|---|---|
+| nodes/sec | ~5,950 | ~61,300 |
+| ratio | **~10x slower** | baseline |
+
+This confirms the flagged performance risk is real, not hypothetical - disk
+round-trips (even cached ones) cost real time compared to a pointer chase.
+It's not catastrophic, though: RocksDB's block cache was only given 2GB for
+this smoke test (default config offers 4GB) against a ~54MB database, so
+this number is likely pessimistic - cache effectiveness should improve
+somewhat as the working set grows relative to cold-start overhead, but
+hasn't been measured at real scale yet. The tradeoff this buys: ~312GB of
+free disk vs. the ~29GB RAM ceiling is roughly 10x more headroom, so a
+10x-slower-per-node approach in ~10x more space is, roughly, a wash on "how
+far can this get in a given wall-clock budget" - but it removes the hard
+memory-wall failure mode entirely (no OOM kill, no needing to stop and
+convert checkpoint formats), which is what was actually asked for. Worth
+running a real multi-hour calibration before deciding whether to commit a
+long run this way, rather than trusting a 120s sample.
+
 ## Next
 
 5x5 is ~25/16 times the cell count of 4x4 and combinatorially much larger
 than that ratio suggests - no valid extrapolation from 4x4's solve time
-exists yet, exhaustive or otherwise. With checkpoint/resume, branch-splitting
-via symmetry, and the node-size reduction all in place, the concrete next
-step is pushing the J8 branch further with the new ~120M-node headroom
-(resuming `checkpoints/solve5x5/orbit8_j8.bin`, ideally converting it to the
-new compact format first in one `-r`/`-c` pass so future resumes skip the
-~46min legacy-load tax documented above). If J8 still doesn't close out at
-~120M nodes, the other 4 canonical branches (corner/axis-far/axis-near/
-diag-near) are the fallback candidates, each independently checkpointable.
-Decide whether Phase 6 (multithreaded df-pn, reusing `ParallelMCTS`'s
-worker-pool/sharded-table/slab-allocator patterns - a real chunk of separate
-work) or moving long runs to a bigger-RAM machine (same pattern already used
-for training runs) is warranted if even that isn't enough - both remain
-open, undecided options, not yet committed to.
+exists yet, exhaustive or otherwise. The concrete next step is a real
+multi-hour PNSRocks calibration run on the J8 branch (`solve5x5 -R
+checkpoints/solve5x5/rocks_j8 -N <budget>`) to get a throughput number that
+isn't a 120s sample, and to see whether the resolved-fraction deceleration
+trend looks any different once the RAM ceiling is out of the picture. Phase
+6 (multithreaded df-pn, reusing `ParallelMCTS`'s worker-pool/sharded-table/
+slab-allocator patterns) and moving long runs to a bigger-RAM machine remain
+open, undecided fallback options if disk-backed storage doesn't pan out
+either - and could combine with PNSRocks rather than replace it, since a
+disk-backed store removes the RAM ceiling that would otherwise cap how many
+threads/workers could usefully coexist.
 
 <!-- Update below as longer runs complete. -->

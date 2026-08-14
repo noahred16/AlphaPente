@@ -1,0 +1,15 @@
+[requires]
+rocksdb/9.7.3
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+rocksdb/*:shared=False
+rocksdb/*:with_snappy=True
+rocksdb/*:with_lz4=True
+rocksdb/*:with_zlib=False
+rocksdb/*:with_zstd=False
+rocksdb/*:lite=False
+rocksdb/*:with_gflags=False

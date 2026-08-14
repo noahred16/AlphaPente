@@ -2,6 +2,9 @@
 #include "PNS.hpp"
 #include "PenteGame.hpp"
 #include "PositionBook.hpp"
+#ifdef WITH_ROCKSDB
+#include "PNSRocks.hpp"
+#endif
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -61,8 +64,10 @@ int main(int argc, char *argv[]) {
     double checkpointIntervalSeconds = 600;
     bool exhaustive = false;
     int trimToMoveCount = -1; // -1 = don't trim
+    std::string rocksDbPath; // -R: use PNSRocks (disk-backed) instead of in-RAM PNS
+    uint64_t rocksBlockCacheBytes = 4ULL << 30;
     int opt;
-    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:c:C:r:xh")) != -1) {
+    while ((opt = getopt(argc, argv, "B:N:t:o:i:m:c:C:r:R:M:xh")) != -1) {
         if (opt == 'B') boardSize = std::max(3, std::min(PositionKey::kMaxBoardSize, std::atoi(optarg)));
         else if (opt == 'N') maxNodes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 't') maxSeconds = std::atof(optarg);
@@ -73,6 +78,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'c') checkpointOutPath = optarg;
         else if (opt == 'C') checkpointIntervalSeconds = std::atof(optarg);
         else if (opt == 'r') resumePath = optarg;
+        else if (opt == 'R') rocksDbPath = optarg;
+        else if (opt == 'M') rocksBlockCacheBytes = std::strtoull(optarg, nullptr, 10);
         else if (opt == 'h') {
             std::cout <<
                 "Usage: solve5x5 [options] [\"move string\"]\n"
@@ -99,6 +106,14 @@ int main(int argc, char *argv[]) {
                 "  -r <path>       Resume df-pn from a checkpoint written by -c, instead of\n"
                 "                  starting over (the move string must reproduce the exact\n"
                 "                  root position the checkpoint was written from)\n"
+#ifdef WITH_ROCKSDB
+                "  -R <dir>        Disk-backed mode: store every node in a RocksDB database\n"
+                "                  at this path instead of the in-RAM PNS. Ignores -o/-i/-c/\n"
+                "                  -r/-x/-m (PNSRocks doesn't support them yet - see\n"
+                "                  PNSRocks.hpp). Reopening the same path resumes\n"
+                "                  automatically - no separate checkpoint needed.\n"
+                "  -M <bytes>      RocksDB block cache size for -R (default: 4294967296 = 4GB)\n"
+#endif
                 "  -h              Show this help\n";
             return 0;
         }
@@ -119,6 +134,44 @@ int main(int argc, char *argv[]) {
     for (const auto &moveStr : moves) std::cout << moveStr << " ";
     std::cout << "\n";
     GameUtils::printGameState(game);
+
+    if (!rocksDbPath.empty()) {
+#ifdef WITH_ROCKSDB
+        PNSRocks::Config rocksConfig;
+        rocksConfig.dbPath = rocksDbPath;
+        rocksConfig.maxNodes = maxNodes;
+        rocksConfig.maxSeconds = maxSeconds;
+        rocksConfig.maxRecursionDepth = static_cast<int>(std::min<uint64_t>(
+            raiseStackLimitAndPickDepthBudget(), static_cast<uint64_t>(INT32_MAX)));
+        rocksConfig.blockCacheBytes = rocksBlockCacheBytes;
+        std::cout << "Recursion depth budget: " << rocksConfig.maxRecursionDepth << "\n";
+        std::cout << "Disk-backed mode: db=" << rocksDbPath << " blockCache=" << (rocksBlockCacheBytes >> 20)
+                  << "MB (reopening this path later resumes automatically)\n";
+        PNSRocks pns(rocksConfig);
+
+        std::cout << "Solving (disk-backed, maxNodes budget this run=" << maxNodes << ", maxSeconds=" << maxSeconds
+                   << ")...\n"
+                   << std::flush;
+        auto t0 = std::chrono::steady_clock::now();
+        bool solved = pns.solve(game);
+        double wallSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+        pns.printProofStats();
+        std::cout << "wall=" << wallSeconds << "s midCalls=" << pns.getStats().midCalls
+                  << " nodesCreated=" << pns.getStats().nodesCreated << " dbGets=" << pns.getStats().dbGets
+                  << " dbPuts=" << pns.getStats().dbPuts
+                  << " getsPerSec=" << (wallSeconds > 0 ? pns.getStats().dbGets / wallSeconds : 0.0) << "\n";
+        if (!solved) {
+            std::cout << "Not resolved within this run's node budget - DB left in a valid, resumable state; "
+                          "rerun with the same -R path to continue.\n";
+        }
+        return 0;
+#else
+        std::cerr << "This build was compiled without RocksDB (-R unavailable) - see CMakeLists.txt's "
+                      "RocksDB_FOUND guard.\n";
+        return 1;
+#endif
+    }
 
     PositionBook book;
     if (!inPath.empty()) {

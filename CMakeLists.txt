@@ -84,6 +84,16 @@ if(NOT TORCH_FOUND)
   find_package(OpenMP)
 endif()
 
+# ─── Optional: RocksDB (disk-backed PNS node storage, solve5x5 only) ─────────
+# Installed via Conan (see conanfile.txt) since it's not in this project's
+# other dependency paths; configure with
+# `cmake -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake ..` after
+# `conan install . --output-folder=build --build=missing` to pick it up.
+# QUIET + guarded by ROCKSDB_FOUND so a plain `cmake ..` (no Conan toolchain,
+# e.g. the emscripten/emsdk WASM build in scripts/build_wasm.sh, which lists
+# its own sources directly and never touches this file at all) is unaffected.
+find_package(RocksDB CONFIG QUIET)
+
 # ─── Includes ─────────────────────────────────────────────────────────────────
 
 include_directories(include)
@@ -116,6 +126,15 @@ else()
   if(OpenMP_CXX_FOUND)
     target_link_libraries(pente_core PUBLIC OpenMP::OpenMP_CXX)
   endif()
+endif()
+
+if(RocksDB_FOUND)
+  message(STATUS "RocksDB found — PNSRocks (disk-backed PNS) enabled")
+  target_sources(pente_core PRIVATE src/PNSRocks.cpp)
+  target_compile_definitions(pente_core PUBLIC WITH_ROCKSDB)
+  target_link_libraries(pente_core PUBLIC RocksDB::rocksdb)
+else()
+  message(STATUS "RocksDB not found — PNSRocks (disk-backed PNS) disabled")
 endif()
 
 # ─── Executables ──────────────────────────────────────────────────────────────
@@ -152,6 +171,9 @@ add_executable(unit_tests
     tests/PNSTests.cpp
     tests/PositionBookTests.cpp
 )
+if(RocksDB_FOUND)
+  target_sources(unit_tests PRIVATE tests/PNSRocksTests.cpp)
+endif()
 target_link_libraries(unit_tests PRIVATE pente_core)
 target_include_directories(unit_tests PRIVATE apps)  # TrainCommon.hpp for AugmentTests
 
