@@ -3,6 +3,8 @@ C++ implementation of AlphaZero for the game of Pente. Pente is an amusing two-p
 
 Play the 5x5 version in your browser: https://noahred16.github.io/AlphaPente/
 
+Local (via Docker + Tailscale, reachable from any device on the tailnet): http://100.108.225.5:8080
+
 
 
 

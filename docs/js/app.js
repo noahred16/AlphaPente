@@ -64,6 +64,23 @@ function buildBoard() {
   }
 }
 
+// Diverging heatmap for top-move cell backgrounds, keyed to PUCT sign/magnitude:
+// positive PUCT shades toward red, negative shades toward blue, and a PUCT near
+// zero (a tie) stays close to the neutral yellow used elsewhere on the board.
+// Darker = larger magnitude = a move the search favors more strongly.
+const PUCT_NEUTRAL = [253, 238, 176]; // --yellow-light
+const PUCT_POSITIVE = [196, 88, 78];  // red
+const PUCT_NEGATIVE = [96, 122, 190]; // blue
+
+function puctColor(puct, maxAbsPuct) {
+  if (!maxAbsPuct) return `rgb(${PUCT_NEUTRAL.join(',')})`;
+  const t = Math.max(-1, Math.min(1, puct / maxAbsPuct));
+  const pole = t >= 0 ? PUCT_POSITIVE : PUCT_NEGATIVE;
+  const mag = Math.abs(t);
+  const rgb = PUCT_NEUTRAL.map((c, i) => Math.round(c + (pole[i] - c) * mag));
+  return `rgb(${rgb.join(',')})`;
+}
+
 // topMoves: optional array of {x, y, visits, value} to highlight (AI search overlay)
 function render(topMoves) {
   const cells = boardEl.children;
@@ -73,6 +90,7 @@ function render(topMoves) {
       cell.innerHTML = '';
       cell.classList.remove('top-move');
       cell.classList.remove('last-ai-move');
+      cell.style.background = '';
       const stoneVal = game.getStoneAt(x, y); // 0=empty, 1=black, 2=white
       cell.classList.toggle('occupied', stoneVal !== 0);
       if (stoneVal === 1 || stoneVal === 2) {
@@ -83,12 +101,19 @@ function render(topMoves) {
     }
   }
   if (topMoves) {
+    const maxAbsPuct = Math.max(0, ...topMoves.map(m => Math.abs(m.puct)));
     for (const m of topMoves) {
-      cells[m.y * boardSize + m.x].classList.add('top-move');
+      const cell = cells[m.y * boardSize + m.x];
+      cell.classList.add('top-move');
+      cell.style.background = puctColor(m.puct, maxAbsPuct);
     }
   }
   if (lastAiMove) {
-    cells[lastAiMove.y * boardSize + lastAiMove.x].classList.add('last-ai-move');
+    // Clear any heatmap background so the last-ai-move CSS color always wins,
+    // even when this cell is also in the top-moves overlay above.
+    const cell = cells[lastAiMove.y * boardSize + lastAiMove.x];
+    cell.classList.add('last-ai-move');
+    cell.style.background = '';
   }
   renderTopMoves(topMoves);
   updateStatus();
