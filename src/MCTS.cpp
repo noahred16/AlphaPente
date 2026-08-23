@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 
 // ============================================================================
 // Node Implementation
@@ -740,6 +741,7 @@ std::vector<MCTS::TopMove> MCTS::getTopMoves(int topN) const {
         top.avgValue = child->visits > 0 ? child->totalValue / child->visits : 0.0;
         top.puct = child->getPUCTValue(config_.explorationConstant, sqrtN, root_->priors[i]);
         top.solvedStatus = child->solvedStatus;
+        top.prior = root_->priors[i];
         moves.push_back(top);
     }
 
@@ -755,6 +757,63 @@ std::vector<MCTS::TopMove> MCTS::getTopMoves(int topN) const {
         moves.resize(topN);
 
     return moves;
+}
+
+namespace {
+const char *solvedStatusName(MCTS::SolvedStatus status) {
+    switch (status) {
+        case MCTS::SolvedStatus::SOLVED_WIN:  return "SOLVED_WIN";
+        case MCTS::SolvedStatus::SOLVED_LOSS: return "SOLVED_LOSS";
+        case MCTS::SolvedStatus::SOLVED_DRAW: return "SOLVED_DRAW";
+        default:                              return "UNSOLVED";
+    }
+}
+} // namespace
+
+std::string MCTS::toJSON(double wallTime, double cpuTime, int topN) const {
+    int simsThisSearch = totalSimulations_ - startSimulations_;
+
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(4);
+    out << "{";
+    out << "\"simulations\":" << simsThisSearch << ",";
+    out << "\"wallTimeSec\":" << wallTime << ",";
+    out << "\"cpuTimeSec\":" << cpuTime << ",";
+    out << "\"treeSize\":" << getTreeSize() << ",";
+    out << "\"totalVisits\":" << getTotalVisits() << ",";
+    out << "\"transpositionTableSize\":" << nodeTranspositionTable.size() << ",";
+    out << "\"arenaUsedMB\":" << (arena_.bytesUsed() / (1024.0 * 1024.0)) << ",";
+    out << "\"arenaTotalMB\":" << (arena_.totalSize() / (1024.0 * 1024.0)) << ",";
+    out << "\"arenaUtilizationPct\":" << arena_.utilizationPercent() << ",";
+    out << "\"solvedStatus\":\"" << (root_ ? solvedStatusName(root_->solvedStatus) : "N/A") << "\",";
+    out << "\"rootAvgValue\":" << (root_ && root_->visits > 0 ? root_->totalValue / root_->visits : 0.0) << ",";
+
+    if (root_ && root_->childCapacity > 0) {
+        PenteGame::Move best = getBestMove();
+        out << "\"bestMove\":\"" << GameUtils::displayMove(best.x, best.y) << "\",";
+    } else {
+        out << "\"bestMove\":null,";
+    }
+
+    out << "\"topMoves\":[";
+    std::vector<TopMove> topMoves = getTopMoves(topN);
+    for (size_t i = 0; i < topMoves.size(); i++) {
+        const TopMove &m = topMoves[i];
+        out << (i == 0 ? "" : ",") << "{";
+        out << "\"move\":\"" << GameUtils::displayMove(m.move.x, m.move.y) << "\",";
+        out << "\"visits\":" << m.visits << ",";
+        out << "\"prior\":" << m.prior << ",";
+        out << "\"avgValue\":" << m.avgValue << ",";
+        if (m.solvedStatus == SolvedStatus::UNSOLVED)
+            out << "\"puct\":" << m.puct << ",";
+        else
+            out << "\"puct\":null,";
+        out << "\"status\":\"" << solvedStatusName(m.solvedStatus) << "\"";
+        out << "}";
+    }
+    out << "]";
+    out << "}";
+    return out.str();
 }
 
 void MCTS::printBestMoves(int topN) const {

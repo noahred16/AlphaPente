@@ -21,9 +21,16 @@ class GameUtils {
     // Game string parsing - returns move strings only (filters out move numbers)
     static std::vector<std::string> parseGameString(const char *gameStr);
 
-    // Board printing
-    static void printBoard(const PenteGame &game);
-    static void printGameState(const PenteGame &game);
+    // Board printing. highlightX/Y (if a cell on the board) is shown in reverse
+    // video -- meant for the last move played. promising is a list of (x, y)
+    // empty-cell coords shown as a ranked, colored move label (1-based index
+    // into the list) instead of blank -- meant for candidate moves under
+    // consideration. Plain ints rather than PenteGame::Move to avoid this
+    // header needing a full (circular) PenteGame.hpp include.
+    static void printBoard(const PenteGame &game, int highlightX = -1, int highlightY = -1,
+                            const std::vector<std::pair<int, int>> &promising = {});
+    static void printGameState(const PenteGame &game, int highlightX = -1, int highlightY = -1,
+                                const std::vector<std::pair<int, int>> &promising = {});
 
     // Number formatting
     static std::string formatWithCommas(int value);
@@ -31,6 +38,12 @@ class GameUtils {
     // Search utilities - overloaded per engine type
     static void runSearchAndReport(MCTS &mcts, const PenteGame &game);
     static void runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game);
+
+    // Same as runSearchAndReport, but prints a single JSON object (mcts.toJSON())
+    // to stdout instead of the human-readable stats/best-moves text. For scripted
+    // consumption, e.g. running the search N times and aggregating across runs.
+    static void runSearchAndReportJSON(MCTS &mcts, const PenteGame &game);
+    static void runSearchAndReportJSON(ParallelMCTS &mcts, const PenteGame &game);
 
     // Interactive search loop - shared template; explicit instantiations for MCTS and ParallelMCTS
     template <typename MCTSType>

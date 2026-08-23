@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -120,8 +121,14 @@ class MCTS {
         double avgValue;
         double puct;
         SolvedStatus solvedStatus;
+        float prior;
     };
     std::vector<TopMove> getTopMoves(int topN) const;
+
+    // Single-line JSON object with root/search stats and top moves. For
+    // scripted/machine consumption (e.g. running the search N times and
+    // aggregating across runs) instead of the printStats/printBestMoves text.
+    std::string toJSON(double wallTime, double cpuTime, int topN = 10) const;
 
     // Tree management
     void reset();

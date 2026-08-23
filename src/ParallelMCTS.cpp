@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include <chrono>
+#include <sstream>
 
 thread_local ParallelMCTS::SlabView *ParallelMCTS::tl_slab = nullptr;
 
@@ -872,6 +873,144 @@ void ParallelMCTS::printBestMoves(int n) const {
                   << "\n";
     }
     std::cout << std::string(56, '=') << "\n";
+}
+
+namespace {
+const char *solvedStatusName(ParallelMCTS::SolvedStatus status) {
+    switch (status) {
+        case ParallelMCTS::SolvedStatus::SOLVED_WIN:  return "SOLVED_WIN";
+        case ParallelMCTS::SolvedStatus::SOLVED_LOSS: return "SOLVED_LOSS";
+        case ParallelMCTS::SolvedStatus::SOLVED_DRAW: return "SOLVED_DRAW";
+        default:                                       return "UNSOLVED";
+    }
+}
+
+// Move label: skip 'I' to match board notation (mirrors printBestMoves's moveLabel lambda).
+std::string moveLabel(int x, int y) {
+    char col = static_cast<char>('A' + x);
+    if (col >= 'I') col++;
+    return std::string(1, col) + std::to_string(y + 1);
+}
+} // namespace
+
+std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
+    std::vector<TopMove> topMoves;
+    if (!root_ || root_->childCapacity == 0)
+        return topMoves;
+
+    struct Entry {
+        int index;
+        int32_t visits;
+        SolvedStatus status;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(root_->childCapacity);
+    for (int i = 0; i < root_->childCapacity; ++i) {
+        const ThreadSafeNode *child = root_->children[i];
+        if (!child) continue;
+        entries.push_back({i,
+                           child->visits.load(std::memory_order_relaxed),
+                           child->solvedStatus.load(std::memory_order_relaxed)});
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+        auto rank = [](SolvedStatus s) {
+            return s == SolvedStatus::SOLVED_WIN  ? 0 :
+                   s == SolvedStatus::UNSOLVED     ? 1 : 2;
+        };
+        int ra = rank(a.status), rb = rank(b.status);
+        if (ra != rb) return ra < rb;
+        return a.visits > b.visits;
+    });
+
+    double sqrtRootVisits = std::sqrt(static_cast<double>(root_->visits.load(std::memory_order_relaxed)));
+    double c = config_.explorationConstant;
+
+    // Precompute physical-coord translation for canonical root moves.
+    int rootSym = -1;
+    if (root_->canonicalSym >= 0) {
+        initialGame_.getCanonicalHash(rootSym);
+    }
+
+    int show = std::min(topN, static_cast<int>(entries.size()));
+    for (int k = 0; k < show; ++k) {
+        int i = entries[k].index;
+        const ThreadSafeNode *child = root_->children[i];
+        int32_t visits = child->visits.load(std::memory_order_relaxed);
+        double avgVal = visits > 0 ? child->totalValue.load(std::memory_order_relaxed) / visits : 0.0;
+        SolvedStatus status = child->solvedStatus.load(std::memory_order_relaxed);
+        double puct = status == SolvedStatus::SOLVED_WIN  ?  std::numeric_limits<double>::infinity() :
+                      (status == SolvedStatus::SOLVED_LOSS || status == SolvedStatus::SOLVED_DRAW)
+                          ? -std::numeric_limits<double>::infinity() :
+                      avgVal + c * root_->priors[i] * sqrtRootVisits / (1.0 + visits);
+
+        PenteGame::Move physMove = root_->moves[i];
+        if (rootSym >= 0) {
+            int px, py;
+            Zobrist::instance().applyInverseSym(rootSym, physMove.x, physMove.y, px, py);
+            physMove = PenteGame::Move(px, py);
+        }
+
+        TopMove top;
+        top.move = physMove;
+        top.visits = visits;
+        top.avgValue = avgVal;
+        top.puct = puct;
+        top.solvedStatus = status;
+        top.prior = root_->priors[i];
+        topMoves.push_back(top);
+    }
+    return topMoves;
+}
+
+std::string ParallelMCTS::toJSON(double wallTime, int topN) const {
+    int iters = totalIterations.load();
+    int totalVisits = getTotalVisits();
+
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(4);
+    out << "{";
+    out << "\"simulations\":" << iters << ",";
+    out << "\"wallTimeSec\":" << wallTime << ",";
+    out << "\"treeSize\":" << getTreeSize() << ",";
+    out << "\"totalVisits\":" << totalVisits << ",";
+    if (arena_) {
+        out << "\"arenaUsedMB\":" << (arena_->bytesUsed() / (1024.0 * 1024.0)) << ",";
+        out << "\"arenaTotalMB\":" << (arena_->totalSize() / (1024.0 * 1024.0)) << ",";
+        out << "\"arenaUtilizationPct\":" << (100.0 * arena_->bytesUsed() / arena_->totalSize()) << ",";
+    }
+    out << "\"arenaExhausted\":" << (arenaExhausted_.load(std::memory_order_relaxed) ? "true" : "false") << ",";
+    SolvedStatus rootStatus = root_ ? root_->solvedStatus.load(std::memory_order_relaxed) : SolvedStatus::UNSOLVED;
+    out << "\"solvedStatus\":\"" << (root_ ? solvedStatusName(rootStatus) : "N/A") << "\",";
+    double rootVisits = root_ ? root_->visits.load(std::memory_order_relaxed) : 0;
+    double rootAvgValue = root_ && rootVisits > 0 ? root_->totalValue.load(std::memory_order_relaxed) / rootVisits : 0.0;
+    out << "\"rootAvgValue\":" << rootAvgValue << ",";
+
+    if (root_ && root_->childCapacity > 0) {
+        PenteGame::Move best = getBestMove();
+        out << "\"bestMove\":\"" << moveLabel(best.x, best.y) << "\",";
+    } else {
+        out << "\"bestMove\":null,";
+    }
+
+    out << "\"topMoves\":[";
+    std::vector<TopMove> topMoves = getTopMoves(topN);
+    for (size_t i = 0; i < topMoves.size(); i++) {
+        const TopMove &m = topMoves[i];
+        out << (i == 0 ? "" : ",") << "{";
+        out << "\"move\":\"" << moveLabel(m.move.x, m.move.y) << "\",";
+        out << "\"visits\":" << m.visits << ",";
+        out << "\"prior\":" << m.prior << ",";
+        out << "\"avgValue\":" << m.avgValue << ",";
+        if (m.solvedStatus == SolvedStatus::UNSOLVED)
+            out << "\"puct\":" << m.puct << ",";
+        else
+            out << "\"puct\":null,";
+        out << "\"status\":\"" << solvedStatusName(m.solvedStatus) << "\"";
+        out << "}";
+    }
+    out << "]";
+    out << "}";
+    return out.str();
 }
 
 void ParallelMCTS::setConfig(const Config &config) {

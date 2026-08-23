@@ -193,9 +193,7 @@ class PenteGame {
     // State access
     int getBlackCaptures() const { return blackCaptures; }
     int getWhiteCaptures() const { return whiteCaptures; }
-    // Move getLastMove() const {
-    //     return moveHistory.empty() ? Move() : moveHistory.back().move;
-    // }
+    Move getLastMove() const { return lastMove; }
     int getMoveCount() const { return moveCount; }
     // bool canUndo() const { return !moveHistory.empty(); }
 

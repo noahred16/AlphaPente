@@ -173,7 +173,8 @@ std::vector<std::string> GameUtils::parseGameString(const char *gameStr) {
     return moves;
 }
 
-void GameUtils::printBoard(const PenteGame &game) {
+void GameUtils::printBoard(const PenteGame &game, int highlightX, int highlightY,
+                            const std::vector<std::pair<int, int>> &promising) {
     const auto &legalMoves = game.getLegalMoves();
 
     // Only print the configured play area, not the full physical BOARD_SIZE grid
@@ -199,19 +200,35 @@ void GameUtils::printBoard(const PenteGame &game) {
         std::cout << (y < 9 ? " " : "") << (y + 1) << " ";
         for (int x = lo; x < hi; x++) {
             PenteGame::Player stone = game.getStoneAt(x, y);
+            bool isHighlight = (x == highlightX && y == highlightY);
             if (stone == PenteGame::BLACK) {
-                std::cout << "\u25CB "; // White circle for Black stones
+                // Red background for the last move -- doesn't touch the glyph's own
+                // color, so black-vs-white stone shape stays exactly as readable.
+                std::cout << (isHighlight ? "\033[41m\u25CB \033[0m" : "\u25CB "); // White circle for Black stones
             } else if (stone == PenteGame::WHITE) {
-                std::cout << "\u25CF "; // Black circle for White stones
+                std::cout << (isHighlight ? "\033[41m\u25CF \033[0m" : "\u25CF "); // Black circle for White stones
             } else {
-                bool isLegal = false;
-                for (const auto &move : legalMoves) {
-                    if (move.x == x && move.y == y) {
-                        isLegal = true;
+                int rank = -1;
+                for (size_t i = 0; i < promising.size(); i++) {
+                    if (promising[i].first == x && promising[i].second == y) {
+                        rank = static_cast<int>(i) + 1;
                         break;
                     }
                 }
-                std::cout << (isLegal ? "  " : "\u00B7 ");
+                if (rank > 0) {
+                    std::string label = std::to_string(rank);
+                    if (label.size() < 2) label += " ";
+                    std::cout << "\033[1;33m" << label << "\033[0m"; // bold yellow rank label
+                } else {
+                    bool isLegal = false;
+                    for (const auto &move : legalMoves) {
+                        if (move.x == x && move.y == y) {
+                            isLegal = true;
+                            break;
+                        }
+                    }
+                    std::cout << (isLegal ? "  " : "\u00B7 ");
+                }
             }
         }
         std::cout << (y + 1) << "\n";
@@ -224,8 +241,9 @@ void GameUtils::printBoard(const PenteGame &game) {
     std::cout << "\n";
 }
 
-void GameUtils::printGameState(const PenteGame &game) {
-    printBoard(game);
+void GameUtils::printGameState(const PenteGame &game, int highlightX, int highlightY,
+                                const std::vector<std::pair<int, int>> &promising) {
+    printBoard(game, highlightX, highlightY, promising);
 
     const PenteGame::Config &config = game.getConfig();
 
@@ -304,6 +322,54 @@ void GameUtils::runSearchAndReport(MCTS &mcts, const PenteGame &game) {
     std::string bestMoveStr = displayMove(bestMove.x, bestMove.y);
     std::cout << "MCTS selected move: " << bestMoveStr << std::endl;
     std::cout << '\a' << std::flush;
+}
+
+void GameUtils::runSearchAndReportJSON(ParallelMCTS &mcts, const PenteGame &game) {
+    auto wallStart = std::chrono::high_resolution_clock::now();
+
+    g_parallelCrashCtx = {&mcts, wallStart, true};
+    signal(SIGTERM, parallelCrashSignalHandler);
+    signal(SIGINT,  parallelCrashSignalHandler);
+
+    mcts.search(game);
+
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT,  SIG_DFL);
+    g_parallelCrashCtx.active = false;
+
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+
+    std::cout << mcts.toJSON(wallElapsed) << std::endl;
+}
+
+void GameUtils::runSearchAndReportJSON(MCTS &mcts, const PenteGame &game) {
+    auto wallStart = std::chrono::high_resolution_clock::now();
+    std::clock_t cpuStart = std::clock();
+
+    g_crashCtx = {&mcts, wallStart, cpuStart, true};
+    signal(SIGTERM, crashSignalHandler);
+    signal(SIGABRT, crashSignalHandler);
+    signal(SIGSEGV, crashSignalHandler);
+
+    try {
+        mcts.search(game);
+    } catch (const std::exception &e) {
+        std::cerr << "\nSearch interrupted: " << e.what() << "\n";
+    }
+
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
+    signal(SIGSEGV, SIG_DFL);
+    g_crashCtx.active = false;
+
+    std::clock_t cpuEnd = std::clock();
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+    double cpuElapsed = static_cast<double>(cpuEnd - cpuStart) / CLOCKS_PER_SEC;
+
+    std::cout << mcts.toJSON(wallElapsed, cpuElapsed) << std::endl;
 }
 
 template <typename MCTSType>

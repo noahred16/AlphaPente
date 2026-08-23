@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -263,6 +264,22 @@ class ParallelMCTS {
     int getTreeSize() const;
     void printStats(double wallTime, double cpuTime = 0.0) const;
     void printBestMoves(int n) const;
+
+    // Top N root moves by visit count (physical coords), most-visited first.
+    // Mirrors MCTS::TopMove/getTopMoves.
+    struct TopMove {
+        PenteGame::Move move;
+        int visits;
+        double avgValue;
+        double puct;
+        SolvedStatus solvedStatus;
+        float prior;
+    };
+    std::vector<TopMove> getTopMoves(int topN) const;
+
+    // Single-line JSON object with root/search stats and top moves. For
+    // scripted/machine consumption instead of the printStats/printBestMoves text.
+    std::string toJSON(double wallTime, int topN = 10) const;
 
     // Configuration access
     void setConfig(const Config &config);
