@@ -59,11 +59,29 @@ else
 
     if [[ "$LIBTORCH_URL" == "__wheel__" ]]; then
         PYTHON=$(command -v python3 || command -v python)
+        TORCH_SPEC="torch"
+        if [[ "$ARCH" == "x86_64" ]]; then
+            # PyTorch dropped Intel-macOS wheels after 2.2.2, and 2.2.2's newest
+            # macOS build only goes up to Python 3.12 — so on Intel Macs we need
+            # both an older torch version and a matching (older) interpreter.
+            TORCH_SPEC="torch==2.2.2"
+            for cand in python3.12 python3.11 python3.10 python3.9 python3.8 /usr/bin/python3; do
+                if command -v "$cand" &>/dev/null; then
+                    PYTHON=$(command -v "$cand")
+                    break
+                fi
+            done
+            echo "Intel Mac detected — using $TORCH_SPEC via $PYTHON"
+        fi
         echo "Downloading PyTorch wheel via pip..."
-        "$PYTHON" -m pip download torch --no-deps -d tmp_whl_dl -q
+        "$PYTHON" -m pip download "$TORCH_SPEC" --no-deps -d tmp_whl_dl -q
         WHL=$(ls tmp_whl_dl/torch-*.whl 2>/dev/null | head -1)
         if [[ -z "$WHL" ]]; then
             echo "ERROR: pip download failed — no wheel found"
+            if [[ "$ARCH" == "x86_64" ]]; then
+                echo "No Python 3.8-3.12 found; falling back to $PYTHON ($($PYTHON --version 2>&1))."
+                echo "Install one, e.g.: brew install python@3.12"
+            fi
             exit 1
         fi
         unzip -q "$WHL" -d tmp_torch

@@ -404,7 +404,7 @@ void GameUtils::interactiveSearchLoop(MCTSType &mcts, PenteGame game) {
             game.makeMove(mx, my);
             mcts.reuseSubtree(move);
             std::cout << "Played " << input << ", reusing subtree." << std::endl;
-            printGameState(game);
+            printGameState(game, move.x, move.y);
         } else {
             try {
                 int val = std::stoi(input);
@@ -413,7 +413,8 @@ void GameUtils::interactiveSearchLoop(MCTSType &mcts, PenteGame game) {
                         game = gameHistory.back();
                         gameHistory.pop_back();
                         std::cout << "Undid last move." << std::endl;
-                        printGameState(game);
+                        PenteGame::Move lastMove = game.getLastMove();
+                        printGameState(game, lastMove.x, lastMove.y);
                     } else {
                         std::cout << "Nothing to undo." << std::endl;
                     }

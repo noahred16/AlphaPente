@@ -125,7 +125,10 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    if (!quiet) GameUtils::printGameState(game);
+    if (!quiet) {
+        PenteGame::Move lastMove = game.getLastMove();
+        GameUtils::printGameState(game, lastMove.x, lastMove.y);
+    }
 
     // Scale exploration constant based on game phase
     int mc = game.getMoveCount();
