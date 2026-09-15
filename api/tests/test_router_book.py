@@ -7,13 +7,19 @@ from fastapi.testclient import TestClient
 from rocksdict import Rdict
 
 from api.main import app
-from api.tasks.book import evaluate_position
+from api.tasks.book import evaluate_position, set_allowed_moves
 
 client = TestClient(app)
 
 
 class _FakeAsyncResult:
     id = "fake-task-id"
+
+    def __init__(self, value=None):
+        self._value = value
+
+    def get(self, timeout=None):
+        return self._value
 
 
 def test_post_queues_job(monkeypatch):
@@ -31,6 +37,15 @@ def test_post_rejects_illegal_move():
     response = client.post("/pente/book", json={"moves": ["K10", "K10"]})
 
     assert response.status_code == 400
+
+
+def test_post_rejects_malformed_move():
+    # "P0" is well-formed enough to reach compute_hash but segfaults it (a
+    # real gap in PenteGame::makeMove - see test_propagation.py's module
+    # docstring); the MoveStr pattern on the schema rejects it before that.
+    response = client.post("/pente/book", json={"moves": ["P0"]})
+
+    assert response.status_code == 422
 
 
 @pytest.fixture
@@ -100,3 +115,35 @@ def test_get_rejects_illegal_move(reader_db):
     response = client.get("/pente/book", params={"moves": ["K10", "K10"]})
 
     assert response.status_code == 400
+
+
+def test_get_rejects_malformed_move(reader_db):
+    response = client.get("/pente/book", params={"moves": ["P0"]})
+
+    assert response.status_code == 422
+
+
+def test_put_allowed_moves_updates_and_returns_status(monkeypatch):
+    payload = {"solvedStatus": "UNSOLVED", "updatedMoves": [{"move": "L12", "isAllowed": True}]}
+    calls = []
+    monkeypatch.setattr(
+        set_allowed_moves, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult(payload)
+    )
+
+    response = client.put("/pente/book/allowed-moves", json={"moves": ["K10", "L9"], "allowedMoves": ["L12"]})
+
+    assert response.status_code == 200
+    assert response.json() == payload
+    assert calls == [((["K10", "L9"], ["L12"]), {})]
+
+
+def test_put_allowed_moves_rejects_illegal_move():
+    response = client.put("/pente/book/allowed-moves", json={"moves": ["K10", "K10"], "allowedMoves": []})
+
+    assert response.status_code == 400
+
+
+def test_put_allowed_moves_rejects_malformed_move():
+    response = client.put("/pente/book/allowed-moves", json={"moves": ["K10"], "allowedMoves": ["P0"]})
+
+    assert response.status_code == 422

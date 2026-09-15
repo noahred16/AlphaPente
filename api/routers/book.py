@@ -10,10 +10,11 @@ from api.schemas.book import (
     EvaluateRequest,
     EvaluateResponse,
     JobStatus,
+    MoveStr,
     SolvedStatus,
     TopMove,
 )
-from api.tasks.book import evaluate_position
+from api.tasks.book import evaluate_position, set_allowed_moves
 from api.zobrist import compute_hash
 
 router = APIRouter(prefix="/pente/book", tags=["book"])
@@ -36,10 +37,17 @@ def _to_book_entry(entry: dict) -> BookEntry:
             topMoves=[],
         )
 
+    # None (never set via PUT /allowed-moves) means "nothing restricted yet" - allow everything.
+    allowed_moves = entry.get("allowedMoves")
+
     return BookEntry(
         jobStatus=entry["jobStatus"],
         totalVisits=result["totalVisits"],
-        solvedStatus=result["solvedStatus"],
+        # bookSolvedStatus (propagated across separately-evaluated children,
+        # restricted to allowedMoves - see kv_store.propagate_book_status),
+        # not result["solvedStatus"] (that one only reflects what this one
+        # bounded search found on its own).
+        solvedStatus=entry.get("bookSolvedStatus", "UNSOLVED"),
         bestValue=result["rootAvgValue"],
         bestMove=result["bestMove"],
         date_started=entry["date_started"],
@@ -51,9 +59,9 @@ def _to_book_entry(entry: dict) -> BookEntry:
                 avgValue=m["avgValue"],
                 puct=m["puct"],
                 status=m["status"],
-                # TODO: reflect PUT /allowed-moves once implemented, instead
-                # of defaulting every move to allowed/unexpanded.
-                isAllowed=True,
+                isAllowed=allowed_moves is None or m["move"] in allowed_moves,
+                # TODO: reflect whether this child has its own book_db entry,
+                # instead of always reporting unexpanded.
                 expanded="false",
             )
             for m in result["topMoves"]
@@ -62,7 +70,7 @@ def _to_book_entry(entry: dict) -> BookEntry:
 
 
 @router.get("", response_model=BookEntry)
-def get_book_entry(moves: list[str] = Query(default=[])) -> BookEntry:
+def get_book_entry(moves: list[MoveStr] = Query(default=[])) -> BookEntry:
     """Return move evaluation and opening book state for a position. If this
     position has never been seen before, queues an evaluation for it (same
     as POST) and returns a freshly-QUEUED entry rather than 404ing."""
@@ -104,8 +112,19 @@ def queue_evaluation(body: EvaluateRequest) -> EvaluateResponse:
 
 @router.put("/allowed-moves", response_model=AllowedMovesResponse)
 def update_allowed_moves(body: AllowedMovesRequest) -> AllowedMovesResponse:
-    """Update the allowed-move subset and re-evaluate solved status up the parent DAG."""
-    # TODO: this is a write, so - like POST - it can't touch book_db directly
-    # from this process (see queue_evaluation's docstring); route it through
-    # a Celery task owned by the worker, then recompute solved status propagation
-    raise HTTPException(status_code=501, detail="Not implemented")
+    """Persist the allowed-move subset for a position.
+
+    Like POST, this is a write and can't touch book_db directly from this
+    process (see queue_evaluation's docstring) - it runs via a Celery task.
+    Unlike POST, it waits synchronously for that task rather than returning
+    a job_id: the response needs the task's result (solvedStatus,
+    updatedMoves), and persisting an allowed-move subset plus propagating
+    any solved-status change is fast, unlike an actual MCTS search.
+    """
+    try:
+        compute_hash(body.moves)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    result = set_allowed_moves.delay(body.moves, body.allowedMoves).get(timeout=10)
+    return AllowedMovesResponse(**result)

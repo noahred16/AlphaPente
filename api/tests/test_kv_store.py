@@ -44,6 +44,36 @@ def test_get_entry_missing_returns_none(db):
     assert kv_store.get_entry("deadbeef", db=db) is None
 
 
+def test_save_entry_preserves_result_when_not_given(db):
+    """A job_status-only update (e.g. marking IN_PROGRESS at the start of a
+    re-run) must not erase a previous result - only an explicit new result
+    should replace it."""
+    moves = ["K10", "L9"]
+    result = {"bestMove": "L12", "totalVisits": 100}
+    kv_store.save_entry(moves, job_status="IDLE", result=result, db=db)
+
+    kv_store.save_entry(moves, job_status="IN_PROGRESS", db=db)
+    entry = kv_store.get_entry(kv_store.compute_hash(moves), db=db)
+
+    assert entry["jobStatus"] == "IN_PROGRESS"
+    assert entry["result"] == result
+
+
+def test_save_entry_defaults_job_status_to_idle_for_a_new_entry(db):
+    hash_hex = kv_store.save_entry(["K10", "L9"], db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["jobStatus"] == "IDLE"
+
+
+def test_save_entry_persists_and_preserves_allowed_moves(db):
+    moves = ["K10", "L9"]
+    hash_hex = kv_store.save_entry(moves, allowed_moves=["L12", "J10"], db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["allowedMoves"] == ["L12", "J10"]
+
+    # A later update that doesn't mention allowed_moves preserves it.
+    kv_store.save_entry(moves, job_status="IN_PROGRESS", db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["allowedMoves"] == ["L12", "J10"]
+
+
 def test_reader_sees_writes_from_a_separate_writer_process_handle(tmp_path, monkeypatch):
     """The whole point of get_book_db_reader(): RocksDB only allows one
     read-write handle on a path at a time, so the API process (reader) and
