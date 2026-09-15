@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pente Opening Book Builder</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="book-page">
+<h1>Pente Opening Book Builder</h1>
+<div id="nav"><a href="5x5.html">5x5 AI demo →</a></div>
+
+<div id="toolbar">
+  <button id="reset">Reset</button>
+  <button id="undo">Undo</button>
+  <button id="redo">Redo</button>
+  <button id="refresh">Refresh</button>
+</div>
+
+<div id="status"></div>
+<div id="captures"></div>
+
+<div id="layout">
+  <div id="board"></div>
+
+  <div id="moves-wrap">
+    <table id="moves-table">
+      <thead>
+        <tr><th>#</th><th>Move</th><th>Value</th><th>Solved Status</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="wasm/pente.js"></script>
+<script src="js/book.js"></script>
+</body>
+</html>

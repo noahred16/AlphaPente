@@ -71,7 +71,9 @@ docker compose up -d redis
 uvicorn api.main:app --reload
 
 # Celery worker (separate terminal)
-celery -A api.celery_app worker --loglevel=info
+# --pool=solo: keeps it to one process, one book_db read-write handle - see
+# docker-compose.yml's worker service comment for why.
+celery -A api.celery_app worker --loglevel=info --pool=solo
 ```
 
 ## Python scripts setup (temp)

@@ -17,7 +17,16 @@ services:
 
   worker:
     build: .
-    command: celery -A api.celery_app worker --loglevel=info
+    # --pool=solo: Celery's default (prefork) forks one subprocess per CPU
+    # core, and each independently opens book_db read-write the first time
+    # it handles a task - two tasks landing on two different fork workers at
+    # once collide on RocksDB's single-writer lock ("IO error: ... LOCK:
+    # Resource temporarily unavailable"). Solo keeps it to one process, one
+    # book_db handle, ever - also just correct for this workload: a single
+    # pente search already parallelizes internally across NUM_THREADS, so
+    # running two searches at once would only have them fight over the same
+    # cores anyway.
+    command: celery -A api.celery_app worker --loglevel=info --pool=solo
     environment:
       - REDIS_URL=redis://redis:6379/0
       # pente (run via api/engine.py) needs these set; see setup.sh /
