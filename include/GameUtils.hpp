@@ -1,6 +1,7 @@
 #ifndef GAMEUTILS_HPP
 #define GAMEUTILS_HPP
 
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -60,6 +61,10 @@ class GameUtils {
     // concentrate a limited sim budget on forcing lines, vs. a settled late-game
     // position where broader exploration is cheaper to afford.
     static double explorationConstantForMoveCount(int moveCount);
+
+    // Zobrist hash formatting: fixed-width lowercase hex, e.g. for -Z output
+    // and JSON position identifiers. Matches what api/zobrist.py expects.
+    static std::string hashToHex(uint64_t hash);
 };
 
 #endif // GAMEUTILS_HPP

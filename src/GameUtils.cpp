@@ -7,9 +7,11 @@
 #include <ctime>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <csignal>
 #include <fstream>
+#include <sstream>
 #include <unistd.h>
 
 namespace {
@@ -117,6 +119,12 @@ int GameUtils::numThreadsFromEnv() {
 
 double GameUtils::explorationConstantForMoveCount(int moveCount) {
     return moveCount <= 10 ? 2.5 : moveCount <= 18 ? 1.8 : 1.414;
+}
+
+std::string GameUtils::hashToHex(uint64_t hash) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return oss.str();
 }
 
 size_t GameUtils::arenaSizeFromEnv(size_t defaultGb) {

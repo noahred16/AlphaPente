@@ -24,7 +24,6 @@ ExpandedState = Literal["false", "true", "in progress"]
 
 class TopMove(BaseModel):
     move: str
-    childHash: str
     visits: int
     prior: float
     avgValue: float
@@ -35,7 +34,6 @@ class TopMove(BaseModel):
 
 
 class BookEntry(BaseModel):
-    uniq_hash: str
     jobStatus: JobStatus
     totalVisits: int
     solvedStatus: SolvedStatus
@@ -46,16 +44,17 @@ class BookEntry(BaseModel):
 
 
 class EvaluateRequest(BaseModel):
+    moves: list[str]
     targetVisits: int | None = None
 
 
 class EvaluateResponse(BaseModel):
     job_id: str
-    uniq_hash: str
     jobStatus: JobStatus
 
 
 class AllowedMovesRequest(BaseModel):
+    moves: list[str]
     allowedMoves: list[str]
 
 
@@ -65,6 +64,5 @@ class UpdatedMove(BaseModel):
 
 
 class AllowedMovesResponse(BaseModel):
-    uniq_hash: str
     solvedStatus: SolvedStatus
     updatedMoves: list[UpdatedMove]

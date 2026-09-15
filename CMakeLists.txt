@@ -84,6 +84,24 @@ if(NOT TORCH_FOUND)
   find_package(OpenMP)
 endif()
 
+# ─── Optional: pybind11 (native Python bindings, e.g. api/zobrist.py) ────────
+# Auto-detected from the active Python environment the same way LibTorch is
+# above: `pip install pybind11` inside the repo's venv (see requirements.txt)
+# is enough, no manual -DCMAKE_PREFIX_PATH needed.
+find_program(PYTHON_EXE NAMES python3 python)
+if(PYTHON_EXE)
+  execute_process(
+    COMMAND ${PYTHON_EXE} -c "import pybind11; print(pybind11.get_cmake_dir())"
+    OUTPUT_VARIABLE PYBIND11_CMAKE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(PYBIND11_CMAKE_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${PYBIND11_CMAKE_DIR}")
+  endif()
+endif()
+find_package(pybind11 CONFIG QUIET)
+
 # ─── Includes ─────────────────────────────────────────────────────────────────
 
 include_directories(include)
@@ -91,7 +109,7 @@ add_compile_definitions(PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
 
 # ─── Core library ─────────────────────────────────────────────────────────────
 
-add_library(pente_core
+set(PENTE_CORE_SOURCES
     src/BitBoard.cpp
     src/PenteGame.cpp
     src/MCTS.cpp
@@ -103,6 +121,8 @@ add_library(pente_core
     src/RenjuForbiddenPointFinder.cpp
 )
 
+add_library(pente_core ${PENTE_CORE_SOURCES})
+
 if(TORCH_FOUND)
   target_compile_definitions(pente_core PUBLIC WITH_TORCH)
   target_sources(pente_core PRIVATE src/NNModel.cpp src/NNEvaluator.cpp src/SelfPlay.cpp)
@@ -113,6 +133,37 @@ else()
   if(OpenMP_CXX_FOUND)
     target_link_libraries(pente_core PUBLIC OpenMP::OpenMP_CXX)
   endif()
+endif()
+
+if(pybind11_FOUND)
+  message(STATUS "pybind11 found — building pente_native Python extension")
+
+  # pente_native needs its own PIC-compiled copy of the engine sources,
+  # entirely separate from pente_core: a shared module (unlike an
+  # executable) requires PIC, but PIC forces a slower thread-local access
+  # model project-wide (see ParallelMCTS::tl_slab, the hot per-thread MCTS
+  # arena slab - PIC's TLS fallback is not free the way regular PIC data
+  # access is on x86-64). Duplicating compilation here keeps pente_core -
+  # and every real executable (pente/train/generate/etc.) - built exactly
+  # as before, at the cost of compiling these sources twice.
+  add_library(pente_core_pic OBJECT ${PENTE_CORE_SOURCES})
+  set_target_properties(pente_core_pic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+  pybind11_add_module(pente_native src/PyBindings.cpp)
+  target_link_libraries(pente_native PRIVATE pente_core_pic)
+
+  # Fallback for machines without the python3-dev system package (and no
+  # sudo to add it): if a local extraction of it exists at .python-dev/
+  # (see README), use it instead of the system Python.h. No effect on a
+  # machine where python3-dev is properly installed.
+  if(EXISTS "${CMAKE_SOURCE_DIR}/.python-dev/include")
+    target_include_directories(pente_native PRIVATE
+      "${CMAKE_SOURCE_DIR}/.python-dev/include/python3.12"
+      "${CMAKE_SOURCE_DIR}/.python-dev/include" # arch pyconfig.h: <x86_64-linux-gnu/python3.12/pyconfig.h>
+    )
+  endif()
+else()
+  message(STATUS "pybind11 not found — pente_native Python extension disabled")
 endif()
 
 # ─── Executables ──────────────────────────────────────────────────────────────

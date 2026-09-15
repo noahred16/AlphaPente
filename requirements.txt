@@ -4,3 +4,5 @@ celery
 redis
 pydantic-settings
 rocksdict
+pytest
+pybind11
