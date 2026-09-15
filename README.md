@@ -30,6 +30,32 @@ bash init_models.sh
 
 ## API (FastAPI + Celery)
 Endpoints live in `api/`. The venv and `requirements.txt` stay at repo root.
+
+**Option 1: everything in Docker** (`Dockerfile` builds just the `pente` binary
+and `pente_native` extension the API/worker need - see its comments):
+```bash
+docker compose up --build
+```
+Starts Redis, the API (`localhost:8000`), and a Celery worker together. The
+worker is `book_db`'s sole read-write owner; the API reads it as a RocksDB
+"secondary" instance (see `api/kv_store.py`) - they share it via the
+`book_data` volume, so this only works when both run against the same
+on-disk path, which the Compose setup already ensures.
+
+Common commands, once it's up:
+```bash
+docker compose ps                    # status of all three containers
+docker compose logs -f               # tail logs from everything
+docker compose logs -f worker        # ...or just one service (api/worker/redis)
+
+docker compose up -d --build         # (re)start in the background instead
+docker compose restart worker        # restart just one service (e.g. after code changes)
+
+docker compose down                  # stop and remove containers (book_data volume kept)
+docker compose down -v               # ...and wipe book_data too (deletes the opening book)
+```
+
+**Option 2: Python locally, just Redis in Docker**
 ```bash
 cd ~/repos/AlphaPente
 python3 -m venv .venv

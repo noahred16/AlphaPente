@@ -6,3 +6,4 @@ pydantic-settings
 rocksdict
 pytest
 pybind11
+httpx2

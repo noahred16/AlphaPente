@@ -3,3 +3,36 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - book_data:/data
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    command: celery -A api.celery_app worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      # pente (run via api/engine.py) needs these set; see setup.sh /
+      # scripts/detect_system_specs.sh for how the repo's own .env picks
+      # values - hardcoded here rather than detected at container startup,
+      # since this only ever runs on this one machine. Adjust if that changes.
+      - NUM_THREADS=6
+      - ARENA_SIZE_GB=29
+    volumes:
+      - book_data:/data
+    depends_on:
+      - redis
+
+volumes:
+  # Shared between api and worker so both see the same on-disk book_db - the
+  # worker is its sole read-write owner, the api reads it as a RocksDB
+  # "secondary" instance (see api/kv_store.py's get_book_db_reader).
+  book_data:

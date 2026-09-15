@@ -6,7 +6,10 @@ from api.schemas.book import (
     BookEntry,
     EvaluateRequest,
     EvaluateResponse,
+    JobStatus,
 )
+from api.tasks.book import evaluate_position
+from api.zobrist import compute_hash
 
 router = APIRouter(prefix="/pente/book", tags=["book"])
 
@@ -20,13 +23,27 @@ def get_book_entry(moves: list[str] = Query(default=[])) -> BookEntry:
 
 @router.post("", response_model=EvaluateResponse)
 def queue_evaluation(body: EvaluateRequest) -> EvaluateResponse:
-    """Queue an MCTS evaluation job for a position."""
-    # TODO: enqueue book.evaluate, persist job status in book_db (RocksDict)
-    raise HTTPException(status_code=501, detail="Not implemented")
+    """Queue an MCTS evaluation job for a position.
+
+    Doesn't write to book_db itself - only the Celery worker (evaluate_position)
+    owns writes to it, since RocksDB allows only one read-write handle on a
+    given path at a time; see api/kv_store.py. compute_hash still validates
+    the moves up front (a pure call, no book_db access) so illegal input
+    fails fast with a 400 instead of surfacing later as a failed task.
+    """
+    try:
+        compute_hash(body.moves)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    task = evaluate_position.delay(body.moves, target_visits=body.targetVisits)
+    return EvaluateResponse(job_id=task.id, jobStatus=JobStatus.QUEUED)
 
 
 @router.put("/allowed-moves", response_model=AllowedMovesResponse)
 def update_allowed_moves(body: AllowedMovesRequest) -> AllowedMovesResponse:
     """Update the allowed-move subset and re-evaluate solved status up the parent DAG."""
-    # TODO: update book_db (RocksDict), recompute solved status propagation
+    # TODO: this is a write, so - like POST - it can't touch book_db directly
+    # from this process (see queue_evaluation's docstring); route it through
+    # a Celery task owned by the worker, then recompute solved status propagation
     raise HTTPException(status_code=501, detail="Not implemented")
