@@ -28,6 +28,26 @@ bash init_models.sh
 
 
 
+## API (FastAPI + Celery)
+Endpoints live in `api/`. The venv and `requirements.txt` stay at repo root.
+```bash
+cd ~/repos/AlphaPente
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env  # if you don't already have one
+
+# Redis (Celery broker/backend)
+docker compose up -d redis
+
+# API server
+uvicorn api.main:app --reload
+
+# Celery worker (separate terminal)
+celery -A api.celery_app worker --loglevel=info
+```
+
 ## Python scripts setup (temp)
 for `scripts/generate_tests.py` - TODO convert to cpp app
 same for `scripts/review.py` - TODO convert
