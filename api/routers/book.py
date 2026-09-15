@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Query
 
+from api.kv_store import get_entry
 from api.schemas.book import (
     AllowedMovesRequest,
     AllowedMovesResponse,
@@ -7,6 +10,8 @@ from api.schemas.book import (
     EvaluateRequest,
     EvaluateResponse,
     JobStatus,
+    SolvedStatus,
+    TopMove,
 )
 from api.tasks.book import evaluate_position
 from api.zobrist import compute_hash
@@ -14,11 +19,68 @@ from api.zobrist import compute_hash
 router = APIRouter(prefix="/pente/book", tags=["book"])
 
 
+def _to_book_entry(entry: dict) -> BookEntry:
+    """Map a stored book_db entry ({moves, jobStatus, date_started, result})
+    onto the API's BookEntry shape. `result` is the engine's own JSON output
+    (see GameUtils::runSearchAndReportJSON) - None if no search has completed
+    yet (freshly queued/in-progress, or never evaluated at all)."""
+    result = entry.get("result")
+    if result is None:
+        return BookEntry(
+            jobStatus=entry["jobStatus"],
+            totalVisits=0,
+            solvedStatus=SolvedStatus.UNSOLVED,
+            bestValue=0.0,
+            bestMove=None,
+            date_started=entry["date_started"],
+            topMoves=[],
+        )
+
+    return BookEntry(
+        jobStatus=entry["jobStatus"],
+        totalVisits=result["totalVisits"],
+        solvedStatus=result["solvedStatus"],
+        bestValue=result["rootAvgValue"],
+        bestMove=result["bestMove"],
+        date_started=entry["date_started"],
+        topMoves=[
+            TopMove(
+                move=m["move"],
+                visits=m["visits"],
+                prior=m["prior"],
+                avgValue=m["avgValue"],
+                puct=m["puct"],
+                status=m["status"],
+                # TODO: reflect PUT /allowed-moves once implemented, instead
+                # of defaulting every move to allowed/unexpanded.
+                isAllowed=True,
+                expanded="false",
+            )
+            for m in result["topMoves"]
+        ],
+    )
+
+
 @router.get("", response_model=BookEntry)
 def get_book_entry(moves: list[str] = Query(default=[])) -> BookEntry:
-    """Return move evaluation and opening book state for a position."""
-    # TODO: fetch node state from book_db (RocksDict), propagate solved status
-    raise HTTPException(status_code=501, detail="Not implemented")
+    """Return move evaluation and opening book state for a position. If this
+    position has never been seen before, queues an evaluation for it (same
+    as POST) and returns a freshly-QUEUED entry rather than 404ing."""
+    try:
+        hash_hex = compute_hash(moves)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    entry = get_entry(hash_hex)
+    if entry is None:
+        evaluate_position.delay(moves)
+        entry = {
+            "jobStatus": JobStatus.QUEUED.value,
+            "date_started": datetime.now(timezone.utc).isoformat(),
+            "result": None,
+        }
+
+    return _to_book_entry(entry)
 
 
 @router.post("", response_model=EvaluateResponse)

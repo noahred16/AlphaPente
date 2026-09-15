@@ -27,7 +27,7 @@ class TopMove(BaseModel):
     visits: int
     prior: float
     avgValue: float
-    puct: float
+    puct: float | None  # null once a move is solved - see ParallelMCTS::toJSON
     status: SolvedStatus
     isAllowed: bool
     expanded: ExpandedState
@@ -38,7 +38,7 @@ class BookEntry(BaseModel):
     totalVisits: int
     solvedStatus: SolvedStatus
     bestValue: float
-    bestMove: str
+    bestMove: str | None  # null: no completed search yet (freshly queued, or root has no children)
     date_started: datetime
     topMoves: list[TopMove]
 
