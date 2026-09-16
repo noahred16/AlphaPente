@@ -218,55 +218,68 @@ function renderBoard() {
     cells[y * BOARD_SIZE + x].classList.add('last-move');
   }
 
-  // Ghost overlay: every candidate reply the book knows about for the side
-  // to move, numbered by rank - allowed or not (see visibleMoves()). A
-  // not-currently-allowed one is dimmer still, distinguishing it, but no
-  // longer disappears outright the way removeAllowedMove used to make it.
-  // Not-yet-queued moves are faint; queued/in-progress/expanded ones are
-  // shown solid but still lighter than a real stone.
+  // Ghost overlay: every currently-allowed candidate reply the book knows
+  // about for the side to move, numbered by rank - a removed move doesn't
+  // linger here dimmed, since removeAllowedMove really deletes its data now
+  // (see allowedTopMoves()), not just detaches it from view. Not-yet-queued
+  // moves are faint; queued/in-progress/expanded ones are shown solid but
+  // still lighter than a real stone.
   if (bookEntry) {
     const toMoveColor = game.getCurrentPlayer() === 1 ? 'black' : 'white';
-    const moves = visibleMoves();
-    // Priors come straight from the engine's own heuristic policy (see
-    // HeuristicEvaluator::evaluatePolicy) - a move it flagged as tactically
-    // relevant (open three, capture threat/defense, four threat, etc.) gets
-    // a nonzero prior, a "quiet" move gets exactly 0. Darkening scales with
-    // prior relative to the strongest one on the board, so the sharpest
-    // threats stand out most - not touching the heuristic itself, just
-    // reflecting what it already computed.
+    const moves = allowedTopMoves();
+    // Priors come from the engine's own heuristic policy (see
+    // HeuristicEvaluator::evaluatePolicy / PenteGame::evaluateMove), but
+    // every "boring" candidate move already gets a flat nonzero baseline
+    // score before any bonus for an actual pattern (open three, capture
+    // threat/defense, four threat, etc.) is added - so most moves share
+    // that same baseline prior, and "prior > 0" alone doesn't mean
+    // tactically relevant. Find that baseline (the most common prior here,
+    // same idea as ParallelMCTS::getTopMoves' server-side cutoff) and only
+    // darken moves that actually rise above it, scaled by how far above.
+    const baseline = modePrior(moves.map(m => m.prior));
     const maxPrior = Math.max(0, ...moves.map(m => m.prior));
     moves.forEach((m, i) => {
       const { x, y } = parseMoveStr(m.move);
       const cell = cells[y * BOARD_SIZE + x];
       if (cell.classList.contains('occupied')) return; // shouldn't happen, but never draw a ghost over a real stone
-      if (m.prior > 0 && maxPrior > 0) {
-        cell.style.boxShadow = `inset 0 0 0 999px rgba(0,0,0,${0.35 * m.prior / maxPrior})`;
+      if (m.prior > baseline * 1.0001 && maxPrior > baseline) {
+        const darkness = 0.35 * (m.prior - baseline) / (maxPrior - baseline);
+        cell.style.boxShadow = `inset 0 0 0 999px rgba(0,0,0,${darkness})`;
       }
       const expanded = moveState(m) !== 'none';
       const ghost = document.createElement('div');
-      ghost.className = 'stone ghost ' + toMoveColor + (expanded ? ' expanded' : '') + (m.isAllowed ? '' : ' not-allowed');
+      ghost.className = 'stone ghost ' + toMoveColor + (expanded ? ' expanded' : '');
       ghost.textContent = String(i + 1);
       cell.appendChild(ghost);
     });
   }
 }
 
-// Every candidate move known for this position, allowed or not. isAllowed
-// is a proof-relevance flag (see api/kv_store.py's compute_book_solved_status),
-// not a visibility filter - it used to double as one here, which meant a
-// fresh evaluation's own best move could come back marked isAllowed:false
-// (nobody had added it to allowedMoves yet, since nobody could have known
-// about it beforehand) and silently vanish from view. Not-allowed moves are
-// still shown (see renderBoard/renderMovesTable), just visually distinguished.
-function visibleMoves() {
-  return bookEntry ? bookEntry.topMoves : [];
+// The most common prior among a list (rounded to tolerate float noise) -
+// see renderBoard's use of this as the "ordinary move" baseline to darken
+// squares against.
+function modePrior(priors) {
+  const counts = new Map();
+  let best = 0, bestCount = 0;
+  for (const p of priors) {
+    if (p <= 0) continue;
+    const key = Math.round(p * 1e6);
+    const count = (counts.get(key) || 0) + 1;
+    counts.set(key, count);
+    if (count > bestCount) {
+      bestCount = count;
+      best = p;
+    }
+  }
+  return best;
 }
 
 // The subset actually in the position's allowedMoves right now - what the
-// moves table lists (see renderMovesTable) and the base for building a new
-// list to PUT (see addAllowedMove/removeAllowedMove). Deliberately separate
-// from visibleMoves(): building the PUT payload from the *unfiltered* list
-// would silently allow everything just by adding one move.
+// board's ghost overlay (see renderBoard) and moves table (see
+// renderMovesTable) both show, and the base for building a new list to PUT
+// (see addAllowedMove/removeAllowedMove). A move the engine ranked in its
+// own topMoves but that got removed here doesn't linger anywhere once
+// removeAllowedMove deletes its underlying data - see set_allowed_moves.
 function allowedTopMoves() {
   return bookEntry ? bookEntry.topMoves.filter(m => m.isAllowed) : [];
 }
@@ -370,12 +383,12 @@ function playMove(move) {
 }
 
 // Clicking an empty cell already in allowedMoves ("the list" - see
-// allowedTopMoves()) plays it (see playMove). Clicking any other empty cell -
-// a fresh move the book has never seen, or one the engine already suggests
-// but nobody's approved yet (shown as a dim ghost - see renderBoard) -
-// doesn't move the game along; it adds that move to the position's
-// allowed-move list instead (PUT /pente/book/allowed-moves), which is the
-// only way a move reaches the table now.
+// allowedTopMoves()) plays it (see playMove). Clicking any other empty
+// cell - a fresh move the book has never seen, or one that was removed
+// (and so has no ghost at all - see renderBoard) - doesn't move the game
+// along; it adds that move to the position's allowed-move list instead
+// (PUT /pente/book/allowed-moves), which is the only way a move reaches
+// the table now.
 function onCellClick(x, y) {
   if (game.isGameOver()) return;
   if (game.getStoneAt(x, y) !== 0) return;
@@ -460,7 +473,7 @@ async function loadBookEntry() {
     // flag has served its purpose (bridging POST -> the worker picking it up) -
     // drop it so localStorage doesn't grow forever.
     let pruned = false;
-    for (const m of visibleMoves()) {
+    for (const m of allowedTopMoves()) {
       const key = queueKey(m.move);
       if (queuedMoves.has(key) && moveState(m) === 'expanded') {
         queuedMoves.delete(key);
@@ -475,7 +488,7 @@ async function loadBookEntry() {
   }
   render();
 
-  const childPending = visibleMoves().some(m => moveState(m) === 'queued' || moveState(m) === 'in-progress');
+  const childPending = allowedTopMoves().some(m => moveState(m) === 'queued' || moveState(m) === 'in-progress');
   if (bookEntry.jobStatus === 'QUEUED' || bookEntry.jobStatus === 'IN_PROGRESS' || childPending) {
     startPolling();
   }

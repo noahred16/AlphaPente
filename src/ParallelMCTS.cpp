@@ -1,10 +1,12 @@
 #include "ParallelMCTS.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <chrono>
 #include <sstream>
+#include <unordered_map>
 
 thread_local ParallelMCTS::SlabView *ParallelMCTS::tl_slab = nullptr;
 
@@ -898,6 +900,34 @@ std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
     if (!root_ || root_->childCapacity == 0)
         return topMoves;
 
+    // HeuristicEvaluator::evaluatePolicy (see PenteGame::evaluateMove) gives
+    // every ordinary, non-tactical candidate move the same flat baseline
+    // score before adding any bonus for an actual pattern (open three,
+    // capture, block, fork, five-threat, etc.); with no bonus applied, that
+    // baseline normalizes to the exact same prior for every such move at
+    // this position. So "prior > 0" alone doesn't mean "tactically
+    // relevant" - nearly every legal move clears that bar. The most common
+    // nonzero prior at this position *is* that shared baseline (found by
+    // frequency rather than hardcoding its raw value, since normalization
+    // moves it around); a move only counts as heuristically elevated when
+    // its prior is actually above that.
+    float baselinePrior = 0.0f;
+    {
+        std::unordered_map<int64_t, int> counts;
+        int bestCount = 0;
+        for (int i = 0; i < root_->childCapacity; ++i) {
+            float p = root_->priors[i];
+            if (p <= 0.0f) continue;
+            int64_t key = std::lround(p * 1e6f);
+            int count = ++counts[key];
+            if (count > bestCount) {
+                bestCount = count;
+                baselinePrior = p;
+            }
+        }
+    }
+    auto isElevated = [&](int i) { return root_->priors[i] > baselinePrior * 1.0001f; };
+
     struct Entry {
         int index;
         int32_t visits;
@@ -907,14 +937,10 @@ std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
     entries.reserve(root_->childCapacity);
     for (int i = 0; i < root_->childCapacity; ++i) {
         const ThreadSafeNode *child = root_->children[i];
-        // A move the heuristic flagged as tactically relevant (open three,
-        // capture threat/defense, four threat, etc. - see
-        // HeuristicEvaluator::evaluatePolicy, the only place a nonzero prior
-        // gets assigned) belongs in the report even if MCTS hasn't visited
-        // it yet - so this doesn't skip an elevated-prior move just because
-        // it has no node.
-        bool elevated = root_->priors[i] > 0.0f;
-        if (!child && !elevated) continue;
+        // An elevated-prior move belongs in the report even if MCTS hasn't
+        // visited it yet - so this doesn't skip one just because it has no
+        // node.
+        if (!child && !isElevated(i)) continue;
         entries.push_back({i,
                            child ? child->visits.load(std::memory_order_relaxed) : 0,
                            child ? child->solvedStatus.load(std::memory_order_relaxed) : SolvedStatus::UNSOLVED});
@@ -946,8 +972,7 @@ std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
     for (int k = 0; k < static_cast<int>(entries.size()) && k < topN; ++k)
         shown.push_back(entries[k].index);
     for (const Entry &e : entries) {
-        if (root_->priors[e.index] > 0.0f &&
-            std::find(shown.begin(), shown.end(), e.index) == shown.end())
+        if (isElevated(e.index) && std::find(shown.begin(), shown.end(), e.index) == shown.end())
             shown.push_back(e.index);
     }
 
