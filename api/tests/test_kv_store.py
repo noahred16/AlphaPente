@@ -76,6 +76,16 @@ def test_save_entry_persists_and_preserves_allowed_moves(db):
     assert kv_store.get_entry(hash_hex, db=db)["allowedMoves"] == ["L12", "J10"]
 
 
+def test_save_entry_persists_and_preserves_target_visits(db):
+    moves = ["K10", "L9"]
+    hash_hex = kv_store.save_entry(moves, target_visits=2_000_000, db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["targetVisits"] == 2_000_000
+
+    # A later update that doesn't mention target_visits preserves it.
+    kv_store.save_entry(moves, job_status="IN_PROGRESS", db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["targetVisits"] == 2_000_000
+
+
 def test_reader_sees_writes_from_a_separate_writer_process_handle(tmp_path, monkeypatch):
     """The whole point of get_book_db_reader(): RocksDB only allows one
     read-write handle on a path at a time, so the API process (reader) and
@@ -176,3 +186,56 @@ def test_delete_position_if_orphaned_only_detaches_a_position_with_other_parents
 
 def test_delete_position_if_orphaned_is_a_no_op_for_a_nonexistent_hash(db):
     kv_store.delete_position_if_orphaned("deadbeef", parent_hash="parent1", db=db)  # must not raise
+
+
+# ─── queue registry ────────────────────────────────────────────────────────
+
+
+def test_register_and_get_queued_jobs_roundtrip(db):
+    kv_store.register_queued_job("job1", ["K10", "L9"], 2_000_000, db=db)
+
+    jobs = kv_store.get_queued_jobs(db=db)
+
+    assert len(jobs) == 1
+    assert jobs[0]["moves"] == ["K10", "L9"]
+    assert jobs[0]["targetVisits"] == 2_000_000
+    assert jobs[0]["queuedAt"]
+
+
+def test_get_queued_jobs_returns_oldest_first(db):
+    kv_store.register_queued_job("job1", ["K10"], 200_000, db=db)
+    kv_store.register_queued_job("job2", ["K10", "L9"], 2_000_000, db=db)
+
+    jobs = kv_store.get_queued_jobs(db=db)
+
+    assert [j["moves"] for j in jobs] == [["K10"], ["K10", "L9"]]
+
+
+def test_unregister_queued_job_removes_only_that_job(db):
+    kv_store.register_queued_job("job1", ["K10"], 200_000, db=db)
+    kv_store.register_queued_job("job2", ["K10", "L9"], 2_000_000, db=db)
+
+    kv_store.unregister_queued_job("job1", db=db)
+
+    assert [j["moves"] for j in kv_store.get_queued_jobs(db=db)] == [["K10", "L9"]]
+
+
+def test_unregister_queued_job_is_a_no_op_for_an_unknown_id(db):
+    kv_store.unregister_queued_job("nonexistent", db=db)  # must not raise
+    assert kv_store.get_queued_jobs(db=db) == []
+
+
+def test_reset_queued_jobs_clears_everything(db):
+    kv_store.register_queued_job("job1", ["K10"], 200_000, db=db)
+    kv_store.register_queued_job("job2", ["K10", "L9"], 2_000_000, db=db)
+
+    kv_store.reset_queued_jobs(db=db)
+
+    assert kv_store.get_queued_jobs(db=db) == []
+
+
+def test_get_queued_jobs_returns_empty_list_when_book_db_does_not_exist_yet(tmp_path, monkeypatch):
+    monkeypatch.setattr(kv_store.settings, "book_db_path", str(tmp_path / "never-written.db"))
+    monkeypatch.setattr(kv_store, "_book_db_reader", None)
+
+    assert kv_store.get_queued_jobs() == []

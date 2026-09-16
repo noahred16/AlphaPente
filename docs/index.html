@@ -11,10 +11,17 @@
 
 <div id="toolbar">
   <button id="reset">Reset</button>
-  <button id="undo" title="Undo">↺</button>
-  <button id="redo" title="Redo">↻</button>
-  <button id="refresh">Refresh</button>
+  <button id="undo" title="Undo">←</button>
+  <button id="redo" title="Redo">→</button>
+  <button id="refresh" title="Refresh">↻</button>
+  <select id="level" title="Search level for newly-queued evaluations">
+    <option value="VERY_FAST">Very Fast</option>
+    <option value="FAST">Fast</option>
+    <option value="MEDIUM" selected>Medium</option>
+    <option value="DEEP">Deep</option>
+  </select>
   <a id="nav-5x5" href="5x5.html">5x5 Demo</a>
+  <span id="queue-count" title="Evaluation jobs dispatched but not yet finished" hidden></span>
 </div>
 
 <div id="status"></div>
@@ -23,13 +30,26 @@
 <div id="layout">
   <div id="board"></div>
 
-  <div id="moves-wrap">
-    <table id="moves-table">
-      <thead>
-        <tr><th>#</th><th>Move</th><th>Value</th><th>Prior</th><th>Moves</th><th>Status</th><th></th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <div id="table-column">
+    <div id="moves-wrap">
+      <table id="moves-table">
+        <thead>
+          <tr><th>#</th><th>Move</th><th>Prior</th><th>Moves</th><th>Status</th><th>MCTS Val</th><th>Child Val</th><th>Actions</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="queue-panel">
+      <h2>Queue</h2>
+      <div id="queue-summary"></div>
+      <table id="queue-table">
+        <thead>
+          <tr><th>#</th><th>Moves</th><th>Level</th><th>Starts</th><th>Ends</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 </div>
 

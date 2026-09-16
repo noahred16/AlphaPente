@@ -33,6 +33,120 @@ def test_evaluate_position_runs_engine_and_persists_result(db):
     entry = get_entry(compute_hash(["K10", "L9"]), db=db)
     assert entry["jobStatus"] == "IDLE"
     assert entry["result"] == result
+    assert entry["targetVisits"] == 100  # the requested iteration count, not just what got persisted as `result`
+
+
+def test_evaluate_position_unregisters_from_the_queue_when_done(db):
+    from api.kv_store import get_queued_jobs
+
+    evaluate_position(["K10", "L9"], target_visits=100, db=db)
+
+    assert get_queued_jobs(db=db) == []
+
+
+def test_evaluate_position_unregisters_from_the_queue_on_failure(db, monkeypatch):
+    """The queue registry must not leak an entry forever just because the
+    search itself blew up - see evaluate_position's outer finally."""
+    from api.kv_store import get_queued_jobs
+
+    def failing_run_search(moves, iterations, *args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("api.tasks.book.run_search", failing_run_search)
+
+    with pytest.raises(RuntimeError):
+        evaluate_position(["K10", "L9"], target_visits=100, db=db)
+
+    assert get_queued_jobs(db=db) == []
+
+
+def test_evaluate_position_marks_queued_immediately_even_while_waiting_its_turn(db):
+    """The actual fix for a real bug: before this write existed, a
+    dispatched-but-still-waiting position's persisted jobStatus stayed
+    whatever it was *before* being queued (e.g. "IDLE" for a bare stub) for
+    the entire time it sat blocked on _search_semaphore under any real
+    backlog - long enough for a GET polled during that window to see the
+    same stale status and dispatch a *duplicate* evaluate_position for the
+    exact same position (see evaluate_position's own docstring, and
+    test_router_book.py's test_get_does_not_requeue_a_position_already_dispatched)."""
+    import threading
+
+    from api.kv_store import get_entry
+    from api.tasks import book as book_tasks
+    from api.zobrist import compute_hash
+
+    book_tasks._search_semaphore.acquire()  # simulate another search already in progress
+    thread = threading.Thread(
+        target=evaluate_position, args=(["K10", "L9"],), kwargs={"target_visits": 100, "db": db}
+    )
+    try:
+        thread.start()
+        thread.join(timeout=1)  # never finishes on its own - it's blocked on the semaphore held above
+        assert thread.is_alive(), "should still be waiting its turn"
+
+        entry = get_entry(compute_hash(["K10", "L9"]), db=db)
+        assert entry["jobStatus"] == "QUEUED"
+    finally:
+        book_tasks._search_semaphore.release()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+
+def test_evaluate_position_is_registered_in_the_queue_while_running(db, monkeypatch):
+    """Registered from the moment it's dispatched - before it even starts
+    searching - so a still-waiting-its-turn job shows up too, not just the
+    one actually running (see kv_store.register_queued_job)."""
+    import threading
+    import time
+
+    from api.kv_store import get_queued_jobs
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_run_search(moves, iterations, *args, **kwargs):
+        started.set()
+        finish.wait(timeout=5)
+        return {
+            "simulations": iterations,
+            "solvedStatus": "UNSOLVED",
+            "rootAvgValue": 0.0,
+            "bestMove": None,
+            "topMoves": [],
+        }
+
+    monkeypatch.setattr("api.tasks.book.run_search", slow_run_search)
+
+    thread = threading.Thread(
+        target=evaluate_position, args=(["K10", "L9"],), kwargs={"target_visits": 2_000_000, "db": db}
+    )
+    thread.start()
+    started.wait(timeout=5)
+
+    jobs = get_queued_jobs(db=db)
+    assert len(jobs) == 1
+    assert jobs[0]["moves"] == ["K10", "L9"]
+    assert jobs[0]["targetVisits"] == 2_000_000
+
+    finish.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert get_queued_jobs(db=db) == []
+
+
+def test_worker_ready_signal_resets_the_queue_registry(db, monkeypatch):
+    """The queue registry must start empty on every worker boot - anything
+    recorded as in-flight at that moment didn't survive whatever just
+    (re)started the process (see api.kv_store.reset_queued_jobs)."""
+    import api.tasks.book as book_tasks
+    from api.kv_store import get_queued_jobs, register_queued_job
+
+    monkeypatch.setattr(book_tasks, "get_book_db", lambda: db)
+    register_queued_job("stale-job", ["K10"], 200_000, db=db)
+
+    book_tasks._reset_queue_registry_on_startup()
+
+    assert get_queued_jobs(db=db) == []
 
 
 def test_evaluate_position_serializes_concurrent_searches(db, monkeypatch):

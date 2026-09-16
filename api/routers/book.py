@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.kv_store import find_resolved_twin, get_entry, translate_result
+from api.kv_store import find_resolved_twin, get_entry, get_queued_jobs, translate_result
 from api.schemas.book import (
     AllowedMovesRequest,
     AllowedMovesResponse,
@@ -11,10 +11,13 @@ from api.schemas.book import (
     EvaluateResponse,
     JobStatus,
     MoveStr,
+    QueuedJob,
+    QueueResponse,
+    SearchLevel,
     SolvedStatus,
     TopMove,
 )
-from api.tasks.book import evaluate_position, set_allowed_moves
+from api.tasks.book import SEARCH_LEVEL_ITERATIONS, estimated_seconds_for, evaluate_position, set_allowed_moves
 from api.zobrist import compute_canonical_hash, compute_hash
 
 router = APIRouter(prefix="/pente/book", tags=["book"])
@@ -39,7 +42,13 @@ def _to_book_entry(entry: dict) -> BookEntry:
     def expanded_state(move: str) -> str:
         """Whether `move`'s own child position has already been searched -
         found via its own book_db entry, not anything about this (the
-        parent's) search. Matches TopMove.expanded's ExpandedState values."""
+        parent's) search. Matches TopMove.expanded's ExpandedState values.
+
+        Deliberately reports "true" (not "in progress") for a position with
+        both a real result *and* a currently-running job - a re-run/deepen
+        of an already-searched move - since a still-good older result is
+        more useful to show than blanking it out while the new one cooks.
+        See child_in_progress for the raw, unmasked signal instead."""
         child = child_entry_for(move)
         if child is None:
             return "false"
@@ -49,11 +58,34 @@ def _to_book_entry(entry: dict) -> BookEntry:
             return "in progress"
         return "false"  # a bare add_parent_edge stub - recorded as a child, but never queued
 
+    def child_in_progress(move: str) -> bool:
+        """Whether `move`'s own child position has a real search job running
+        right now - see TopMove.childInProgress."""
+        child = child_entry_for(move)
+        return child is not None and child.get("jobStatus") in ("QUEUED", "IN_PROGRESS")
+
     def child_move_count(move: str) -> int:
         """How many moves are already in the allowed-move list of the
         position `move` leads to - 0 if that child has never been touched."""
         child = child_entry_for(move)
         return len(child.get("allowedMoves") or []) if child else 0
+
+    def child_target_visits(move: str) -> int | None:
+        """The targetVisits `move`'s own last evaluation was run at - None if
+        it's never been evaluated. See TopMove.childTargetVisits."""
+        child = child_entry_for(move)
+        return child.get("targetVisits") if child else None
+
+    def child_best_move_value(move: str) -> float | None:
+        """The avgValue of `move`'s own child's best reply, per its own
+        independent search - see TopMove.childBestMoveValue. None if that
+        search hasn't produced a result yet, or found no legal replies."""
+        child = child_entry_for(move)
+        result = child.get("result") if child else None
+        best_move = result.get("bestMove") if result else None
+        if not best_move:
+            return None
+        return next((tm["avgValue"] for tm in result["topMoves"] if tm["move"] == best_move), None)
 
     def child_status(move: str, engine_status: str) -> str:
         """The freshest known solved status of the position `move` leads to.
@@ -98,6 +130,9 @@ def _to_book_entry(entry: dict) -> BookEntry:
             expanded=expanded_state(m["move"]),
             symmetricTo=symmetric_to(m["move"]),
             childMoveCount=child_move_count(m["move"]),
+            childTargetVisits=child_target_visits(m["move"]),
+            childInProgress=child_in_progress(m["move"]),
+            childBestMoveValue=child_best_move_value(m["move"]),
         )
         for m in (result["topMoves"] if result else [])
     ]
@@ -122,6 +157,9 @@ def _to_book_entry(entry: dict) -> BookEntry:
             expanded=expanded_state(move),
             symmetricTo=symmetric_to(move),
             childMoveCount=child_move_count(move),
+            childTargetVisits=child_target_visits(move),
+            childInProgress=child_in_progress(move),
+            childBestMoveValue=child_best_move_value(move),
         )
         for move in (allowed_moves or [])
         if move not in known_moves
@@ -140,11 +178,12 @@ def _to_book_entry(entry: dict) -> BookEntry:
         bestMove=result["bestMove"] if result else None,
         date_started=entry["date_started"],
         topMoves=top_moves,
+        targetVisits=entry.get("targetVisits"),
     )
 
 
 @router.get("", response_model=BookEntry)
-def get_book_entry(moves: list[MoveStr] = Query(default=[])) -> BookEntry:
+def get_book_entry(moves: list[MoveStr] = Query(default=[]), level: SearchLevel = SearchLevel.MEDIUM) -> BookEntry:
     """Return move evaluation and opening book state for a position.
 
     If this exact orientation has no result of its own, but a board-
@@ -152,7 +191,10 @@ def get_book_entry(moves: list[MoveStr] = Query(default=[])) -> BookEntry:
     has already been searched, answers with that twin's result translated
     into this orientation's coordinate frame instead of re-running a
     redundant search. Only when no twin exists either does it queue a fresh
-    evaluation and return a freshly-QUEUED entry rather than 404ing.
+    evaluation (at `level`) and return a freshly-QUEUED entry rather than
+    404ing. `level` only matters the first time a position is seen - it has
+    no effect once an entry (even a bare, unevaluated one) already exists;
+    re-running an existing position at a deeper level is POST's job.
     """
     try:
         hash_hex = compute_hash(moves)
@@ -187,7 +229,7 @@ def get_book_entry(moves: list[MoveStr] = Query(default=[])) -> BookEntry:
         entry.get("result") is None and entry.get("jobStatus") not in ("QUEUED", "IN_PROGRESS")
     )
     if needs_evaluation:
-        evaluate_position.delay(moves)
+        evaluate_position.delay(moves, target_visits=SEARCH_LEVEL_ITERATIONS[level])
         entry = {
             **(entry or {}),
             "moves": moves,
@@ -214,8 +256,25 @@ def queue_evaluation(body: EvaluateRequest) -> EvaluateResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    task = evaluate_position.delay(body.moves, target_visits=body.targetVisits)
+    task = evaluate_position.delay(body.moves, target_visits=SEARCH_LEVEL_ITERATIONS[body.level])
     return EvaluateResponse(job_id=task.id, jobStatus=JobStatus.QUEUED)
+
+
+@router.get("/queue", response_model=QueueResponse)
+def get_queue() -> QueueResponse:
+    """Every evaluate_position job dispatched but not yet finished - the one
+    actually searching right now (there's no reliable way to tell which
+    entry that is - see kv_store.register_queued_job) included, same as
+    everything still waiting its turn - oldest first.
+
+    Global, not scoped to any one position - that's why this isn't just
+    another field on GET /pente/book (which is), and why the frontend only
+    fetches it for its own separate queue panel rather than on every poll.
+    """
+    jobs = [
+        QueuedJob(**job, estimatedSeconds=estimated_seconds_for(job["targetVisits"])) for job in get_queued_jobs()
+    ]
+    return QueueResponse(count=len(jobs), jobs=jobs)
 
 
 @router.put("/allowed-moves", response_model=AllowedMovesResponse)

@@ -279,7 +279,7 @@ class ParallelMCTS {
 
     // Single-line JSON object with root/search stats and top moves. For
     // scripted/machine consumption instead of the printStats/printBestMoves text.
-    std::string toJSON(double wallTime, int topN = 10) const;
+    std::string toJSON(double wallTime, int topN = 5) const;
 
     // Configuration access
     void setConfig(const Config &config);

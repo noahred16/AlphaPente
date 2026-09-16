@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from rocksdict import Rdict
 
 from api.main import app
-from api.tasks.book import evaluate_position, set_allowed_moves
+from api.schemas.book import SearchLevel
+from api.tasks.book import SEARCH_LEVEL_ITERATIONS, evaluate_position, set_allowed_moves
 
 client = TestClient(app)
 
@@ -26,11 +27,31 @@ def test_post_queues_job(monkeypatch):
     calls = []
     monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
 
-    response = client.post("/pente/book", json={"moves": ["K10", "L9"], "targetVisits": 1000})
+    response = client.post("/pente/book", json={"moves": ["K10", "L9"], "level": "FAST"})
 
     assert response.status_code == 200
     assert response.json() == {"job_id": "fake-task-id", "jobStatus": "QUEUED"}
-    assert calls == [((["K10", "L9"],), {"target_visits": 1000})]
+    assert calls == [((["K10", "L9"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST]})]
+
+
+def test_post_queues_job_at_very_fast_level(monkeypatch):
+    calls = []
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
+
+    response = client.post("/pente/book", json={"moves": ["K10", "L9"], "level": "VERY_FAST"})
+
+    assert response.status_code == 200
+    assert calls == [((["K10", "L9"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.VERY_FAST]})]
+
+
+def test_post_defaults_to_medium_level(monkeypatch):
+    calls = []
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
+
+    response = client.post("/pente/book", json={"moves": ["K10", "L9"]})
+
+    assert response.status_code == 200
+    assert calls == [((["K10", "L9"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.MEDIUM]})]
 
 
 def test_post_rejects_illegal_move():
@@ -71,7 +92,43 @@ def test_get_queues_evaluation_when_position_unseen(reader_db, monkeypatch):
     assert body["totalVisits"] == 0
     assert body["bestMove"] is None
     assert body["topMoves"] == []
-    assert calls == [((["K10", "L9"],), {})]
+    assert calls == [((["K10", "L9"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.MEDIUM]})]
+
+
+def test_get_does_not_requeue_a_position_already_dispatched(reader_db, monkeypatch):
+    """Real bug this reproduces: evaluate_position used to leave book_db's
+    persisted jobStatus untouched (e.g. still "IDLE") for as long as a
+    dispatched job sat waiting behind _search_semaphore - the "QUEUED"
+    needs_evaluation checks for was only ever a throwaway dict built for that
+    one response, never actually written to book_db. Every GET polled during
+    that whole wait saw the same stale status and dispatched *another*
+    evaluate_position for the exact same position - see
+    evaluate_position's own docstring for the full story."""
+    calls = []
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
+
+    client.get("/pente/book", params={"moves": ["K10", "L9"]})
+    assert len(calls) == 1
+
+    # Simulate evaluate_position's real first action (see its docstring) -
+    # the persisted state a position sits in for as long as it's still
+    # waiting its turn, well before any result exists.
+    from api.kv_store import save_entry
+
+    save_entry(["K10", "L9"], job_status="QUEUED", db=reader_db)
+
+    client.get("/pente/book", params={"moves": ["K10", "L9"]})
+    assert len(calls) == 1  # not dispatched again
+
+
+def test_get_queues_evaluation_at_the_requested_level(reader_db, monkeypatch):
+    calls = []
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"], "level": "FAST"})
+
+    assert response.status_code == 200
+    assert calls == [((["K10", "L9"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST]})]
 
 
 def test_can_queue_a_followup_move_while_parent_is_still_unresolved(reader_db, monkeypatch):
@@ -92,9 +149,10 @@ def test_can_queue_a_followup_move_while_parent_is_still_unresolved(reader_db, m
 
     assert followup_response.status_code == 200
     assert followup_response.json()["jobStatus"] == "QUEUED"
+    medium_visits = SEARCH_LEVEL_ITERATIONS[SearchLevel.MEDIUM]
     assert calls == [
-        ((["K10"],), {}),  # the parent, queued by GET
-        ((followup_moves,), {"target_visits": None}),  # the follow-up, queued by POST
+        ((["K10"],), {"target_visits": medium_visits}),  # the parent, queued by GET
+        ((followup_moves,), {"target_visits": medium_visits}),  # the follow-up, queued by POST
     ]
 
 
@@ -123,7 +181,7 @@ def test_get_queues_a_bare_entry_left_behind_by_put_allowed_moves(reader_db, mon
     assert response.status_code == 200
     body = response.json()
     assert body["jobStatus"] == "QUEUED"
-    assert calls == [((["K10"],), {})]
+    assert calls == [((["K10"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.MEDIUM]})]
     # The actual point of allowedMoves showing up in topMoves even with no
     # result yet: "L9" is visible and queueable right now, not after a
     # search finishes.
@@ -143,7 +201,7 @@ def test_get_retries_a_failed_entry(reader_db, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["jobStatus"] == "QUEUED"
-    assert calls == [((["K10"],), {})]
+    assert calls == [((["K10"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.MEDIUM]})]
 
 
 def test_get_returns_existing_entry_with_result(reader_db, monkeypatch):
@@ -182,6 +240,9 @@ def test_get_returns_existing_entry_with_result(reader_db, monkeypatch):
             "expanded": "false",
             "symmetricTo": None,
             "childMoveCount": 0,
+            "childTargetVisits": None,
+            "childInProgress": False,
+            "childBestMoveValue": None,
         }
     ]
 
@@ -218,6 +279,9 @@ def test_get_surfaces_allowed_move_outside_top_moves(reader_db, monkeypatch):
             "expanded": "false",
             "symmetricTo": None,
             "childMoveCount": 0,
+            "childTargetVisits": None,
+            "childInProgress": False,
+            "childBestMoveValue": None,
         },
         {
             "move": "A1",
@@ -230,6 +294,9 @@ def test_get_surfaces_allowed_move_outside_top_moves(reader_db, monkeypatch):
             "expanded": "false",
             "symmetricTo": None,
             "childMoveCount": 0,
+            "childTargetVisits": None,
+            "childInProgress": False,
+            "childBestMoveValue": None,
         },
     ]
 
@@ -263,6 +330,41 @@ def test_get_reflects_child_expanded_state(reader_db, monkeypatch):
     assert response.status_code == 200
     expanded_by_move = {m["move"]: m["expanded"] for m in response.json()["topMoves"]}
     assert expanded_by_move == {"G10": "true", "H11": "in progress", "J12": "false"}
+
+
+def test_get_reports_child_in_progress_independent_of_a_lingering_result(reader_db, monkeypatch):
+    """A re-run/deepen of an already-expanded move leaves its old result in
+    place (see save_entry's merge semantics) while jobStatus goes
+    IN_PROGRESS - `expanded` deliberately still reads "true" off that old
+    result (see test_get_reflects_child_expanded_state), but
+    `childInProgress` should still see through to the real, running job."""
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+            {"move": "H11", "visits": 500, "prior": 0.0417, "avgValue": 0.01, "puct": 0.02, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)
+    # G10 is being re-run right now, but still has its old result.
+    save_entry(["K10", "L9", "G10"], job_status="IN_PROGRESS", result={"totalVisits": 5}, db=reader_db)
+    # H11 has never been touched at all - genuinely not in progress either.
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    in_progress_by_move = {m["move"]: m["childInProgress"] for m in body["topMoves"]}
+    assert in_progress_by_move == {"G10": True, "H11": False}
+    # And `expanded` is unaffected - still masked by the lingering result.
+    assert {m["move"]: m["expanded"] for m in body["topMoves"]} == {"G10": "true", "H11": "false"}
 
 
 def test_get_prefers_a_childs_own_book_status_over_a_stale_engine_snapshot(reader_db, monkeypatch):
@@ -333,6 +435,79 @@ def test_get_reports_child_move_count(reader_db, monkeypatch):
     assert response.status_code == 200
     count_by_move = {m["move"]: m["childMoveCount"] for m in response.json()["topMoves"]}
     assert count_by_move == {"G10": 3, "H11": 0}
+
+
+def test_get_reports_child_best_move_value(reader_db, monkeypatch):
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+            {"move": "H11", "visits": 500, "prior": 0.0417, "avgValue": 0.01, "puct": 0.02, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)
+    # G10's own child has its own independent search - its own bestMove
+    # ("A2") is what child_best_move_value should read the avgValue of, not
+    # its other, non-best candidate ("A1").
+    child_result = {
+        "totalVisits": 500,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": 0.1,
+        "bestMove": "A2",
+        "topMoves": [
+            {"move": "A1", "visits": 100, "prior": 0.2, "avgValue": -0.5, "puct": 0.1, "status": "UNSOLVED"},
+            {"move": "A2", "visits": 400, "prior": 0.3, "avgValue": 0.42, "puct": 0.2, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9", "G10"], job_status="IDLE", result=child_result, db=reader_db)
+    # H11 is left untouched - never independently searched.
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    assert response.status_code == 200
+    value_by_move = {m["move"]: m["childBestMoveValue"] for m in response.json()["topMoves"]}
+    assert value_by_move == {"G10": 0.42, "H11": None}
+
+
+def test_get_reports_target_visits_and_child_target_visits(reader_db, monkeypatch):
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+            {"move": "H11", "visits": 500, "prior": 0.0417, "avgValue": 0.01, "puct": 0.02, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(
+        ["K10", "L9"], job_status="IDLE", result=result, target_visits=SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST],
+        db=reader_db,
+    )
+    # G10's own child was searched deeper; H11 is left untouched (never evaluated).
+    save_entry(
+        ["K10", "L9", "G10"], job_status="IDLE", target_visits=SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP],
+        db=reader_db,
+    )
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["targetVisits"] == SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST]
+    child_target_visits_by_move = {m["move"]: m["childTargetVisits"] for m in body["topMoves"]}
+    assert child_target_visits_by_move == {"G10": SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP], "H11": None}
 
 
 def test_get_flags_symmetric_duplicates_within_top_moves(reader_db, monkeypatch):
@@ -412,6 +587,42 @@ def test_get_rejects_malformed_move(reader_db):
     response = client.get("/pente/book", params={"moves": ["P0"]})
 
     assert response.status_code == 422
+
+
+def test_get_queue_reports_pending_jobs_oldest_first(reader_db):
+    from api.kv_store import register_queued_job
+
+    register_queued_job("job1", ["K10"], SEARCH_LEVEL_ITERATIONS[SearchLevel.VERY_FAST], db=reader_db)
+    register_queued_job("job2", ["K10", "L9"], SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST], db=reader_db)
+
+    response = client.get("/pente/book/queue")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert [j["moves"] for j in body["jobs"]] == [["K10"], ["K10", "L9"]]
+    assert [j["targetVisits"] for j in body["jobs"]] == [
+        SEARCH_LEVEL_ITERATIONS[SearchLevel.VERY_FAST],
+        SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST],
+    ]
+    assert [j["estimatedSeconds"] for j in body["jobs"]] == [5, 30]
+
+
+def test_get_queue_reports_no_estimate_for_a_deep_job(reader_db):
+    from api.kv_store import register_queued_job
+
+    register_queued_job("job1", ["K10"], SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP], db=reader_db)
+
+    response = client.get("/pente/book/queue")
+
+    assert response.json()["jobs"][0]["estimatedSeconds"] is None
+
+
+def test_get_queue_is_empty_when_nothing_is_pending(reader_db):
+    response = client.get("/pente/book/queue")
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 0, "jobs": []}
 
 
 def test_put_allowed_moves_updates_and_returns_status(monkeypatch):

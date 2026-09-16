@@ -23,6 +23,16 @@ class JobStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class SearchLevel(str, Enum):
+    # How hard to search a position - the only lever exposed for that now;
+    # each maps to a hardcoded iteration count (see
+    # api/tasks/book.py's SEARCH_LEVEL_ITERATIONS).
+    VERY_FAST = "VERY_FAST"
+    FAST = "FAST"
+    MEDIUM = "MEDIUM"
+    DEEP = "DEEP"
+
+
 class SolvedStatus(str, Enum):
     # Matches ParallelMCTS::solvedStatusName's actual JSON strings exactly
     # (see ParallelMCTS::toJSON) - the engine never emits bare "WIN"/"LOSS"/
@@ -58,6 +68,27 @@ class TopMove(BaseModel):
     # much book already exists past this move without having to drill in.
     # 0 if the child has never been touched at all.
     childMoveCount: int = 0
+    # The targetVisits the child's own last evaluation was run at (see
+    # BookEntry.targetVisits) - None if it's never been evaluated at all.
+    # Lets the table show each child's own search level (Fast/Medium/Deep)
+    # and offer re-running one deeper without having to drill into it first.
+    childTargetVisits: int | None = None
+    # Whether `move`'s own child position currently has a real search job
+    # running - independent of `expanded` above, which deliberately keeps
+    # reporting "true" off a still-good older result while a same-level
+    # re-run (or a deepen) is in flight rather than masking it with "in
+    # progress" (see _to_book_entry.expanded_state's docstring). Lets the
+    # frontend still know a just-requested re-run has actually been picked
+    # up by the worker, so it can stop assuming so locally - see
+    # docs/js/book.js's deepeningMoves.
+    childInProgress: bool = False
+    # The avgValue the engine found for `move`'s own child's best reply - one
+    # search deeper than avgValue itself - already in this position's own
+    # to-move player's perspective (two plies down, so no sign flip is
+    # needed here, unlike avgValue - see ParallelMCTS::backpropagate's
+    # per-ply flip). None if the child's own search hasn't run yet, or found
+    # no legal replies at all.
+    childBestMoveValue: float | None = None
 
 
 class BookEntry(BaseModel):
@@ -74,11 +105,38 @@ class BookEntry(BaseModel):
     bestMove: str | None  # null: no completed search yet (freshly queued, or root has no children)
     date_started: datetime
     topMoves: list[TopMove]
+    # The targetVisits this position's own last evaluation was run at - None
+    # if it's never been evaluated (still QUEUED/IN_PROGRESS with no prior
+    # result, or a bare stub). See TopMove.childTargetVisits for the same
+    # thing one ply down, per candidate move.
+    targetVisits: int | None = None
+
+
+class QueuedJob(BaseModel):
+    # A single evaluate_position call dispatched but not yet finished -
+    # including the one actually running right now, since there's no
+    # reliable way to tell which registry entry that is (see
+    # kv_store.register_queued_job) - the frontend's ETA math treats the
+    # oldest one as "running now" instead.
+    moves: list[str]
+    targetVisits: int
+    queuedAt: datetime
+    # Rough wall-clock estimate for how long this job itself takes once it
+    # starts - None for DEEP (arena-bound, not time-bound - see
+    # api/tasks/book.py's SEARCH_LEVEL_SECONDS). The frontend chains these
+    # together, in order, into each job's own estimated start/end and an
+    # overall "queue empty at" time.
+    estimatedSeconds: int | None = None
+
+
+class QueueResponse(BaseModel):
+    count: int
+    jobs: list[QueuedJob]
 
 
 class EvaluateRequest(BaseModel):
     moves: list[MoveStr]
-    targetVisits: int | None = None
+    level: SearchLevel = SearchLevel.MEDIUM
 
 
 class EvaluateResponse(BaseModel):

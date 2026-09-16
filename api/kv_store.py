@@ -64,18 +64,19 @@ def save_entry(
     job_status: str | None = None,
     result: dict | None = None,
     allowed_moves: list[str] | None = None,
+    target_visits: int | None = None,
     db: Rdict | None = None,
 ) -> str:
     """Create or merge-update the book entry for the position reached by
     `moves`, keyed by its Zobrist hash. Only the book_db owner (the Celery
     worker) should call this without an explicit db - see get_book_db().
 
-    job_status/result/allowed_moves left as None preserve whatever's already
-    stored for that field (or a sensible default if there's no existing
-    entry) rather than overwriting it - e.g. marking a job IN_PROGRESS
-    doesn't erase a previous result, and vice versa. date_started is set
-    once (first write for a given hash) and always preserved after that.
-    Returns the hash.
+    job_status/result/allowed_moves/target_visits left as None preserve
+    whatever's already stored for that field (or a sensible default if
+    there's no existing entry) rather than overwriting it - e.g. marking a
+    job IN_PROGRESS doesn't erase a previous result, and vice versa.
+    date_started is set once (first write for a given hash) and always
+    preserved after that. Returns the hash.
     """
     db = db if db is not None else get_book_db()
     with _book_db_write_lock:
@@ -91,6 +92,13 @@ def save_entry(
                 "date_started": existing.get("date_started") or datetime.now(timezone.utc).isoformat(),
                 "result": result if result is not None else existing.get("result"),
                 "allowedMoves": allowed_moves if allowed_moves is not None else existing.get("allowedMoves"),
+                # The iteration count this position's evaluation was actually
+                # requested at (see api/tasks/book.py's SEARCH_LEVEL_ITERATIONS) -
+                # not necessarily how many it actually ran, since a search can
+                # finish early once it proves a result. Lets the frontend show
+                # which level (Fast/Medium/Deep) a position was last searched
+                # at, and offer re-running it deeper.
+                "targetVisits": target_visits if target_visits is not None else existing.get("targetVisits"),
                 # Graph bookkeeping for solved-status propagation - see
                 # propagate_book_status(). Not settable via save_entry itself:
                 # parentHashes only ever grows through add_parent_edge(), and
@@ -392,3 +400,70 @@ def get_entry(hash_hex: str, db: Rdict | None = None) -> dict | None:
         return None
     raw = db.get(hash_hex)
     return json.loads(raw) if raw is not None else None
+
+
+# Single key holding the whole evaluate_position queue registry (see
+# register_queued_job) - "queue:" is a disjoint namespace from both physical
+# position hashes (fixed-length hex Zobrist hashes - see compute_hash) and
+# "canon:"-prefixed symmetry-group keys (see add_canonical_member), so none
+# of the three can ever collide.
+_QUEUE_REGISTRY_KEY = "queue:jobs"
+
+
+def register_queued_job(job_id: str, moves: list[str], target_visits: int, db: Rdict | None = None) -> None:
+    """Record an evaluate_position call as pending, from the moment it's
+    dispatched - before it even acquires api/tasks/book.py's
+    _search_semaphore, so a job still waiting its turn shows up here just
+    like one actually running - until unregister_queued_job removes it.
+    `job_id` just needs to be unique per call (evaluate_position generates
+    its own, independent of Celery's own task id, so this works whether the
+    call came through Celery or - as in tests - directly).
+
+    Lets the API report a live list of what's queued/running and how deep
+    each one is set to search (see GET /pente/book/queue) without touching
+    Celery's own broker at all - the queue's real state already lives here,
+    in the one place (book_db) the API otherwise reads everything from.
+    """
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        registry = _load_queue_registry(db)
+        registry[job_id] = {
+            "moves": moves,
+            "targetVisits": target_visits,
+            "queuedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        db[_QUEUE_REGISTRY_KEY] = json.dumps(registry)
+
+
+def unregister_queued_job(job_id: str, db: Rdict | None = None) -> None:
+    """Remove a job recorded by register_queued_job, once it's finished -
+    successfully or not (see evaluate_position's outer finally)."""
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        registry = _load_queue_registry(db)
+        if registry.pop(job_id, None) is not None:
+            db[_QUEUE_REGISTRY_KEY] = json.dumps(registry)
+
+
+def get_queued_jobs(db: Rdict | None = None) -> list[dict]:
+    """Every job currently recorded as pending (see register_queued_job),
+    oldest first. Defaults to the read-only secondary handle, like get_entry."""
+    db = db if db is not None else get_book_db_reader()
+    if db is None:
+        return []
+    return sorted(_load_queue_registry(db).values(), key=lambda job: job["queuedAt"])
+
+
+def reset_queued_jobs(db: Rdict | None = None) -> None:
+    """Clears the queue registry outright - called once when the worker
+    process starts (see the worker_ready signal handler in
+    api/tasks/book.py), since nothing recorded as in-flight at that moment
+    actually survived whatever just (re)started the process."""
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        db[_QUEUE_REGISTRY_KEY] = json.dumps({})
+
+
+def _load_queue_registry(db: Rdict) -> dict:
+    raw = db.get(_QUEUE_REGISTRY_KEY)
+    return json.loads(raw) if raw is not None else {}

@@ -128,7 +128,7 @@ class MCTS {
     // Single-line JSON object with root/search stats and top moves. For
     // scripted/machine consumption (e.g. running the search N times and
     // aggregating across runs) instead of the printStats/printBestMoves text.
-    std::string toJSON(double wallTime, double cpuTime, int topN = 10) const;
+    std::string toJSON(double wallTime, double cpuTime, int topN = 5) const;
 
     // Tree management
     void reset();

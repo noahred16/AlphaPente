@@ -33,6 +33,7 @@ h1 {
 }
 
 #toolbar button,
+#toolbar select,
 #toolbar a {
   font-size: 1em;
   padding: 0.4em 0.8em;
@@ -43,6 +44,17 @@ h1 {
   cursor: pointer;
   text-decoration: none;
   display: inline-block;
+  line-height: 1.2;
+}
+
+/* Evaluation jobs dispatched but not yet finished (see book.js's loadQueue) -
+   a plain badge, not a button: nothing to click, just a live count. */
+#queue-count {
+  font-size: 0.85em;
+  padding: 0.4em 0.8em;
+  background: var(--green-dark);
+  color: #fff;
+  border-radius: 999px;
   line-height: 1.2;
 }
 
@@ -154,6 +166,27 @@ h1 {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  position: relative;
+}
+
+/* Move-coordinate tooltip, CSS-driven rather than a plain `title` attribute
+   (see book.js's buildBoard) so it appears the instant the cursor enters the
+   cell - a native `title` tooltip has a built-in OS/browser delay. */
+.cell[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  background: var(--green-dark);
+  color: #fff;
+  font-size: 0.7em;
+  white-space: nowrap;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .cell.top-move {
@@ -218,12 +251,29 @@ body.book-page #board {
   background: var(--last-move);
 }
 
+/* Hovering a move's link in the table (see renderMovesTable) highlights its
+   cell here. `outline` rather than `box-shadow` - renderBoard sets an inline
+   box-shadow of its own for prior-based darkening, and an inline style
+   always wins over a class's box-shadow rule, which would otherwise hide
+   this on exactly the moves most worth highlighting. */
+.cell.hovered {
+  outline: 3px solid var(--last-move);
+  outline-offset: -3px;
+}
+
 #layout {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   align-items: flex-start;
   gap: 1.5em;
+}
+
+/* Groups the moves table with the queue panel (see index.html) so the panel
+   sits right under the table - in the same column, on a wide screen where
+   #layout puts this column next to the board rather than stacking under it. */
+#table-column {
+  min-width: 0; /* lets #moves-wrap's overflow-x:auto still work as a flex child */
 }
 
 /* A book candidate move, drawn on an empty cell: faint until it's been
@@ -255,6 +305,16 @@ body.book-page #board {
   max-height: 40vh; /* scrolls internally instead of pushing the board off-screen */
 }
 
+/* On a wide-enough screen, #layout (flex-wrap) lays the board and table side
+   by side instead of stacking them, so there's no board-below-the-fold risk
+   to size against - the 40vh mobile cap just cuts the table short there for
+   no reason. */
+@media (min-width: 1024px) {
+  #moves-wrap {
+    max-height: 80vh;
+  }
+}
+
 #moves-table {
   margin: 1em auto 0;
   border-collapse: collapse;
@@ -271,18 +331,22 @@ body.book-page #board {
 }
 
 /* Plays the move (see book.js's playMove) - styled like the rest of the
-   page's controls rather than a default blue underlined link. */
-#moves-table a.move-link {
+   page's controls rather than a default blue underlined link. Not scoped to
+   #moves-table: the queue panel's own move-sequence links (see renderQueue)
+   reuse this class too. */
+a.move-link {
   color: var(--green-dark);
   text-decoration: none;
   font-weight: bold;
 }
 
-#moves-table a.move-link:hover {
+a.move-link:hover {
   text-decoration: underline;
 }
 
-#moves-table button.queue-btn {
+/* Not scoped to #moves-table: renderStatus's own Deepen button (for the
+   current position, not one of its candidate moves) reuses this class too. */
+button.queue-btn {
   font-size: 0.85em;
   padding: 0.15em 0.6em;
   background: var(--yellow);
@@ -303,4 +367,43 @@ body.book-page #board {
 
 #moves-table button.remove-btn:hover {
   border-color: var(--last-move);
+}
+
+/* --- Queue panel (see book.js's loadQueue/renderQueue) --- */
+
+#queue-panel {
+  margin: 1em 0;
+  text-align: left;
+}
+
+#queue-panel h2 {
+  color: var(--green-dark);
+  font-size: 1.1em;
+  margin: 0 0 0.3em;
+}
+
+#queue-summary {
+  margin-bottom: 0.5em;
+  font-size: 0.95em;
+}
+
+#queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+#queue-table th,
+#queue-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--yellow-light);
+}
+
+/* Moves column: a long game's move list can run much longer than the rest
+   of the row - cap it and wrap (at the natural space-separated word breaks,
+   not mid-move) instead of stretching the table or overflowing it. */
+#queue-table td:nth-child(2) {
+  max-width: 220px;
+  overflow-wrap: break-word;
 }
