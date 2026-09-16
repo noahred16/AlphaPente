@@ -17,16 +17,40 @@ services:
 
   worker:
     build: .
-    # --pool=solo: Celery's default (prefork) forks one subprocess per CPU
-    # core, and each independently opens book_db read-write the first time
-    # it handles a task - two tasks landing on two different fork workers at
-    # once collide on RocksDB's single-writer lock ("IO error: ... LOCK:
-    # Resource temporarily unavailable"). Solo keeps it to one process, one
-    # book_db handle, ever - also just correct for this workload: a single
-    # pente search already parallelizes internally across NUM_THREADS, so
-    # running two searches at once would only have them fight over the same
-    # cores anyway.
-    command: celery -A api.celery_app worker --loglevel=info --pool=solo
+    # --pool=threads (not the default prefork, and not solo): prefork forks
+    # one subprocess per CPU core, and each independently opens book_db
+    # read-write the first time it handles a task - two tasks landing on two
+    # different fork workers at once collide on RocksDB's single-writer lock
+    # ("IO error: ... LOCK: Resource temporarily unavailable"). threads runs
+    # every task in one process instead, so there's still only ever one
+    # book_db handle - but *concurrently*, as OS threads, unlike solo (which
+    # we tried first): solo's one-task-at-a-time-globally meant a slow
+    # evaluate_position could starve a fast set_allowed_moves sitting behind
+    # it in the queue, timing out PUT's synchronous .get(). Splitting work
+    # across threads instead of processes only works because
+    # api/kv_store.py's actual book_db writes (save_entry et al.) are
+    # wrapped in a lock - RocksDB itself is fine with concurrent access from
+    # multiple threads in one process, but the read-modify-write JSON
+    # bookkeeping around it isn't, without that.
+    #
+    # threads alone isn't the whole story, though: it also means several
+    # evaluate_position tasks CAN now run fully concurrently, and each one
+    # assumes it gets the whole machine (NUM_THREADS/ARENA_SIZE_GB below) -
+    # confirmed in practice, 8 concurrent searches each claiming ~29GB of
+    # arena thrashed the system badly enough to starve set_allowed_moves of
+    # a CPU slice too. api/tasks/book.py's _search_semaphore caps actual
+    # searches at one at a time regardless of how many are dispatched -
+    # everything else (set_allowed_moves included) still runs concurrently.
+    #
+    # --concurrency=32: a backlogged evaluate_position just blocks on that
+    # semaphore (see its comment in api/tasks/book.py) rather than retrying/
+    # rescheduling, so it needs an actual free thread to block *in* - the
+    # default concurrency (one thread per CPU core) is nowhere near enough
+    # once several searches are queued up, and a blocked thread costs
+    # basically nothing (no CPU, just a sleeping OS thread), so there's no
+    # real downside to a generous number here. Bump it further if you
+    # regularly stack up a bigger backlog than this.
+    command: celery -A api.celery_app worker --loglevel=info --pool=threads --concurrency=32
     environment:
       - REDIS_URL=redis://redis:6379/0
       # pente (run via api/engine.py) needs these set; see setup.sh /

@@ -7,14 +7,14 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="book-page">
-<h1>Pente Opening Book Builder</h1>
-<div id="nav"><a href="5x5.html">5x5 AI demo →</a></div>
+<h1>Pente Book Builder</h1>
 
 <div id="toolbar">
   <button id="reset">Reset</button>
-  <button id="undo">Undo</button>
-  <button id="redo">Redo</button>
+  <button id="undo" title="Undo">↺</button>
+  <button id="redo" title="Redo">↻</button>
   <button id="refresh">Refresh</button>
+  <a id="nav-5x5" href="5x5.html">5x5 Demo</a>
 </div>
 
 <div id="status"></div>
@@ -26,7 +26,7 @@
   <div id="moves-wrap">
     <table id="moves-table">
       <thead>
-        <tr><th>#</th><th>Move</th><th>Value</th><th>Solved Status</th><th></th></tr>
+        <tr><th>#</th><th>Move</th><th>Value</th><th>Status</th><th>Moves</th><th></th></tr>
       </thead>
       <tbody></tbody>
     </table>

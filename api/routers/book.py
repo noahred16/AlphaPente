@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.kv_store import get_entry
+from api.kv_store import find_resolved_twin, get_entry, translate_result
 from api.schemas.book import (
     AllowedMovesRequest,
     AllowedMovesResponse,
@@ -15,7 +15,7 @@ from api.schemas.book import (
     TopMove,
 )
 from api.tasks.book import evaluate_position, set_allowed_moves
-from api.zobrist import compute_hash
+from api.zobrist import compute_canonical_hash, compute_hash
 
 router = APIRouter(prefix="/pente/book", tags=["book"])
 
@@ -24,67 +24,175 @@ def _to_book_entry(entry: dict) -> BookEntry:
     """Map a stored book_db entry ({moves, jobStatus, date_started, result})
     onto the API's BookEntry shape. `result` is the engine's own JSON output
     (see GameUtils::runSearchAndReportJSON) - None if no search has completed
-    yet (freshly queued/in-progress, or never evaluated at all)."""
+    yet (freshly queued/in-progress, or never evaluated at all). topMoves
+    doesn't wait on that, though: allowedMoves (see PUT /allowed-moves) seeds
+    the move list regardless, so moves you already know you want to track
+    show up - and can be built on immediately via POST - without waiting for
+    a search to finish."""
     result = entry.get("result")
-    if result is None:
-        return BookEntry(
-            jobStatus=entry["jobStatus"],
-            totalVisits=0,
-            solvedStatus=SolvedStatus.UNSOLVED,
-            bestValue=0.0,
-            bestMove=None,
-            date_started=entry["date_started"],
-            topMoves=[],
-        )
-
     # None (never set via PUT /allowed-moves) means "nothing restricted yet" - allow everything.
     allowed_moves = entry.get("allowedMoves")
 
+    def child_entry_for(move: str) -> dict | None:
+        return get_entry(compute_hash(entry["moves"] + [move]))
+
+    def expanded_state(move: str) -> str:
+        """Whether `move`'s own child position has already been searched -
+        found via its own book_db entry, not anything about this (the
+        parent's) search. Matches TopMove.expanded's ExpandedState values."""
+        child = child_entry_for(move)
+        if child is None:
+            return "false"
+        if child.get("result") is not None:
+            return "true"
+        if child.get("jobStatus") in ("QUEUED", "IN_PROGRESS"):
+            return "in progress"
+        return "false"  # a bare add_parent_edge stub - recorded as a child, but never queued
+
+    def child_move_count(move: str) -> int:
+        """How many moves are already in the allowed-move list of the
+        position `move` leads to - 0 if that child has never been touched."""
+        child = child_entry_for(move)
+        return len(child.get("allowedMoves") or []) if child else 0
+
+    def child_status(move: str, engine_status: str) -> str:
+        """The freshest known solved status of the position `move` leads to.
+        `bookSolvedStatus` uses the exact same "last mover" convention as a
+        topMove's own `status` (see ParallelMCTS::backpropagate) - it's just
+        potentially fresher, since it can reflect an independent deep search
+        of that exact child (or one propagated from a symmetric twin) that
+        happened after - or entirely outside - this position's own bounded
+        search. `engine_status` (this search's own one-ply read on the move,
+        or "UNSOLVED" for a move it never itself explored) is the fallback
+        when the child hasn't been touched, or hasn't resolved anything
+        beyond what this search already found on its own."""
+        child = child_entry_for(move)
+        child_book_status = child.get("bookSolvedStatus", "UNSOLVED") if child else "UNSOLVED"
+        return child_book_status if child_book_status != "UNSOLVED" else engine_status
+
+    # Two "different" candidate moves from this position can be board-
+    # symmetric twins of each other (their child positions share a canonical
+    # hash - see kv_store.compute_canonical_hash) even though nothing else
+    # here treats them as duplicates. Flag every move after the first seen
+    # in its symmetry class, rather than merging/hiding either one - keeps
+    # all engine data visible while telling the caller (and the
+    # allowed-moves proof logic) that resolving one resolves both.
+    seen_canonical: dict[str, str] = {}
+
+    def symmetric_to(move: str) -> str | None:
+        canonical_hash, _ = compute_canonical_hash(entry["moves"] + [move])
+        if canonical_hash in seen_canonical:
+            return seen_canonical[canonical_hash]
+        seen_canonical[canonical_hash] = move
+        return None
+
+    top_moves = [
+        TopMove(
+            move=m["move"],
+            visits=m["visits"],
+            prior=m["prior"],
+            avgValue=m["avgValue"],
+            puct=m["puct"],
+            status=child_status(m["move"], m["status"]),
+            isAllowed=allowed_moves is None or m["move"] in allowed_moves,
+            expanded=expanded_state(m["move"]),
+            symmetricTo=symmetric_to(m["move"]),
+            childMoveCount=child_move_count(m["move"]),
+        )
+        for m in (result["topMoves"] if result else [])
+    ]
+
+    # A move can be force-included in allowedMoves even though the engine's
+    # own search never ranked it highly enough to appear in topMoves (see
+    # kv_store.compute_book_solved_status's docstring on why that's allowed) -
+    # or hasn't run at all yet - surface those too, with no engine stats to
+    # show (avgValue=None - the frontend renders that as "N/A"), so they're
+    # visible and queueable instead of only ever affecting solved-status
+    # bookkeeping.
+    known_moves = {m.move for m in top_moves}
+    top_moves += [
+        TopMove(
+            move=move,
+            visits=0,
+            prior=0.0,
+            avgValue=None,
+            puct=None,
+            status=child_status(move, SolvedStatus.UNSOLVED.value),
+            isAllowed=True,
+            expanded=expanded_state(move),
+            symmetricTo=symmetric_to(move),
+            childMoveCount=child_move_count(move),
+        )
+        for move in (allowed_moves or [])
+        if move not in known_moves
+    ]
+
     return BookEntry(
+        moves=entry["moves"],
         jobStatus=entry["jobStatus"],
-        totalVisits=result["totalVisits"],
+        totalVisits=result["totalVisits"] if result else 0,
         # bookSolvedStatus (propagated across separately-evaluated children,
         # restricted to allowedMoves - see kv_store.propagate_book_status),
         # not result["solvedStatus"] (that one only reflects what this one
         # bounded search found on its own).
         solvedStatus=entry.get("bookSolvedStatus", "UNSOLVED"),
-        bestValue=result["rootAvgValue"],
-        bestMove=result["bestMove"],
+        bestValue=result["rootAvgValue"] if result else 0.0,
+        bestMove=result["bestMove"] if result else None,
         date_started=entry["date_started"],
-        topMoves=[
-            TopMove(
-                move=m["move"],
-                visits=m["visits"],
-                prior=m["prior"],
-                avgValue=m["avgValue"],
-                puct=m["puct"],
-                status=m["status"],
-                isAllowed=allowed_moves is None or m["move"] in allowed_moves,
-                # TODO: reflect whether this child has its own book_db entry,
-                # instead of always reporting unexpanded.
-                expanded="false",
-            )
-            for m in result["topMoves"]
-        ],
+        topMoves=top_moves,
     )
 
 
 @router.get("", response_model=BookEntry)
 def get_book_entry(moves: list[MoveStr] = Query(default=[])) -> BookEntry:
-    """Return move evaluation and opening book state for a position. If this
-    position has never been seen before, queues an evaluation for it (same
-    as POST) and returns a freshly-QUEUED entry rather than 404ing."""
+    """Return move evaluation and opening book state for a position.
+
+    If this exact orientation has no result of its own, but a board-
+    symmetric twin (a rotation/reflection - see kv_store.compute_canonical_hash)
+    has already been searched, answers with that twin's result translated
+    into this orientation's coordinate frame instead of re-running a
+    redundant search. Only when no twin exists either does it queue a fresh
+    evaluation and return a freshly-QUEUED entry rather than 404ing.
+    """
     try:
         hash_hex = compute_hash(moves)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     entry = get_entry(hash_hex)
-    if entry is None:
+    if entry is None or entry.get("result") is None:
+        canonical_hash, sym = compute_canonical_hash(moves)
+        twin = find_resolved_twin(canonical_hash, exclude_hash=hash_hex)
+        if twin is not None:
+            base = entry or {}
+            return _to_book_entry(
+                {
+                    "moves": moves,
+                    "jobStatus": base.get("jobStatus", twin["jobStatus"]),
+                    "date_started": base.get("date_started", twin["date_started"]),
+                    "result": translate_result(twin["result"], twin["sym"], sym),
+                    "allowedMoves": base.get("allowedMoves"),
+                    "bookSolvedStatus": twin["bookSolvedStatus"],
+                }
+            )
+
+    # Not just "entry is None": PUT /allowed-moves (and add_parent_edge)
+    # create a bare entry - jobStatus "IDLE", no result - for a position
+    # that's never actually been queued. Without also catching that case
+    # here, such a position could never get evaluated at all: this is the
+    # only place that queues one, and "entry is None" alone would never
+    # fire again once that bare entry exists. FAILED is included too, so a
+    # crashed run gets retried on the next GET rather than staying stuck.
+    needs_evaluation = entry is None or (
+        entry.get("result") is None and entry.get("jobStatus") not in ("QUEUED", "IN_PROGRESS")
+    )
+    if needs_evaluation:
         evaluate_position.delay(moves)
         entry = {
+            **(entry or {}),
+            "moves": moves,
             "jobStatus": JobStatus.QUEUED.value,
-            "date_started": datetime.now(timezone.utc).isoformat(),
+            "date_started": (entry or {}).get("date_started") or datetime.now(timezone.utc).isoformat(),
             "result": None,
         }
 

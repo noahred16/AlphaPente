@@ -1,13 +1,25 @@
 import json
+import threading
 from datetime import datetime, timezone
 
 from rocksdict import AccessType, Rdict
 
 from api.config import settings
-from api.zobrist import compute_hash
+from api.zobrist import apply_symmetry, compute_canonical_hash, compute_hash
 
 _book_db: Rdict | None = None
 _book_db_reader: Rdict | None = None
+
+# Guards the actual book_db writes below (save_entry/add_parent_edge/
+# add_canonical_member/propagate_book_status) against lost updates when two
+# tasks run concurrently in the same worker process (e.g. --pool=threads) -
+# a plain read-modify-write (read `existing`, merge, write back) can drop
+# one side's change if two threads interleave it. Deliberately NOT guarding
+# get_book_db()/get_book_db_reader()'s lazy open (a separate, accepted race)
+# - this is scoped to writes only. RLock, not Lock: these functions call
+# each other (and propagate_book_status recurses into itself) from the same
+# thread, which a plain Lock would deadlock on.
+_book_db_write_lock = threading.RLock()
 
 
 def get_book_db() -> Rdict:
@@ -66,29 +78,37 @@ def save_entry(
     Returns the hash.
     """
     db = db if db is not None else get_book_db()
-    hash_hex = compute_hash(moves)
+    with _book_db_write_lock:
+        hash_hex = compute_hash(moves)
+        canonical_hash, sym = compute_canonical_hash(moves)
 
-    existing = get_entry(hash_hex, db=db) or {}
+        existing = get_entry(hash_hex, db=db) or {}
 
-    db[hash_hex] = json.dumps(
-        {
-            "moves": moves,
-            "jobStatus": job_status if job_status is not None else existing.get("jobStatus", "IDLE"),
-            "date_started": existing.get("date_started") or datetime.now(timezone.utc).isoformat(),
-            "result": result if result is not None else existing.get("result"),
-            "allowedMoves": allowed_moves if allowed_moves is not None else existing.get("allowedMoves"),
-            # Graph bookkeeping for solved-status propagation - see
-            # propagate_book_status(). Not settable via save_entry itself:
-            # parentHashes only ever grows through add_parent_edge(), and
-            # bookSolvedStatus is only ever recomputed through
-            # compute_book_solved_status(), never hand-set here, so a plain
-            # save_entry() call (e.g. just bumping jobStatus) can't
-            # accidentally clobber either with a stale value.
-            "parentHashes": existing.get("parentHashes", []),
-            "bookSolvedStatus": existing.get("bookSolvedStatus", "UNSOLVED"),
-        }
-    )
-    return hash_hex
+        db[hash_hex] = json.dumps(
+            {
+                "moves": moves,
+                "jobStatus": job_status if job_status is not None else existing.get("jobStatus", "IDLE"),
+                "date_started": existing.get("date_started") or datetime.now(timezone.utc).isoformat(),
+                "result": result if result is not None else existing.get("result"),
+                "allowedMoves": allowed_moves if allowed_moves is not None else existing.get("allowedMoves"),
+                # Graph bookkeeping for solved-status propagation - see
+                # propagate_book_status(). Not settable via save_entry itself:
+                # parentHashes only ever grows through add_parent_edge(), and
+                # bookSolvedStatus is only ever recomputed through
+                # compute_book_solved_status(), never hand-set here, so a plain
+                # save_entry() call (e.g. just bumping jobStatus) can't
+                # accidentally clobber either with a stale value.
+                "parentHashes": existing.get("parentHashes", []),
+                "bookSolvedStatus": existing.get("bookSolvedStatus", "UNSOLVED"),
+                # Which symmetry group this exact physical orientation belongs to
+                # - see add_canonical_member/get_group_status. Recomputed every
+                # save (cheap, in-process) so it's never stale.
+                "canonicalHash": canonical_hash,
+                "sym": sym,
+            }
+        )
+        add_canonical_member(canonical_hash, hash_hex, db=db)
+        return hash_hex
 
 
 def add_parent_edge(child_moves: list[str], parent_hash: str, db: Rdict | None = None) -> str:
@@ -97,14 +117,151 @@ def add_parent_edge(child_moves: list[str], parent_hash: str, db: Rdict | None =
     the edge isn't lost even if the child itself has never been evaluated.
     Idempotent (parent_hash is only added once). Returns the child's hash."""
     db = db if db is not None else get_book_db()
-    child_hash = save_entry(child_moves, db=db)  # no-op merge-update if it already exists
+    with _book_db_write_lock:
+        child_hash = save_entry(child_moves, db=db)  # no-op merge-update if it already exists
 
-    entry = get_entry(child_hash, db=db)
-    parents = entry.get("parentHashes", [])
-    if parent_hash not in parents:
-        entry["parentHashes"] = [*parents, parent_hash]
-        db[child_hash] = json.dumps(entry)
-    return child_hash
+        entry = get_entry(child_hash, db=db)
+        parents = entry.get("parentHashes", [])
+        if parent_hash not in parents:
+            entry["parentHashes"] = [*parents, parent_hash]
+            db[child_hash] = json.dumps(entry)
+        return child_hash
+
+
+def add_canonical_member(canonical_hash: str, physical_hash: str, db: Rdict | None = None) -> None:
+    """Record that `physical_hash` is one physical orientation belonging to
+    the symmetry group `canonical_hash` (positions that are
+    rotations/reflections of each other - see api/zobrist.py's
+    compute_canonical_hash). Idempotent. Stored under a "canon:" prefix, a
+    disjoint key namespace from physical hashes so the two never collide."""
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        key = f"canon:{canonical_hash}"
+        raw = db.get(key)
+        members = json.loads(raw) if raw is not None else []
+        if physical_hash not in members:
+            members.append(physical_hash)
+            db[key] = json.dumps(members)
+
+
+def get_canonical_members(canonical_hash: str, db: Rdict | None = None) -> list[str]:
+    """Every physical hash known to belong to symmetry group `canonical_hash`."""
+    db = db if db is not None else get_book_db_reader()
+    if db is None:
+        return []
+    raw = db.get(f"canon:{canonical_hash}")
+    return json.loads(raw) if raw is not None else []
+
+
+def remove_canonical_member(canonical_hash: str, physical_hash: str, db: Rdict | None = None) -> None:
+    """The inverse of add_canonical_member - drops `physical_hash` from its
+    symmetry group's member list, e.g. once that entry is actually deleted
+    (see delete_position_if_orphaned). A stale reference left behind here
+    wouldn't corrupt anything on its own (get_group_status/find_resolved_twin
+    already skip a member hash whose entry is missing), but there's no
+    reason to let a dead hash accumulate in the index forever."""
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        key = f"canon:{canonical_hash}"
+        raw = db.get(key)
+        members = json.loads(raw) if raw is not None else []
+        if physical_hash in members:
+            members.remove(physical_hash)
+            if members:
+                db[key] = json.dumps(members)
+            else:
+                del db[key]
+
+
+def delete_position_if_orphaned(hash_hex: str, parent_hash: str, db: Rdict | None = None) -> None:
+    """Drop `parent_hash` from hash_hex's parentHashes; if that leaves it
+    with no parents at all, the position is genuinely unreachable now (not a
+    transposition some other position still legitimately reaches it through
+    - see add_parent_edge, the only thing that ever adds a parentHashes
+    entry) - so delete it outright, recursing into its own candidate
+    children first (same check, so a grandchild only dies if it too has no
+    other parent left) and dropping it from its canonical group's member
+    index. A position with other parents remaining is just detached from
+    this one, never deleted - its data may still be exactly what those other
+    parents are relying on.
+
+    No-op if hash_hex doesn't exist (e.g. a manually-added move that was
+    never itself touched - there's nothing to delete)."""
+    db = db if db is not None else get_book_db()
+    with _book_db_write_lock:
+        entry = get_entry(hash_hex, db=db)
+        if entry is None:
+            return
+
+        remaining_parents = [p for p in entry.get("parentHashes", []) if p != parent_hash]
+        if remaining_parents:
+            entry["parentHashes"] = remaining_parents
+            db[hash_hex] = json.dumps(entry)
+            return
+
+        for move in entry.get("allowedMoves") or []:
+            child_hash = compute_hash(entry["moves"] + [move])
+            delete_position_if_orphaned(child_hash, parent_hash=hash_hex, db=db)
+
+        remove_canonical_member(entry["canonicalHash"], hash_hex, db=db)
+        del db[hash_hex]
+
+
+def get_group_status(canonical_hash: str, db: Rdict, exclude_hash: str | None = None) -> str:
+    """The best-known solved status shared by every physical orientation of
+    this position (except `exclude_hash`, if given - see
+    compute_book_solved_status, which must exclude the very entry it's
+    recomputing a fresh value for, or it would just read back its own stale
+    pre-recomputation status as if it were independent confirming evidence).
+    A WIN/LOSS/DRAW proven via any one orientation's search is a fact about
+    the actual position, not an artifact of which orientation was searched
+    or which allowedMoves subset it used - so it's sound to treat it as
+    proven for every symmetric twin too, regardless of whether those twins
+    have been evaluated (or restricted) at all. UNSOLVED if no other member
+    is resolved yet, or the group has no other members."""
+    for member_hash in get_canonical_members(canonical_hash, db=db):
+        if member_hash == exclude_hash:
+            continue
+        member = get_entry(member_hash, db=db)
+        if member and member["bookSolvedStatus"] != "UNSOLVED":
+            return member["bookSolvedStatus"]
+    return "UNSOLVED"
+
+
+def find_resolved_twin(canonical_hash: str, exclude_hash: str, db: Rdict | None = None) -> dict | None:
+    """The first canonical-group member (other than `exclude_hash`) that has
+    a completed engine result of its own, or None if no symmetric twin has
+    been evaluated yet. Lets a query for a position that's never itself been
+    searched answer instead by translating a twin's result - see
+    translate_result()."""
+    db = db if db is not None else get_book_db_reader()
+    if db is None:
+        return None
+    for member_hash in get_canonical_members(canonical_hash, db=db):
+        if member_hash == exclude_hash:
+            continue
+        member = get_entry(member_hash, db=db)
+        if member and member.get("result") is not None:
+            return member
+    return None
+
+
+def translate_result(result: dict, from_sym: int, to_sym: int) -> dict:
+    """Re-express a result's move labels (bestMove and every topMoves[i].move)
+    from one orientation's coordinate frame into another's. Each move passes
+    through its shared canonical form: forward by `from_sym` to get there,
+    then the inverse of `to_sym` to get back out into the target orientation
+    - see api/zobrist.py's apply_symmetry."""
+
+    def translate_move(move: str) -> str:
+        canonical_move = apply_symmetry(move, from_sym)
+        return apply_symmetry(canonical_move, to_sym, inverse=True)
+
+    translated = dict(result)
+    if translated.get("bestMove") is not None:
+        translated["bestMove"] = translate_move(translated["bestMove"])
+    translated["topMoves"] = [{**m, "move": translate_move(m["move"])} for m in result["topMoves"]]
+    return translated
 
 
 def combine_child_statuses(child_statuses: list[str]) -> str:
@@ -120,25 +277,31 @@ def combine_child_statuses(child_statuses: list[str]) -> str:
     resolve the parent to DRAW."""
     if not child_statuses:
         return "UNSOLVED"
-    if any(s == "WIN" for s in child_statuses):
-        return "LOSS"
+    if any(s == "SOLVED_WIN" for s in child_statuses):
+        return "SOLVED_LOSS"
     if any(s == "UNSOLVED" for s in child_statuses):
         return "UNSOLVED"
-    if all(s == "LOSS" for s in child_statuses):
-        return "WIN"
-    return "DRAW"  # no WIN, nothing UNSOLVED, not all LOSS -> a settled mix of LOSS/DRAW
+    if all(s == "SOLVED_LOSS" for s in child_statuses):
+        return "SOLVED_WIN"
+    return "SOLVED_DRAW"  # no WIN, nothing UNSOLVED, not all LOSS -> a settled mix of LOSS/DRAW
 
 
 def compute_book_solved_status(entry: dict, db: Rdict) -> str:
-    """A node's book-level solved status: its own engine result if that
-    search already proved something outright, otherwise whatever can be
-    concluded by combining its candidate children's own book-level statuses.
-    The child fallback is what makes this different from (and more powerful
-    than) result["solvedStatus"] alone - each child was evaluated in its own
-    separate, bounded search that has no way to know what any of its
-    siblings' searches found, so a forced sequence spanning several of them
-    can go provable here even though no single search was deep enough to see
-    it.
+    """A node's book-level solved status, in priority order:
+
+    1. Its own engine result, if that search already proved something outright.
+    2. A symmetric twin's status (get_group_status) - a rotation/reflection
+       of this exact position might already be resolved even though this
+       orientation has never itself been evaluated.
+    3. Otherwise, whatever can be concluded by combining candidate children's
+       own book-level statuses (each one also checked via its own symmetry
+       group, not just its exact physical hash - so a child that's only
+       *itself* known through a symmetric twin still counts). This is what
+       makes book-level status more powerful than result["solvedStatus"]
+       alone - each child was evaluated in its own separate, bounded search
+       with no way to know what any sibling's search found, so a forced
+       sequence spanning several of them can go provable here even though no
+       single search was deep enough to see it.
 
     Candidate children are allowedMoves directly when it's been set (an
     authoritative, human-curated list - NOT filtered against topMoves, since
@@ -153,6 +316,11 @@ def compute_book_solved_status(entry: dict, db: Rdict) -> str:
     if result and result["solvedStatus"] != "UNSOLVED":
         return result["solvedStatus"]
 
+    own_hash = compute_hash(entry["moves"])
+    twin_status = get_group_status(entry["canonicalHash"], db=db, exclude_hash=own_hash)
+    if twin_status != "UNSOLVED":
+        return twin_status
+
     allowed = entry.get("allowedMoves")
     if allowed is not None:
         candidate_moves = allowed
@@ -163,9 +331,8 @@ def compute_book_solved_status(entry: dict, db: Rdict) -> str:
 
     child_statuses = []
     for move in candidate_moves:
-        child_hash = compute_hash(entry["moves"] + [move])
-        child_entry = get_entry(child_hash, db=db)
-        child_statuses.append(child_entry["bookSolvedStatus"] if child_entry else "UNSOLVED")
+        child_canonical_hash, _ = compute_canonical_hash(entry["moves"] + [move])
+        child_statuses.append(get_group_status(child_canonical_hash, db=db))
 
     return combine_child_statuses(child_statuses)
 
@@ -179,21 +346,39 @@ def propagate_book_status(hash_hex: str, db: Rdict | None = None) -> None:
     instant a level doesn't change, or there are no more parents. No cycle
     risk: capture counts (baked into the hash) never decrease and every move
     adds exactly one stone, so the position graph is provably acyclic -
-    this can't loop forever."""
+    this can't loop forever.
+
+    Also walks every symmetric twin's parents (not the twins themselves -
+    get_group_status already surfaces this node's new status to them without
+    needing their own bookSolvedStatus field rewritten). Necessary because a
+    twin can be reached from a completely different parent than this node
+    was - without this, that parent would only find out about a proof
+    borrowed through its child's twin the next time something else happened
+    to trigger a recompute of it directly.
+    """
     db = db if db is not None else get_book_db()
-    entry = get_entry(hash_hex, db=db)
-    if entry is None:
-        return
+    with _book_db_write_lock:
+        entry = get_entry(hash_hex, db=db)
+        if entry is None:
+            return
 
-    new_status = compute_book_solved_status(entry, db=db)
-    if new_status == entry["bookSolvedStatus"]:
-        return
+        new_status = compute_book_solved_status(entry, db=db)
+        if new_status == entry["bookSolvedStatus"]:
+            return
 
-    entry["bookSolvedStatus"] = new_status
-    db[hash_hex] = json.dumps(entry)
+        entry["bookSolvedStatus"] = new_status
+        db[hash_hex] = json.dumps(entry)
 
-    for parent_hash in entry.get("parentHashes", []):
-        propagate_book_status(parent_hash, db=db)
+        for parent_hash in entry.get("parentHashes", []):
+            propagate_book_status(parent_hash, db=db)
+
+        for twin_hash in get_canonical_members(entry["canonicalHash"], db=db):
+            if twin_hash == hash_hex:
+                continue
+            twin_entry = get_entry(twin_hash, db=db)
+            if twin_entry:
+                for parent_hash in twin_entry.get("parentHashes", []):
+                    propagate_book_status(parent_hash, db=db)
 
 
 def get_entry(hash_hex: str, db: Rdict | None = None) -> dict | None:

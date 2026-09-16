@@ -24,10 +24,15 @@ class JobStatus(str, Enum):
 
 
 class SolvedStatus(str, Enum):
+    # Matches ParallelMCTS::solvedStatusName's actual JSON strings exactly
+    # (see ParallelMCTS::toJSON) - the engine never emits bare "WIN"/"LOSS"/
+    # "DRAW", only these. Getting this wrong isn't a cosmetic mismatch: it's
+    # a Pydantic ValidationError (500) the instant a real solved position's
+    # own result or a topMove's status reaches this schema.
     UNSOLVED = "UNSOLVED"
-    WIN = "WIN"
-    LOSS = "LOSS"
-    DRAW = "DRAW"
+    SOLVED_WIN = "SOLVED_WIN"
+    SOLVED_LOSS = "SOLVED_LOSS"
+    SOLVED_DRAW = "SOLVED_DRAW"
 
 
 ExpandedState = Literal["false", "true", "in progress"]
@@ -37,14 +42,31 @@ class TopMove(BaseModel):
     move: str
     visits: int
     prior: float
-    avgValue: float
+    avgValue: float | None  # null only for a manually-added move with no engine data yet - see _to_book_entry
     puct: float | None  # null once a move is solved - see ParallelMCTS::toJSON
     status: SolvedStatus
     isAllowed: bool
     expanded: ExpandedState
+    # Set when an earlier move in this same topMoves list leads to a
+    # board-symmetric twin of this move's own child position (see
+    # kv_store.compute_canonical_hash) - i.e. two "different" candidates that
+    # are actually the same choice mirrored. Points at that earlier move;
+    # None if this is the first (or only) move seen for its symmetry class.
+    symmetricTo: str | None = None
+    # How many moves are already in the allowed-move list for the position
+    # this move leads to - a quick sense, from the parent's own table, of how
+    # much book already exists past this move without having to drill in.
+    # 0 if the child has never been touched at all.
+    childMoveCount: int = 0
 
 
 class BookEntry(BaseModel):
+    # Echoed back so the caller always has the exact move sequence this
+    # entry represents, regardless of whether a search has completed yet -
+    # e.g. to queue a follow-up move (POST moves + [nextMove]) right after
+    # clicking into a still-QUEUED/IN_PROGRESS position, without having to
+    # independently track the move history client-side.
+    moves: list[str]
     jobStatus: JobStatus
     totalVisits: int
     solvedStatus: SolvedStatus

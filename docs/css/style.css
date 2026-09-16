@@ -32,7 +32,8 @@ h1 {
   gap: 0.5em;
 }
 
-#toolbar button {
+#toolbar button,
+#toolbar a {
   font-size: 1em;
   padding: 0.4em 0.8em;
   background: var(--yellow);
@@ -40,6 +41,9 @@ h1 {
   border: 1px solid var(--green);
   border-radius: 4px;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  line-height: 1.2;
 }
 
 #settings-btn {
@@ -191,6 +195,19 @@ h1 {
   color: var(--green-dark);
 }
 
+/* More compact overall than the 5x5 page - this one has a wide board, a
+   toolbar and a full moves table to fit on the same (ideally phone-sized)
+   screen, so it can't afford the 5x5 page's larger default text. */
+body.book-page {
+  font-size: 14px;
+}
+
+body.book-page h1 {
+  font-size: 1.3em;
+  margin: 0.3em 0;
+  white-space: nowrap;
+}
+
 /* The 5x5 page keeps #board's default (smaller) width; only the book builder
    needs the wider board for 19x19. */
 body.book-page #board {
@@ -231,9 +248,22 @@ body.book-page #board {
   opacity: 0.65;
 }
 
+/* Known to the book but not in allowedMoves right now (see book.js's
+   visibleMoves()/allowedMoveList()) - still shown, just dimmer than an
+   allowed one at the same expanded state, rather than hidden outright. */
+.stone.ghost.not-allowed {
+  opacity: 0.18;
+}
+
+.stone.ghost.expanded.not-allowed {
+  opacity: 0.4;
+}
+
 #moves-wrap {
   overflow-x: auto;
+  overflow-y: auto;
   max-width: 100%;
+  max-height: 40vh; /* scrolls internally instead of pushing the board off-screen */
 }
 
 #moves-table {
@@ -251,6 +281,18 @@ body.book-page #board {
   text-align: left;
 }
 
+/* Plays the move (see book.js's playMove) - styled like the rest of the
+   page's controls rather than a default blue underlined link. */
+#moves-table a.move-link {
+  color: var(--green-dark);
+  text-decoration: none;
+  font-weight: bold;
+}
+
+#moves-table a.move-link:hover {
+  text-decoration: underline;
+}
+
 #moves-table button.queue-btn {
   font-size: 0.85em;
   padding: 0.15em 0.6em;
@@ -259,4 +301,17 @@ body.book-page #board {
   border: 1px solid var(--green);
   border-radius: 4px;
   cursor: pointer;
+}
+
+#moves-table button.remove-btn {
+  font-size: 0.9em;
+  padding: 0.1em 0.4em;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#moves-table button.remove-btn:hover {
+  border-color: var(--last-move);
 }

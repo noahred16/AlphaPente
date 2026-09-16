@@ -217,6 +217,9 @@ cython_debug/
 .vscode/
 
 *.db
+# RocksDB "secondary" reader state (api/kv_store.py's get_book_db_reader) -
+# *.db above doesn't match this, it doesn't end in ".db".
+*.db-secondary/
 
 templates/
 

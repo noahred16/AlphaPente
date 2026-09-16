@@ -35,6 +35,53 @@ def test_evaluate_position_runs_engine_and_persists_result(db):
     assert entry["result"] == result
 
 
+def test_evaluate_position_serializes_concurrent_searches(db, monkeypatch):
+    """_search_semaphore exists precisely for this: several evaluate_position
+    tasks dispatched at once (e.g. via the worker's --pool=threads) must
+    never actually run run_search() at the same time - each search assumes
+    it can use the whole machine (NUM_THREADS worker threads, ARENA_SIZE_GB
+    memory), so running more than one concurrently oversubscribes both.
+    run_search is faked out (with an artificial delay to force real overlap
+    between threads) rather than run for real here - the point is proving
+    mutual exclusion, not exercising the engine again."""
+    import threading
+    import time
+
+    concurrent = 0
+    max_concurrent = 0
+    lock = threading.Lock()
+
+    def fake_run_search(moves, iterations, *args, **kwargs):
+        nonlocal concurrent, max_concurrent
+        with lock:
+            concurrent += 1
+            max_concurrent = max(max_concurrent, concurrent)
+        time.sleep(0.05)
+        with lock:
+            concurrent -= 1
+        return {
+            "simulations": iterations,
+            "solvedStatus": "UNSOLVED",
+            "rootAvgValue": 0.0,
+            "bestMove": None,
+            "topMoves": [],
+        }
+
+    monkeypatch.setattr("api.tasks.book.run_search", fake_run_search)
+
+    threads = [
+        threading.Thread(target=evaluate_position, args=([f"A{i + 1}"],), kwargs={"target_visits": 1, "db": db})
+        for i in range(5)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert all(not t.is_alive() for t in threads), "a thread is still stuck"
+
+    assert max_concurrent == 1
+
+
 def test_set_allowed_moves_persists_and_reports_status(db):
     moves = ["K10", "L9"]
     # Enough sims that the search reliably produces several distinct top
@@ -57,3 +104,95 @@ def test_set_allowed_moves_persists_and_reports_status(db):
     entry = get_entry(compute_hash(moves), db=db)
     assert entry["allowedMoves"] == [allowed_move]
     assert entry["result"] == result  # untouched by the allowed-moves update
+
+
+def test_set_allowed_moves_reports_moves_set_before_any_evaluation(db):
+    """Real bug this reproduces: allowedMoves set on a position with no
+    result yet (moves + [nextMove] added ad hoc before its own evaluation
+    has run) used to come back with an empty updatedMoves - known_moves was
+    built only from result["topMoves"], which doesn't exist yet."""
+    moves = ["K10"]
+
+    response = set_allowed_moves(moves, ["L9", "K12"], db=db)
+
+    assert response["solvedStatus"] == "UNSOLVED"
+    assert response["updatedMoves"] == [
+        {"move": "L9", "isAllowed": True},
+        {"move": "K12", "isAllowed": True},
+    ]
+
+
+def test_set_allowed_moves_deletes_a_removed_moves_sole_owned_subtree(db):
+    """The trash icon's actual contract: removing a move that was only ever
+    reachable through this position deletes its data outright, not just
+    hides it - see kv_store.delete_position_if_orphaned."""
+    from api.kv_store import get_entry
+    from api.zobrist import compute_hash
+
+    moves = ["K10"]
+    set_allowed_moves(moves, ["L9"], db=db)
+    l9_hash = compute_hash(moves + ["L9"])
+    assert get_entry(l9_hash, db=db) is not None  # sanity: it really exists first
+
+    set_allowed_moves(moves, [], db=db)  # trash L9
+
+    assert get_entry(l9_hash, db=db) is None
+
+
+def test_set_allowed_moves_only_detaches_a_removed_move_with_another_parent(db):
+    """A transposition - simulated here via a second, fabricated parentHashes
+    edge (see test_kv_store.py for the same check at the kv_store level):
+    removing a move from one parent's allowed set must not destroy data
+    another position still legitimately relies on - just detach it."""
+    from api.kv_store import add_parent_edge, get_entry
+    from api.zobrist import compute_hash
+
+    set_allowed_moves(["K10"], ["L9"], db=db)
+    l9_hash = compute_hash(["K10", "L9"])
+    add_parent_edge(["K10", "L9"], parent_hash="some-other-parent", db=db)  # a second real parent
+
+    set_allowed_moves(["K10"], [], db=db)  # trash L9 from K10's list only
+
+    entry = get_entry(l9_hash, db=db)
+    assert entry is not None  # still wanted elsewhere
+    assert entry["parentHashes"] == ["some-other-parent"]
+
+
+def test_evaluate_position_merges_own_top_moves_into_allowed_moves(db):
+    """Real bug this reproduces: a move manually added (via set_allowed_moves)
+    before its own evaluation finished used to end up as the *only* thing in
+    allowedMoves once the search completed - the engine's own top moves
+    stayed permanently unapproved (isAllowed: false in the API response)
+    unless someone clicked each one by hand. A move the engine itself found
+    and ranked should count as allowed by default; opting one out is a
+    separate, later PUT that removes it."""
+    moves = ["K10"]
+    set_allowed_moves(moves, ["L9"], db=db)  # ad hoc, before any evaluation
+
+    result = evaluate_position(moves, target_visits=1000, db=db)
+    engine_moves = {m["move"] for m in result["topMoves"]}
+
+    from api.kv_store import get_entry
+    from api.zobrist import compute_hash
+
+    entry = get_entry(compute_hash(moves), db=db)
+    assert "L9" in entry["allowedMoves"]  # the ad-hoc move survives
+    assert engine_moves <= set(entry["allowedMoves"])  # every engine-found move is allowed too
+
+
+def test_set_allowed_moves_then_evaluate_merges_engine_moves_into_updated_set(db):
+    """The other half of the same workflow: once the evaluation this was
+    set ahead of actually finishes, a later set_allowed_moves call should
+    report both the originally ad-hoc move and whatever the engine itself
+    ranked - not lose either side."""
+    moves = ["K10"]
+    set_allowed_moves(moves, ["L9"], db=db)  # ad hoc, before any evaluation
+
+    result = evaluate_position(moves, target_visits=1000, db=db)
+    engine_move = result["topMoves"][0]["move"]
+
+    response = set_allowed_moves(moves, ["L9"], db=db)  # re-set after evaluation finished
+
+    reported_moves = {m["move"] for m in response["updatedMoves"]}
+    assert "L9" in reported_moves  # the ad-hoc move is still tracked
+    assert engine_move in reported_moves  # the engine's own finding shows up too

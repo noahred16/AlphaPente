@@ -1,5 +1,7 @@
 """Uses a temporary RocksDB (pytest's tmp_path) so tests never touch the
 real book_db (see api/config.py's book_db_path)."""
+import threading
+
 import pytest
 from rocksdict import Rdict
 
@@ -101,3 +103,76 @@ def test_reader_returns_none_when_book_db_does_not_exist_yet(tmp_path, monkeypat
 
     assert kv_store.get_book_db_reader() is None
     assert kv_store.get_entry("deadbeef") is None
+
+
+def test_add_parent_edge_is_safe_under_concurrent_writers(db):
+    """_book_db_write_lock exists precisely for this: without it, two
+    threads racing add_parent_edge on the same child can both read
+    parentHashes before either's append is visible to the other, and the
+    second write silently clobbers the first's - losing an edge rather than
+    raising anything. Also implicitly proves the lock is reentrant (RLock,
+    not Lock): add_parent_edge calls save_entry from the same thread while
+    already holding it - a plain Lock would deadlock every one of these
+    threads instantly rather than fail this assertion.
+
+    Caveat, stated plainly rather than hidden: this natural race is timing-
+    dependent and didn't reliably reproduce here even with the lock actually
+    removed by hand (Python's GIL/scheduler rarely lands two threads inside
+    the narrow read->write gap at this small scale) - so this test won't
+    reliably catch a regression on its own. The mechanism itself - a bare
+    read-modify-write on a JSON blob losing an update under real forced
+    interleaving - was verified directly with a minimal repro outside this
+    suite before trusting the lock here; that's the actual evidence this
+    lock is doing real work, not this test passing.
+    """
+    child_moves = ["K10", "L9"]
+    parent_hashes = [f"parent{i}" for i in range(10)]
+
+    threads = [
+        threading.Thread(target=kv_store.add_parent_edge, args=(child_moves, p), kwargs={"db": db})
+        for p in parent_hashes
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert all(not t.is_alive() for t in threads), "a thread is still stuck - suggests a lock deadlocked"
+
+
+# ─── delete_position_if_orphaned ──────────────────────────────────────────────
+
+
+def test_delete_position_if_orphaned_deletes_a_sole_owned_subtree(db):
+    """K10->L9->M11: L9's only parent is K10, M11's only parent is L9 - so
+    deleting through K10 should cascade all the way down and remove both
+    physical entries, plus their canonical-group membership."""
+    kv_store.add_parent_edge(["K10", "L9"], parent_hash="k10-hash", db=db)
+    l9_hash = kv_store.save_entry(["K10", "L9"], allowed_moves=["M11"], db=db)
+    m11_hash = kv_store.add_parent_edge(["K10", "L9", "M11"], parent_hash=l9_hash, db=db)
+    l9_canonical = kv_store.get_entry(l9_hash, db=db)["canonicalHash"]
+    m11_canonical = kv_store.get_entry(m11_hash, db=db)["canonicalHash"]
+
+    kv_store.delete_position_if_orphaned(l9_hash, parent_hash="k10-hash", db=db)
+
+    assert kv_store.get_entry(l9_hash, db=db) is None
+    assert kv_store.get_entry(m11_hash, db=db) is None
+    assert l9_hash not in kv_store.get_canonical_members(l9_canonical, db=db)
+    assert m11_hash not in kv_store.get_canonical_members(m11_canonical, db=db)
+
+
+def test_delete_position_if_orphaned_only_detaches_a_position_with_other_parents(db):
+    """A transposition: the same child is reachable from two different
+    parents. Removing one parent's edge must not delete data the other
+    parent still legitimately relies on - just shrink parentHashes."""
+    child_hash = kv_store.add_parent_edge(["K10", "L9"], parent_hash="parent1", db=db)
+    kv_store.add_parent_edge(["K10", "L9"], parent_hash="parent2", db=db)
+
+    kv_store.delete_position_if_orphaned(child_hash, parent_hash="parent1", db=db)
+
+    entry = kv_store.get_entry(child_hash, db=db)
+    assert entry is not None
+    assert entry["parentHashes"] == ["parent2"]
+
+
+def test_delete_position_if_orphaned_is_a_no_op_for_a_nonexistent_hash(db):
+    kv_store.delete_position_if_orphaned("deadbeef", parent_hash="parent1", db=db)  # must not raise

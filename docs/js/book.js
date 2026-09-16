@@ -17,11 +17,10 @@ let Module, game;
 let moveHistory = [];  // move strings in play order, e.g. ["K10", "L9"]; always starts with the forced center opening
 let redoStack = [];    // move strings popped off by undo, replayed by redo
 let bookEntry = null;  // last GET /pente/book response for the current position, or null while loading
-let childStatuses = new Map(); // move -> BookEntry for that child position (current moveHistory + move) - see fetchChildStatuses
 let queuedMoves = loadQueuedMoves(); // "movesJSON|move" keys the user has queued, persisted across reloads - see queueKey()
 let requestToken = 0;  // guards against a stale fetch response overwriting a newer one
 let pollTimer = null;
-let addingAllowedMove = false; // guards against overlapping PUT /allowed-moves calls - see addAllowedMove
+let allowedMovesBusy = false; // guards against overlapping PUT /allowed-moves calls - see addAllowedMove/removeAllowedMove
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -48,6 +47,27 @@ function parseMoveStr(move) {
   let code = move.charCodeAt(0);
   if (code >= 'I'.charCodeAt(0)) code--;
   return { x: code - 'A'.charCodeAt(0), y: parseInt(move.slice(1), 10) - 1 };
+}
+
+// Same shape the backend enforces (api/schemas/book.py's MoveStr) - guards
+// against feeding a malformed move (e.g. a hand-edited URL) into game.makeMove,
+// which - like the native engine behind it - doesn't itself validate input.
+const MOVE_PATTERN = /^[A-HJ-T](?:[1-9]|1[0-9])$/;
+
+// --- URL <-> game state, so a refresh (or a shared link) resumes the same
+// position instead of always starting over from the forced center opening. ---
+function loadMovesFromUrl() {
+  const raw = new URLSearchParams(location.search).get('moves');
+  return raw ? raw.split(',').filter(m => MOVE_PATTERN.test(m)) : [];
+}
+
+function syncUrl() {
+  const params = new URLSearchParams();
+  if (moveHistory.length) params.set('moves', moveHistory.join(','));
+  // replaceState, not pushState: every move already has its own undo/redo
+  // entry in-app (see moveHistory/redoStack) - there's no need for the
+  // browser's own back/forward to also step through each one.
+  history.replaceState(null, '', moveHistory.length ? `?${params}` : location.pathname);
 }
 
 // --- Backend book API ---
@@ -106,43 +126,42 @@ function saveQueuedMoves() {
   }
 }
 
-// A candidate move's real state comes from its own book_db entry, not the
-// (currently always "false" - see book.py's _to_book_entry TODO) `expanded`
-// field on the parent's topMoves. Fetching it directly is safe here: every
-// move in bookEntry.topMoves was already recorded as its own entry by
-// add_parent_edge when the parent's search completed, so this never risks
-// triggering a fresh (potentially 900M-iteration) search the way GETting an
-// arbitrary unseen position would.
-async function fetchChildStatuses(topMoves) {
-  const entries = await Promise.all(
-    topMoves.map(m =>
-      fetchBookEntry([...moveHistory, m.move])
-        .then(entry => [m.move, entry])
-        .catch(() => [m.move, null])
-    )
-  );
-  return new Map(entries.filter(([, entry]) => entry !== null));
-}
-
-// Where a candidate move actually stands, combining its own book_db entry
-// with the locally-queued flag (which bridges the gap between a successful
-// POST and the worker actually picking the job up - see onQueueClick).
-function moveState(move) {
-  const child = childStatuses.get(move);
-  if (child && (child.totalVisits > 0 || child.bestMove !== null)) return 'expanded';
-  if (child && child.jobStatus === 'IN_PROGRESS') return 'in-progress';
-  if ((child && child.jobStatus === 'QUEUED') || queuedMoves.has(queueKey(move))) return 'queued';
+// Where a candidate move actually stands. `m.expanded` comes straight off
+// the single GET /pente/book response - the backend computes it by looking
+// up each move's own child position directly in book_db (see
+// _to_book_entry's expanded_state in api/routers/book.py), so this needs no
+// extra requests of its own. The locally-queued flag still fills one real
+// gap in that: book_db itself never records a "QUEUED" jobStatus (only the
+// Celery worker writes IN_PROGRESS, once it actually starts the job) - so a
+// move can sit queued-but-not-yet-started for a while, especially behind a
+// busy worker, with nothing in book_db yet to show for it.
+function moveState(m) {
+  if (m.expanded === 'true') return 'expanded';
+  if (m.expanded === 'in progress') return 'in-progress';
+  if (queuedMoves.has(queueKey(m.move))) return 'queued';
   return 'none';
 }
 
 // --- Game setup ---
-function newGame() {
+// `initialMoves` (from the URL - see loadMovesFromUrl) is replayed instead of
+// just the forced center opening, so a refresh or a shared link resumes the
+// same position. Stops at (and drops) the first illegal move it hits - a
+// stale or hand-edited URL - falling back to the plain forced opening if
+// nothing in it was even replayable.
+function newGame(initialMoves = []) {
   if (game) game.delete();
   game = new Module.Game(BOARD_SIZE, 1); // simulations param is unused - this Game is only used here for rule enforcement
   moveHistory = [];
   redoStack = [];
-  game.makeMove(CENTER, CENTER);
-  moveHistory.push(moveStr(CENTER, CENTER));
+  for (const m of initialMoves) {
+    const { x, y } = parseMoveStr(m);
+    if (!game.makeMove(x, y)) break;
+    moveHistory.push(m);
+  }
+  if (moveHistory.length === 0) {
+    game.makeMove(CENTER, CENTER);
+    moveHistory.push(moveStr(CENTER, CENTER));
+  }
   buildBoard();
   loadBookEntry();
 }
@@ -198,46 +217,107 @@ function renderBoard() {
     cells[y * BOARD_SIZE + x].classList.add('last-move');
   }
 
-  // Ghost overlay: the book's candidate replies for the side to move, numbered
-  // by rank. Not-yet-queued moves are faint; queued/in-progress/expanded ones
-  // are shown solid but still lighter than a real stone.
+  // Ghost overlay: every candidate reply the book knows about for the side
+  // to move, numbered by rank - allowed or not (see visibleMoves()). A
+  // not-currently-allowed one is dimmer still, distinguishing it, but no
+  // longer disappears outright the way removeAllowedMove used to make it.
+  // Not-yet-queued moves are faint; queued/in-progress/expanded ones are
+  // shown solid but still lighter than a real stone.
   if (bookEntry) {
     const toMoveColor = game.getCurrentPlayer() === 1 ? 'black' : 'white';
-    bookEntry.topMoves.forEach((m, i) => {
+    visibleMoves().forEach((m, i) => {
       const { x, y } = parseMoveStr(m.move);
       const cell = cells[y * BOARD_SIZE + x];
       if (cell.classList.contains('occupied')) return; // shouldn't happen, but never draw a ghost over a real stone
-      const expanded = moveState(m.move) !== 'none';
+      const expanded = moveState(m) !== 'none';
       const ghost = document.createElement('div');
-      ghost.className = 'stone ghost ' + toMoveColor + (expanded ? ' expanded' : '');
+      ghost.className = 'stone ghost ' + toMoveColor + (expanded ? ' expanded' : '') + (m.isAllowed ? '' : ' not-allowed');
       ghost.textContent = String(i + 1);
       cell.appendChild(ghost);
     });
   }
 }
 
+// Every candidate move known for this position, allowed or not. isAllowed
+// is a proof-relevance flag (see api/kv_store.py's compute_book_solved_status),
+// not a visibility filter - it used to double as one here, which meant a
+// fresh evaluation's own best move could come back marked isAllowed:false
+// (nobody had added it to allowedMoves yet, since nobody could have known
+// about it beforehand) and silently vanish from view. Not-allowed moves are
+// still shown (see renderBoard/renderMovesTable), just visually distinguished.
+function visibleMoves() {
+  return bookEntry ? bookEntry.topMoves : [];
+}
+
+// The subset actually in the position's allowedMoves right now - what the
+// moves table lists (see renderMovesTable) and the base for building a new
+// list to PUT (see addAllowedMove/removeAllowedMove). Deliberately separate
+// from visibleMoves(): building the PUT payload from the *unfiltered* list
+// would silently allow everything just by adding one move.
+function allowedTopMoves() {
+  return bookEntry ? bookEntry.topMoves.filter(m => m.isAllowed) : [];
+}
+
+function allowedMoveList() {
+  return allowedTopMoves().map(m => m.move);
+}
+
 function renderMovesTable() {
   movesBody.innerHTML = '';
   if (!bookEntry) return;
-  bookEntry.topMoves.forEach((m, i) => {
+  // Only already-allowed moves - unlike the board's ghost overlay (see
+  // renderBoard), which still shows every candidate the book knows about,
+  // this table is specifically the allowed-move list: every row here is
+  // already "in", so they render identically (no dimming) and only ever
+  // offer removal, never adding - a not-yet-allowed move gets added by
+  // clicking it on the board instead (see onCellClick).
+  allowedTopMoves().forEach((m, i) => {
     const row = document.createElement('tr');
-    row.innerHTML = `<td>${i + 1}</td><td>${m.move}</td><td>${m.avgValue.toFixed(3)}</td><td>${m.status}</td><td></td>`;
-    const actionCell = row.lastElementChild;
+    // avgValue is null for a manually-added move the engine hasn't ranked
+    // (or hasn't run on) yet - see _to_book_entry in api/routers/book.py.
+    const avgValue = m.avgValue === null ? 'N/A' : m.avgValue.toFixed(3);
+    row.innerHTML = `<td>${i + 1}</td><td><a href="#" class="move-link">${m.move}</a></td><td>${avgValue}</td><td></td><td>${m.childMoveCount}</td><td></td>`;
+    const [statusCell, allowedCell] = [row.children[3], row.children[5]];
 
-    const state = moveState(m.move);
-    if (state === 'expanded') {
-      actionCell.textContent = 'Expanded';
-    } else if (state === 'in-progress') {
-      actionCell.textContent = 'In progress…';
-    } else if (state === 'queued') {
-      actionCell.textContent = 'Queued';
+    // Same as clicking this move's cell on the board (see onCellClick) -
+    // every row here is already allowed, so this always plays it.
+    row.querySelector('.move-link').addEventListener('click', e => {
+      e.preventDefault();
+      playMove(m.move);
+    });
+
+    // One merged column: the search's own result once it's settled
+    // something (a real answer beats a progress indicator), otherwise
+    // whatever's actionable right now - the same states the old separate
+    // Status/Action columns showed, just never both at once.
+    if (m.status !== 'UNSOLVED') {
+      statusCell.textContent = m.status;
     } else {
-      const btn = document.createElement('button');
-      btn.className = 'queue-btn';
-      btn.textContent = 'Queue';
-      btn.addEventListener('click', () => onQueueClick(m.move, btn));
-      actionCell.appendChild(btn);
+      const state = moveState(m);
+      if (state === 'expanded') {
+        statusCell.textContent = 'Expanded';
+      } else if (state === 'in-progress') {
+        statusCell.textContent = 'In progress…';
+      } else if (state === 'queued') {
+        statusCell.textContent = 'Queued';
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'queue-btn';
+        btn.textContent = 'Queue';
+        btn.addEventListener('click', () => onQueueClick(m.move, btn));
+        statusCell.appendChild(btn);
+      }
     }
+
+    // Always a remove control - every row here is already allowed (see
+    // allowedTopMoves()), so there's never an add case to offer.
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = `Delete ${m.move} (and its subtree, unless reachable elsewhere)`;
+    removeBtn.textContent = '🗑';
+    removeBtn.addEventListener('click', () => removeAllowedMove(m.move, removeBtn));
+    allowedCell.appendChild(removeBtn);
+
     movesBody.appendChild(row);
   });
 }
@@ -245,8 +325,11 @@ function renderMovesTable() {
 function renderStatus() {
   capturesEl.textContent = `Captures — Black: ${game.getBlackCaptures()}, White: ${game.getWhiteCaptures()}`;
 
+  // Only worth reporting the book-level solved status once it's actually
+  // settled - UNSOLVED is the default/common case, not news.
+  const solvedSuffix = bookEntry && bookEntry.solvedStatus !== 'UNSOLVED' ? `, ${bookEntry.solvedStatus}` : '';
   const jobLine = bookEntry
-    ? ` — book job: ${bookEntry.jobStatus} (${bookEntry.totalVisits} visits, ${bookEntry.solvedStatus})`
+    ? ` — book job: ${bookEntry.jobStatus} (${bookEntry.totalVisits} visits${solvedSuffix})`
     : ' — loading book…';
 
   if (game.isGameOver()) {
@@ -259,41 +342,73 @@ function renderStatus() {
 }
 
 // --- Move / history handlers ---
-// Clicking an empty cell that's already a book candidate for this position
-// plays it as an actual move (drilling into that line). Clicking an empty
-// cell that isn't one of the book's candidates doesn't move the game along
-// at all - it just proposes that move for consideration by adding it to the
-// position's allowed-move list (PUT /pente/book/allowed-moves).
+// Drills into `move` as an actual play - shared by clicking an allowed cell
+// on the board (see onCellClick) and clicking a move's own link in the
+// table (see renderMovesTable). Every table row is already an allowed move
+// (see allowedTopMoves()), so this should always succeed there; the legality
+// check is still real, not just defensive, for the board's own click path.
+function playMove(move) {
+  if (game.isGameOver()) return;
+  const { x, y } = parseMoveStr(move);
+  if (!game.makeMove(x, y)) return; // illegal move (turn/capture/placement rules enforced by the engine)
+  moveHistory.push(move);
+  redoStack = [];
+  loadBookEntry();
+}
+
+// Clicking an empty cell already in allowedMoves ("the list" - see
+// allowedTopMoves()) plays it (see playMove). Clicking any other empty cell -
+// a fresh move the book has never seen, or one the engine already suggests
+// but nobody's approved yet (shown as a dim ghost - see renderBoard) -
+// doesn't move the game along; it adds that move to the position's
+// allowed-move list instead (PUT /pente/book/allowed-moves), which is the
+// only way a move reaches the table now.
 function onCellClick(x, y) {
   if (game.isGameOver()) return;
   if (game.getStoneAt(x, y) !== 0) return;
 
   const move = moveStr(x, y);
-  const isCandidate = bookEntry && bookEntry.topMoves.some(m => m.move === move);
-  if (isCandidate) {
-    if (!game.makeMove(x, y)) return; // illegal move (turn/capture/placement rules enforced by the engine)
-    moveHistory.push(move);
-    redoStack = [];
-    loadBookEntry();
+  if (allowedMoveList().includes(move)) {
+    playMove(move);
   } else {
     addAllowedMove(move);
   }
 }
 
 async function addAllowedMove(move) {
-  if (!bookEntry || addingAllowedMove) return;
-  addingAllowedMove = true;
-  const allowed = bookEntry.topMoves.filter(m => m.isAllowed).map(m => m.move);
+  if (!bookEntry || allowedMovesBusy) return;
+  const allowed = allowedMoveList();
   if (!allowed.includes(move)) allowed.push(move);
+  await applyAllowedMoves(allowed, `Adding ${move} to allowed moves…`, `Error adding ${move} to allowed moves`);
+}
 
-  statusEl.textContent = `Adding ${move} to allowed moves…`;
+async function removeAllowedMove(move, btn) {
+  if (!bookEntry || allowedMovesBusy) return;
+  // Not just a visibility toggle - api/tasks/book.py's set_allowed_moves
+  // deletes the move's own subtree outright (its result, its own allowed
+  // moves, everything under it) if this position was its only parent -
+  // real, possibly expensive computation, not recoverable short of
+  // re-running the search. It's only ever *detached* (not deleted) if some
+  // other position also has it in its own allowed moves.
+  if (!confirm(`Delete ${move} and everything under it (unless it's also reachable from elsewhere)?`)) return;
+  btn.disabled = true;
+  const allowed = allowedMoveList().filter(m => m !== move);
+  await applyAllowedMoves(allowed, `Removing ${move} from allowed moves…`, `Error removing ${move} from allowed moves`, btn);
+}
+
+// `btn` (removeAllowedMove only) gets re-enabled on failure - on success the
+// row it belongs to no longer exists after loadBookEntry() re-renders the table.
+async function applyAllowedMoves(allowed, pendingMessage, errorPrefix, btn) {
+  allowedMovesBusy = true;
+  statusEl.textContent = pendingMessage;
   try {
     await putAllowedMoves(moveHistory, allowed);
     await loadBookEntry();
   } catch (e) {
-    statusEl.textContent = `Error adding ${move} to allowed moves: ${e.message}`;
+    statusEl.textContent = `${errorPrefix}: ${e.message}`;
+    if (btn) btn.disabled = false;
   } finally {
-    addingAllowedMove = false;
+    allowedMovesBusy = false;
   }
 }
 
@@ -318,8 +433,8 @@ function redoMove() {
 // results without a manual refresh.
 async function loadBookEntry() {
   stopPolling();
+  syncUrl(); // every moveHistory change (play/undo/redo/reset) funnels through here
   bookEntry = null;
-  childStatuses = new Map();
   render();
 
   const token = ++requestToken;
@@ -327,16 +442,14 @@ async function loadBookEntry() {
     const entry = await fetchBookEntry(moveHistory);
     if (token !== requestToken) return; // superseded by a newer request
     bookEntry = entry;
-    childStatuses = await fetchChildStatuses(entry.topMoves);
-    if (token !== requestToken) return;
 
     // Once a move's own entry confirms it's actually expanded, the locally-queued
     // flag has served its purpose (bridging POST -> the worker picking it up) -
     // drop it so localStorage doesn't grow forever.
     let pruned = false;
-    for (const m of entry.topMoves) {
+    for (const m of visibleMoves()) {
       const key = queueKey(m.move);
-      if (queuedMoves.has(key) && moveState(m.move) === 'expanded') {
+      if (queuedMoves.has(key) && moveState(m) === 'expanded') {
         queuedMoves.delete(key);
         pruned = true;
       }
@@ -349,7 +462,7 @@ async function loadBookEntry() {
   }
   render();
 
-  const childPending = bookEntry.topMoves.some(m => moveState(m.move) === 'queued' || moveState(m.move) === 'in-progress');
+  const childPending = visibleMoves().some(m => moveState(m) === 'queued' || moveState(m) === 'in-progress');
   if (bookEntry.jobStatus === 'QUEUED' || bookEntry.jobStatus === 'IN_PROGRESS' || childPending) {
     startPolling();
   }
@@ -381,12 +494,16 @@ async function onQueueClick(move, btn) {
   }
 }
 
-resetBtn.addEventListener('click', newGame);
+// Reset always starts fresh at the center opening, ignoring the URL (unlike
+// the initial load below) - and () => newGame(), not newGame directly, since
+// addEventListener would otherwise pass the click event itself as
+// initialMoves.
+resetBtn.addEventListener('click', () => newGame());
 undoBtn.addEventListener('click', undoMove);
 redoBtn.addEventListener('click', redoMove);
 refreshBtn.addEventListener('click', loadBookEntry);
 
 PenteModule().then(mod => {
   Module = mod;
-  newGame();
+  newGame(loadMovesFromUrl());
 });
