@@ -907,10 +907,17 @@ std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
     entries.reserve(root_->childCapacity);
     for (int i = 0; i < root_->childCapacity; ++i) {
         const ThreadSafeNode *child = root_->children[i];
-        if (!child) continue;
+        // A move the heuristic flagged as tactically relevant (open three,
+        // capture threat/defense, four threat, etc. - see
+        // HeuristicEvaluator::evaluatePolicy, the only place a nonzero prior
+        // gets assigned) belongs in the report even if MCTS hasn't visited
+        // it yet - so this doesn't skip an elevated-prior move just because
+        // it has no node.
+        bool elevated = root_->priors[i] > 0.0f;
+        if (!child && !elevated) continue;
         entries.push_back({i,
-                           child->visits.load(std::memory_order_relaxed),
-                           child->solvedStatus.load(std::memory_order_relaxed)});
+                           child ? child->visits.load(std::memory_order_relaxed) : 0,
+                           child ? child->solvedStatus.load(std::memory_order_relaxed) : SolvedStatus::UNSOLVED});
     }
     std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
         auto rank = [](SolvedStatus s) {
@@ -931,13 +938,24 @@ std::vector<ParallelMCTS::TopMove> ParallelMCTS::getTopMoves(int topN) const {
         initialGame_.getCanonicalHash(rootSym);
     }
 
-    int show = std::min(topN, static_cast<int>(entries.size()));
-    for (int k = 0; k < show; ++k) {
-        int i = entries[k].index;
+    // Report the top `topN` by strength (status, then visits - as before),
+    // plus any heuristically-elevated move that fell outside that cutoff:
+    // topN or "all elevated moves", whichever is more.
+    std::vector<int> shown;
+    shown.reserve(entries.size());
+    for (int k = 0; k < static_cast<int>(entries.size()) && k < topN; ++k)
+        shown.push_back(entries[k].index);
+    for (const Entry &e : entries) {
+        if (root_->priors[e.index] > 0.0f &&
+            std::find(shown.begin(), shown.end(), e.index) == shown.end())
+            shown.push_back(e.index);
+    }
+
+    for (int i : shown) {
         const ThreadSafeNode *child = root_->children[i];
-        int32_t visits = child->visits.load(std::memory_order_relaxed);
+        int32_t visits = child ? child->visits.load(std::memory_order_relaxed) : 0;
         double avgVal = visits > 0 ? child->totalValue.load(std::memory_order_relaxed) / visits : 0.0;
-        SolvedStatus status = child->solvedStatus.load(std::memory_order_relaxed);
+        SolvedStatus status = child ? child->solvedStatus.load(std::memory_order_relaxed) : SolvedStatus::UNSOLVED;
         double puct = status == SolvedStatus::SOLVED_WIN  ?  std::numeric_limits<double>::infinity() :
                       (status == SolvedStatus::SOLVED_LOSS || status == SolvedStatus::SOLVED_DRAW)
                           ? -std::numeric_limits<double>::infinity() :

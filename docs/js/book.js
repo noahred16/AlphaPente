@@ -201,6 +201,7 @@ function renderBoard() {
       const cell = cells[y * BOARD_SIZE + x];
       cell.innerHTML = '';
       cell.classList.remove('last-move');
+      cell.style.boxShadow = '';
       const stoneVal = game.getStoneAt(x, y); // 0=empty, 1=black, 2=white
       cell.classList.toggle('occupied', stoneVal !== 0);
       if (stoneVal === 1 || stoneVal === 2) {
@@ -225,10 +226,22 @@ function renderBoard() {
   // shown solid but still lighter than a real stone.
   if (bookEntry) {
     const toMoveColor = game.getCurrentPlayer() === 1 ? 'black' : 'white';
-    visibleMoves().forEach((m, i) => {
+    const moves = visibleMoves();
+    // Priors come straight from the engine's own heuristic policy (see
+    // HeuristicEvaluator::evaluatePolicy) - a move it flagged as tactically
+    // relevant (open three, capture threat/defense, four threat, etc.) gets
+    // a nonzero prior, a "quiet" move gets exactly 0. Darkening scales with
+    // prior relative to the strongest one on the board, so the sharpest
+    // threats stand out most - not touching the heuristic itself, just
+    // reflecting what it already computed.
+    const maxPrior = Math.max(0, ...moves.map(m => m.prior));
+    moves.forEach((m, i) => {
       const { x, y } = parseMoveStr(m.move);
       const cell = cells[y * BOARD_SIZE + x];
       if (cell.classList.contains('occupied')) return; // shouldn't happen, but never draw a ghost over a real stone
+      if (m.prior > 0 && maxPrior > 0) {
+        cell.style.boxShadow = `inset 0 0 0 999px rgba(0,0,0,${0.35 * m.prior / maxPrior})`;
+      }
       const expanded = moveState(m) !== 'none';
       const ghost = document.createElement('div');
       ghost.className = 'stone ghost ' + toMoveColor + (expanded ? ' expanded' : '') + (m.isAllowed ? '' : ' not-allowed');
@@ -276,8 +289,8 @@ function renderMovesTable() {
     // avgValue is null for a manually-added move the engine hasn't ranked
     // (or hasn't run on) yet - see _to_book_entry in api/routers/book.py.
     const avgValue = m.avgValue === null ? 'N/A' : m.avgValue.toFixed(3);
-    row.innerHTML = `<td>${i + 1}</td><td><a href="#" class="move-link">${m.move}</a></td><td>${avgValue}</td><td></td><td>${m.childMoveCount}</td><td></td>`;
-    const [statusCell, allowedCell] = [row.children[3], row.children[5]];
+    row.innerHTML = `<td>${i + 1}</td><td><a href="#" class="move-link">${m.move}</a></td><td>${avgValue}</td><td>${m.prior.toFixed(3)}</td><td>${m.childMoveCount}</td><td></td><td></td>`;
+    const [statusCell, allowedCell] = [row.children[5], row.children[6]];
 
     // Same as clicking this move's cell on the board (see onCellClick) -
     // every row here is already allowed, so this always plays it.
