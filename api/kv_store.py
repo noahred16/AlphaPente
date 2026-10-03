@@ -99,15 +99,25 @@ def save_entry(
                 # which level (Fast/Medium/Deep) a position was last searched
                 # at, and offer re-running it deeper.
                 "targetVisits": target_visits if target_visits is not None else existing.get("targetVisits"),
-                # Graph bookkeeping for solved-status propagation - see
-                # propagate_book_status(). Not settable via save_entry itself:
-                # parentHashes only ever grows through add_parent_edge(), and
-                # bookSolvedStatus is only ever recomputed through
-                # compute_book_solved_status(), never hand-set here, so a plain
+                # Graph bookkeeping for solved-status/best-move propagation -
+                # see propagate_book_status(). None of these four are settable
+                # via save_entry itself: parentHashes only ever grows through
+                # add_parent_edge(), and the other three are only ever
+                # recomputed through compute_book_solved_status()/
+                # compute_book_best_move(), never hand-set here, so a plain
                 # save_entry() call (e.g. just bumping jobStatus) can't
-                # accidentally clobber either with a stale value.
+                # accidentally clobber any of them with a stale value.
                 "parentHashes": existing.get("parentHashes", []),
                 "bookSolvedStatus": existing.get("bookSolvedStatus", "UNSOLVED"),
+                # The live best move/value among this position's own
+                # currently-allowed moves (see compute_book_best_move) - None
+                # until the first propagate_book_status call for this exact
+                # entry (e.g. a pre-existing entry from before this field
+                # existed); api/routers/book.py falls back to the engine's own
+                # frozen result["bestMove"]/["rootAvgValue"] snapshot for
+                # exactly that case.
+                "bookBestMove": existing.get("bookBestMove"),
+                "bookBestValue": existing.get("bookBestValue"),
                 # Which symmetry group this exact physical orientation belongs to
                 # - see add_canonical_member/get_group_status. Recomputed every
                 # save (cheap, in-process) so it's never stale.
@@ -302,9 +312,20 @@ def compute_book_solved_status(entry: dict, db: Rdict) -> str:
        of this exact position might already be resolved even though this
        orientation has never itself been evaluated.
     3. Otherwise, whatever can be concluded by combining candidate children's
-       own book-level statuses (each one also checked via its own symmetry
-       group, not just its exact physical hash - so a child that's only
-       *itself* known through a symmetric twin still counts). This is what
+       freshest known statuses - each one's own independently-computed
+       book-level status (via its symmetry group, so a child that's only
+       *itself* known through a symmetric twin still counts) if it has one,
+       else this search's own one-ply engine read on it (see
+       _to_book_entry.child_status in api/routers/book.py, which already
+       does the same fallback for display, and compute_book_best_move's own
+       status_for). That fallback matters even when the child's own position
+       has never been independently touched at all (still bare, or doesn't
+       exist as its own entry yet) - this search can still have already
+       proven that exact move as part of its own internal search (a real
+       case: a search that ran long enough to fully solve several of its own
+       replies without any of them ever being expanded as their own
+       position), and skipping that would treat "never independently
+       searched" as indistinguishable from "unproven" instead. This is what
        makes book-level status more powerful than result["solvedStatus"]
        alone - each child was evaluated in its own separate, bounded search
        with no way to know what any sibling's search found, so a forced
@@ -337,32 +358,139 @@ def compute_book_solved_status(entry: dict, db: Rdict) -> str:
     else:
         candidate_moves = []
 
+    engine_status_by_move = {m["move"]: m.get("status", "UNSOLVED") for m in result["topMoves"]} if result else {}
+
     child_statuses = []
     for move in candidate_moves:
         child_canonical_hash, _ = compute_canonical_hash(entry["moves"] + [move])
-        child_statuses.append(get_group_status(child_canonical_hash, db=db))
+        book_status = get_group_status(child_canonical_hash, db=db)
+        child_statuses.append(book_status if book_status != "UNSOLVED" else engine_status_by_move.get(move, "UNSOLVED"))
 
     return combine_child_statuses(child_statuses)
 
 
+def compute_book_best_move(entry: dict, db: Rdict) -> tuple[str | None, float | None]:
+    """The best currently-allowed move for this position, and its value - the
+    latter in the same perspective as result["rootAvgValue"] (whoever just
+    moved *into* this position, not whoever's about to move here - see this
+    function's ranking logic below for the perspective actually used to
+    compare candidates, which is the opposite of this) - or (None, None) if
+    there's no result yet, or no candidate moves at all.
+
+    Unlike result["bestMove"]/["rootAvgValue"] (the engine's own one-shot
+    snapshot from this position's own last search, which never updates when
+    something *else* changes - see propagate_book_status), this is always
+    recomputed fresh from the current allowed set and each candidate's
+    freshest known status/value, the same way compute_book_solved_status is:
+    a move's own book-level status (via its canonical group, so a symmetric
+    twin's proof counts too) beats the engine's stale one-ply read on it.
+
+    Ranks by: a proven win beats everything; among the rest, not-a-proven-
+    loss beats a proven loss; ties broken by the deepest known value for that
+    move - a child's own best reply if it has one (one ply deeper, and so
+    flipped back to this position's own perspective - see
+    docs/js/book.js's childValueForViewer for why), else this move's own
+    avgValue from the engine's one-ply read (already in this position's own
+    perspective - no flip) - the exact same ranking
+    docs/js/book.js's compareByValue already uses to sort the table, so
+    "best" here always agrees with whatever sorts first there.
+    """
+    result = entry.get("result")
+    if not result:
+        return None, None
+
+    allowed = entry.get("allowedMoves")
+    candidate_moves = allowed if allowed is not None else [m["move"] for m in result["topMoves"]]
+    if not candidate_moves:
+        return None, None
+
+    engine_moves = {m["move"]: m for m in result["topMoves"]}
+
+    def status_for(move: str) -> str:
+        child_canonical_hash, _ = compute_canonical_hash(entry["moves"] + [move])
+        group_status = get_group_status(child_canonical_hash, db=db)
+        if group_status != "UNSOLVED":
+            return group_status
+        engine_move = engine_moves.get(move)
+        return engine_move.get("status", "UNSOLVED") if engine_move else "UNSOLVED"
+
+    def value_for(move: str) -> float | None:
+        child = get_entry(compute_hash(entry["moves"] + [move]), db=db)
+        if child is not None and child.get("bookBestMove") is not None:
+            # The child's own live best value (see this function's own
+            # return statement below) is already in the perspective of
+            # whoever moved *into* the child - i.e. this position's own
+            # mover, exactly what's needed here - and, being recursive, it's
+            # already informed by whatever's deepest at the child's own
+            # children too, not just one ply down. No flip, no re-deriving
+            # it from a frozen topMoves snapshot.
+            return child.get("bookBestValue")
+
+        # bookBestMove not computed yet for this child (predates the field,
+        # or hasn't been touched by set_allowed_moves/evaluate_position
+        # since) - fall back to a plain one-ply read of its frozen
+        # result["bestMove"] snapshot instead. .get(...), not indexing: a
+        # topMoves entry isn't guaranteed to carry every field (e.g. a
+        # hand-built test fixture) - treat a missing one as "nothing known"
+        # rather than raising.
+        child_result = child.get("result") if child else None
+        child_best_move = child_result.get("bestMove") if child_result else None
+        if child_best_move:
+            child_top_move = next(
+                (tm for tm in child_result.get("topMoves", []) if tm.get("move") == child_best_move), None
+            )
+            if child_top_move is not None and "avgValue" in child_top_move:
+                return -child_top_move["avgValue"]
+        engine_move = engine_moves.get(move)
+        return engine_move.get("avgValue") if engine_move else None
+
+    def rank_key(move: str) -> tuple:
+        status = status_for(move)
+        status_rank = 0 if status == "SOLVED_WIN" else (2 if status == "SOLVED_LOSS" else 1)
+        value = value_for(move)
+        # A move with no numeric read at all sorts after one that has a
+        # known value, better or worse - same convention as
+        # docs/js/book.js's compareByValue.
+        return (status_rank, 0 if value is not None else 1, -(value or 0.0))
+
+    best_move = min(candidate_moves, key=rank_key)
+    best_value = value_for(best_move)
+    # Flipped before returning: value_for (like rank_key/childValueForViewer)
+    # works in the perspective of whoever's choosing among these moves, to
+    # rank them correctly against each other - but bestValue itself has to
+    # match result["rootAvgValue"]'s own established convention (the
+    # perspective of whoever just moved *into* this position, not whoever's
+    # about to move here - see docs/js/book.js's childValueForViewer for how
+    # that convention was confirmed), since api/routers/book.py falls back
+    # to that raw value verbatim for an entry this hasn't been computed for
+    # yet - the two must agree, or the same field would mean opposite things
+    # depending on whether propagate_book_status happened to already run.
+    return best_move, (None if best_value is None else -best_value)
+
+
 def propagate_book_status(hash_hex: str, db: Rdict | None = None) -> None:
-    """Recompute hash_hex's bookSolvedStatus and, only if it actually
-    changed, recurse into every recorded parent (see add_parent_edge) to do
-    the same - a change (in either direction: newly proved, or reverted back
-    to UNSOLVED because a new unresolved child was added to allowedMoves)
-    can flip an ancestor's own conclusion, however far up the DAG. Stops the
-    instant a level doesn't change, or there are no more parents. No cycle
-    risk: capture counts (baked into the hash) never decrease and every move
-    adds exactly one stone, so the position graph is provably acyclic -
-    this can't loop forever.
+    """Recompute hash_hex's bookSolvedStatus and bookBestMove/bookBestValue
+    and, only if any of them actually changed, recurse into every recorded
+    parent (see add_parent_edge) to do the same - a change (a newly proved
+    status, one reverted back to UNSOLVED because a new unresolved child was
+    added to allowedMoves, a move removed that was the best one, or a
+    child's own deeper search revealing a better value) can flip an
+    ancestor's own conclusion, however far up the DAG. Stops the instant a
+    level doesn't change, or there are no more parents. No cycle risk:
+    capture counts (baked into the hash) never decrease and every move adds
+    exactly one stone, so the position graph is provably acyclic - this
+    can't loop forever.
 
     Also walks every symmetric twin's parents (not the twins themselves -
     get_group_status already surfaces this node's new status to them without
-    needing their own bookSolvedStatus field rewritten). Necessary because a
-    twin can be reached from a completely different parent than this node
-    was - without this, that parent would only find out about a proof
-    borrowed through its child's twin the next time something else happened
-    to trigger a recompute of it directly.
+    needing their own bookSolvedStatus field rewritten, and bookBestMove is
+    never borrowed across twins at all - a move label from one physical
+    orientation isn't valid in another's coordinate frame without
+    translating it, which nothing here does). Necessary because a twin can
+    be reached from a completely different parent than this node was -
+    without this, that parent would only find out about a proof borrowed
+    through its child's twin the next time something else happened to
+    trigger a recompute of it directly.
     """
     db = db if db is not None else get_book_db()
     with _book_db_write_lock:
@@ -371,10 +499,18 @@ def propagate_book_status(hash_hex: str, db: Rdict | None = None) -> None:
             return
 
         new_status = compute_book_solved_status(entry, db=db)
-        if new_status == entry["bookSolvedStatus"]:
+        new_best_move, new_best_value = compute_book_best_move(entry, db=db)
+        changed = (
+            new_status != entry["bookSolvedStatus"]
+            or new_best_move != entry.get("bookBestMove")
+            or new_best_value != entry.get("bookBestValue")
+        )
+        if not changed:
             return
 
         entry["bookSolvedStatus"] = new_status
+        entry["bookBestMove"] = new_best_move
+        entry["bookBestValue"] = new_best_value
         db[hash_hex] = json.dumps(entry)
 
         for parent_hash in entry.get("parentHashes", []):

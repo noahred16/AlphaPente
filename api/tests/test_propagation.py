@@ -111,6 +111,193 @@ def test_propagation_proves_up_two_levels_then_reverts_on_a_new_unresolved_child
     assert kv_store.get_entry(g_hash, db=db)["bookSolvedStatus"] == "UNSOLVED"
 
 
+def test_propagation_proves_a_win_from_moves_never_independently_expanded(db):
+    """Real bug this reproduces: a single massive search can fully prove
+    several of its own replies as SOLVED_LOSS internally (result["topMoves"])
+    without any of them ever becoming their own independently-searched
+    position - get_group_status alone has nothing to find for a move like
+    that (no book_db entry of its own exists at all, or it's still just a
+    bare, untouched stub from add_parent_edge), so compute_book_solved_status
+    used to treat "never independently searched" as "unproven" instead of
+    falling back to this search's own already-settled one-ply read, and the
+    position stayed UNSOLVED forever despite every one of its own replies
+    already being a proven loss."""
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",  # this search's own bounded run never itself proved the root
+        "topMoves": [
+            {"move": "L9", "status": "SOLVED_LOSS"},
+            {"move": "L8", "status": "SOLVED_LOSS"},
+            {"move": "M11", "status": "SOLVED_LOSS"},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    # None of L9/L8/M11 has ever been independently touched - no add_parent_edge,
+    # no evaluate_position, no entry of any kind.
+
+    kv_store.propagate_book_status(hash_hex, db=db)
+
+    assert kv_store.get_entry(hash_hex, db=db)["bookSolvedStatus"] == "SOLVED_WIN"
+
+
+# ─── compute_book_best_move / bookBestMove propagation ───────────────────────
+
+
+def test_compute_book_best_move_picks_the_highest_value_unsolved_candidate(db):
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.2},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.7},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+
+    best_move, best_value = kv_store.compute_book_best_move(kv_store.get_entry(hash_hex, db=db), db=db)
+
+    assert best_move == "L8"
+    # Flipped from L8's own avgValue (0.7): compute_book_best_move's returned
+    # value matches result["rootAvgValue"]'s convention (whoever just moved
+    # *into* this position), not the perspective used to rank candidates
+    # against each other - see the function's own docstring.
+    assert best_value == -0.7
+
+
+def test_compute_book_best_move_prefers_a_proven_win_over_a_higher_value_unsolved_move(db):
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.9},
+            {"move": "L8", "status": "SOLVED_WIN", "avgValue": 0.1},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+
+    best_move, _ = kv_store.compute_book_best_move(kv_store.get_entry(hash_hex, db=db), db=db)
+
+    assert best_move == "L8"
+
+
+def test_compute_book_best_move_prefers_a_childs_own_deeper_value_over_the_stale_one_ply_read(db):
+    """Real bug this reproduces: L8 looks better by the parent's own one-ply
+    read alone (0.2 > 0.1), but L9's own child has since been independently,
+    deeply searched and found to be much better once you look one ply
+    further - a fact result["bestMove"] (the parent's frozen snapshot) has
+    no way to reflect."""
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.1},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.2},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    kv_store.save_entry(
+        moves + ["L9"],
+        result={"solvedStatus": "UNSOLVED", "bestMove": "M7", "topMoves": [{"move": "M7", "avgValue": -0.9}]},
+        db=db,
+    )
+
+    best_move, best_value = kv_store.compute_book_best_move(kv_store.get_entry(hash_hex, db=db), db=db)
+
+    assert best_move == "L9"
+    assert best_value == pytest.approx(-0.9)  # flipped - see the other test's comment above
+
+
+def test_compute_book_best_move_prefers_a_childs_own_live_best_value_over_its_frozen_snapshot(db):
+    """Real bug this reproduces, one recursion level deeper than the test
+    above: L9's own child (a grandchild of K10) has itself been searched
+    deeper since L9's own last search, and propagate_book_status already
+    recomputed L9's own live bookBestMove/bookBestValue to reflect that - but
+    value_for was still reading L9's own frozen result["bestMove"] snapshot
+    instead of that live, more-informed number, so K10's own ranking never
+    found out. Numbers chosen so the two methods disagree on the winner
+    outright (not just the margin): L9 looks only mildly good by its own
+    frozen one-ply read (0.05, worse than L8's 0.2) but is actually far
+    better once its own child's deeper search is taken into account (0.9)."""
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.1},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.2},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    l9_hash = kv_store.save_entry(
+        moves + ["L9"],
+        result={"solvedStatus": "UNSOLVED", "bestMove": "M7", "topMoves": [{"move": "M7", "avgValue": 0.05}]},
+        db=db,
+    )
+    kv_store.save_entry(
+        moves + ["L9", "M7"],
+        result={"solvedStatus": "UNSOLVED", "bestMove": "N6", "topMoves": [{"move": "N6", "avgValue": 0.9}]},
+        db=db,
+    )
+    kv_store.propagate_book_status(l9_hash, db=db)  # L9's own bookBestMove/bookBestValue now reflect M7's deeper value
+
+    best_move, best_value = kv_store.compute_book_best_move(kv_store.get_entry(hash_hex, db=db), db=db)
+
+    assert best_move == "L9"
+    assert best_value == pytest.approx(-0.9)
+
+
+def test_propagate_book_status_updates_best_move_when_it_is_removed(db):
+    """Issue this reproduces: removing the current best move used to leave
+    the parent's bestMove pointing at a move that's no longer even allowed."""
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.9},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.1},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    kv_store.propagate_book_status(hash_hex, db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["bookBestMove"] == "L9"
+
+    kv_store.save_entry(moves, allowed_moves=["L8"], db=db)  # L9 removed
+    kv_store.propagate_book_status(hash_hex, db=db)
+
+    assert kv_store.get_entry(hash_hex, db=db)["bookBestMove"] == "L8"
+
+
+def test_propagate_book_status_updates_parent_best_move_when_a_childs_own_value_improves(db):
+    """The other issue this fixes: deepening/re-running a child's own search
+    can reveal it's actually the better choice, but propagate_book_status
+    only used to recompute bookSolvedStatus - bookBestMove needs the exact
+    same recompute-and-propagate-to-parents treatment, or a parent never
+    finds out."""
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.1},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.2},
+        ],
+    }
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    l9_hash = kv_store.add_parent_edge(moves + ["L9"], parent_hash=hash_hex, db=db)
+    kv_store.add_parent_edge(moves + ["L8"], parent_hash=hash_hex, db=db)
+    kv_store.propagate_book_status(hash_hex, db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["bookBestMove"] == "L8"
+
+    # L9's own child gets independently, deeply re-evaluated - propagating
+    # from *there* (not from the parent) must still update the parent.
+    kv_store.save_entry(
+        moves + ["L9"],
+        result={"solvedStatus": "UNSOLVED", "bestMove": "M7", "topMoves": [{"move": "M7", "avgValue": -0.9}]},
+        db=db,
+    )
+    kv_store.propagate_book_status(l9_hash, db=db)
+
+    assert kv_store.get_entry(hash_hex, db=db)["bookBestMove"] == "L9"
+
+
 # ─── symmetry: canonical grouping shares proof across orientations ───────────
 
 

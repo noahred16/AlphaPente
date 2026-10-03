@@ -42,15 +42,18 @@ services:
     # searches at one at a time regardless of how many are dispatched -
     # everything else (set_allowed_moves included) still runs concurrently.
     #
-    # --concurrency=32: a backlogged evaluate_position just blocks on that
+    # --concurrency=100: a backlogged evaluate_position just blocks on that
     # semaphore (see its comment in api/tasks/book.py) rather than retrying/
     # rescheduling, so it needs an actual free thread to block *in* - the
     # default concurrency (one thread per CPU core) is nowhere near enough
     # once several searches are queued up, and a blocked thread costs
     # basically nothing (no CPU, just a sleeping OS thread), so there's no
-    # real downside to a generous number here. Bump it further if you
-    # regularly stack up a bigger backlog than this.
-    command: celery -A api.celery_app worker --loglevel=info --pool=threads --concurrency=32
+    # real downside to a generous number here. Was 32 - raised after a real
+    # backlog of exactly 32 queued positions hit that ceiling and started
+    # starving set_allowed_moves of a free thread to run on at all (see
+    # get_queue's docstring for what "queued" tracks). Bump it further still
+    # if you regularly stack up a bigger backlog than this.
+    command: celery -A api.celery_app worker --loglevel=info --pool=threads --concurrency=100
     environment:
       - REDIS_URL=redis://redis:6379/0
       # pente (run via api/engine.py) needs these set; see setup.sh /

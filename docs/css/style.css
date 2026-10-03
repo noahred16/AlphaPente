@@ -330,6 +330,16 @@ body.book-page #board {
   text-align: left;
 }
 
+/* #, Move, Prior, Moves: always short, predictable content (a row index, a
+   2-3 char move label, a decimal, a small count) - tighten their padding
+   and stop them wrapping so they stay compact, leaving more room for the
+   wider Status/MCTS Val/Child Val/Actions columns on a narrow screen. */
+#moves-table th:nth-child(-n + 4), #moves-table td:nth-child(-n + 4) {
+  padding-left: 4px;
+  padding-right: 4px;
+  white-space: nowrap;
+}
+
 /* Plays the move (see book.js's playMove) - styled like the rest of the
    page's controls rather than a default blue underlined link. Not scoped to
    #moves-table: the queue panel's own move-sequence links (see renderQueue)
@@ -369,32 +379,39 @@ button.queue-btn {
   border-color: var(--last-move);
 }
 
-/* --- Queue panel (see book.js's loadQueue/renderQueue) --- */
+/* --- Queue and Saved Games panels (see book.js's loadQueue/renderQueue and
+   renderSavedGames) - same layout, so styled together. --- */
 
-#queue-panel {
+#queue-panel,
+#saved-panel {
   margin: 1em 0;
   text-align: left;
 }
 
-#queue-panel h2 {
+#queue-panel h2,
+#saved-panel h2 {
   color: var(--green-dark);
   font-size: 1.1em;
   margin: 0 0 0.3em;
 }
 
-#queue-summary {
+#queue-summary,
+#saved-summary {
   margin-bottom: 0.5em;
   font-size: 0.95em;
 }
 
-#queue-table {
+#queue-table,
+#saved-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9em;
 }
 
 #queue-table th,
-#queue-table td {
+#queue-table td,
+#saved-table th,
+#saved-table td {
   padding: 4px 8px;
   text-align: left;
   border-bottom: 1px solid var(--yellow-light);
@@ -403,7 +420,8 @@ button.queue-btn {
 /* Moves column: a long game's move list can run much longer than the rest
    of the row - cap it and wrap (at the natural space-separated word breaks,
    not mid-move) instead of stretching the table or overflowing it. */
-#queue-table td:nth-child(2) {
+#queue-table td:nth-child(2),
+#saved-table td:nth-child(2) {
   max-width: 220px;
   overflow-wrap: break-word;
 }

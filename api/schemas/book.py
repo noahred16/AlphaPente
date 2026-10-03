@@ -31,6 +31,7 @@ class SearchLevel(str, Enum):
     FAST = "FAST"
     MEDIUM = "MEDIUM"
     DEEP = "DEEP"
+    MAX = "MAX"
 
 
 class SolvedStatus(str, Enum):
@@ -83,12 +84,31 @@ class TopMove(BaseModel):
     # docs/js/book.js's deepeningMoves.
     childInProgress: bool = False
     # The avgValue the engine found for `move`'s own child's best reply - one
-    # search deeper than avgValue itself - already in this position's own
-    # to-move player's perspective (two plies down, so no sign flip is
-    # needed here, unlike avgValue - see ParallelMCTS::backpropagate's
-    # per-ply flip). None if the child's own search hasn't run yet, or found
-    # no legal replies at all.
+    # ply deeper than avgValue itself. Every node's own value is recorded
+    # for whoever just moved to reach it (confirmed empirically - see
+    # docs/js/book.js's childValueForViewer), so this one is in the
+    # opponent's perspective (they're the one who'd play that reply), unlike
+    # avgValue, which is already in this position's own to-move player's
+    # perspective - the frontend flips this one, not avgValue, before
+    # displaying either. None if the child's own search hasn't run yet, or
+    # found no legal replies at all.
     childBestMoveValue: float | None = None
+    # The actual number of visits the child's own last search achieved (see
+    # BookEntry.totalVisits) - not necessarily the same as childTargetVisits,
+    # since a search can finish early (a proven result) or late (cut short by
+    # childArenaExhausted below) rather than exactly hitting its target.
+    # None if the child has never been evaluated at all.
+    childTotalVisits: int | None = None
+    # Whether the child's own last search actually ran out of tree-arena
+    # memory before finishing (see BookEntry.arenaExhausted) - None if it's
+    # never been evaluated. The requested childTargetVisits alone can't tell
+    # this apart from "reached its target with room to spare": DEEP/MAX are
+    # both requested identically regardless of which machine runs them, but
+    # whether one actually ran out of RAM is a fact about that specific run -
+    # the signal worth checking before assuming a same-level DEEP/MAX re-run
+    # (see docs/js/book.js's rerunLabel) has nothing new to find, especially
+    # if book_db is ever moved to a machine with more RAM than this one.
+    childArenaExhausted: bool | None = None
 
 
 class BookEntry(BaseModel):
@@ -110,6 +130,12 @@ class BookEntry(BaseModel):
     # result, or a bare stub). See TopMove.childTargetVisits for the same
     # thing one ply down, per candidate move.
     targetVisits: int | None = None
+    # Whether this position's own last search actually ran out of tree-arena
+    # memory before finishing - None if it's never been evaluated. See
+    # TopMove.childArenaExhausted for why this (not targetVisits) is the
+    # thing worth checking before assuming a same-level re-run has nothing
+    # new to find.
+    arenaExhausted: bool | None = None
 
 
 class QueuedJob(BaseModel):

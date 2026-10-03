@@ -76,12 +76,44 @@ def _to_book_entry(entry: dict) -> BookEntry:
         child = child_entry_for(move)
         return child.get("targetVisits") if child else None
 
-    def child_best_move_value(move: str) -> float | None:
-        """The avgValue of `move`'s own child's best reply, per its own
-        independent search - see TopMove.childBestMoveValue. None if that
-        search hasn't produced a result yet, or found no legal replies."""
+    def child_total_visits(move: str) -> int | None:
+        """The actual number of visits `move`'s own last search achieved -
+        see TopMove.childTotalVisits. None if it's never been evaluated."""
         child = child_entry_for(move)
         result = child.get("result") if child else None
+        return result.get("totalVisits") if result else None
+
+    def child_arena_exhausted(move: str) -> bool | None:
+        """Whether `move`'s own last search actually ran out of tree-arena
+        memory - see TopMove.childArenaExhausted. None if it's never been
+        evaluated."""
+        child = child_entry_for(move)
+        result = child.get("result") if child else None
+        return result.get("arenaExhausted") if result else None
+
+    def child_best_move_value(move: str) -> float | None:
+        """The avgValue of `move`'s own child's best reply, per its own
+        independent search - see TopMove.childBestMoveValue. Prefers the
+        child's own live bookBestMove/bookBestValue (see
+        kv_store.compute_book_best_move) over its frozen result["bestMove"]
+        snapshot when available, for the same reason get_book_entry's own
+        bestMove/bestValue do - a child's own best reply can change (a move
+        removed there, or one of *its* own children's deeper search coming
+        in) without the child's own search ever re-running. None if that
+        search hasn't produced a result yet, found no legal replies, or (for
+        the live case) has no allowed moves at all."""
+        child = child_entry_for(move)
+        if child is None:
+            return None
+        if child.get("bookBestMove") is not None:
+            best_value = child.get("bookBestValue")
+            # bookBestValue is already in the perspective of whoever moved
+            # into the child (this position's own mover) - flip it back to
+            # the raw, one-more-flip-needed convention this field's
+            # existing contract expects (see docs/js/book.js's
+            # childValueForViewer).
+            return None if best_value is None else -best_value
+        result = child.get("result")
         best_move = result.get("bestMove") if result else None
         if not best_move:
             return None
@@ -133,6 +165,8 @@ def _to_book_entry(entry: dict) -> BookEntry:
             childTargetVisits=child_target_visits(m["move"]),
             childInProgress=child_in_progress(m["move"]),
             childBestMoveValue=child_best_move_value(m["move"]),
+            childTotalVisits=child_total_visits(m["move"]),
+            childArenaExhausted=child_arena_exhausted(m["move"]),
         )
         for m in (result["topMoves"] if result else [])
     ]
@@ -160,10 +194,35 @@ def _to_book_entry(entry: dict) -> BookEntry:
             childTargetVisits=child_target_visits(move),
             childInProgress=child_in_progress(move),
             childBestMoveValue=child_best_move_value(move),
+            childTotalVisits=child_total_visits(move),
+            childArenaExhausted=child_arena_exhausted(move),
         )
         for move in (allowed_moves or [])
         if move not in known_moves
     ]
+
+    # bookBestMove/bookBestValue (live, recomputed from the current allowed
+    # set and each candidate's freshest known value - see
+    # kv_store.compute_book_best_move/propagate_book_status) beat the
+    # engine's own result["bestMove"]/["rootAvgValue"] (a frozen snapshot
+    # from this position's own last search, which never updates when a move
+    # is removed or a child's own deeper search comes in) whenever they're
+    # actually available. bookBestMove is only None for an entry that
+    # predates this field and hasn't been touched (a set_allowed_moves or
+    # evaluate_position call) since - the frozen snapshot is still the best
+    # available answer for exactly that case.
+    if entry.get("bookBestMove") is not None:
+        best_move = entry["bookBestMove"]
+        # Rare edge case: the chosen move might itself have no known value at
+        # all (every candidate manually added, none evaluated even a ply
+        # deep yet) - BookEntry.bestValue isn't Optional, so fall back to a
+        # neutral 0.0, same as the no-result-at-all case below.
+        best_value = entry.get("bookBestValue")
+        if best_value is None:
+            best_value = 0.0
+    else:
+        best_move = result["bestMove"] if result else None
+        best_value = result["rootAvgValue"] if result else 0.0
 
     return BookEntry(
         moves=entry["moves"],
@@ -174,11 +233,12 @@ def _to_book_entry(entry: dict) -> BookEntry:
         # not result["solvedStatus"] (that one only reflects what this one
         # bounded search found on its own).
         solvedStatus=entry.get("bookSolvedStatus", "UNSOLVED"),
-        bestValue=result["rootAvgValue"] if result else 0.0,
-        bestMove=result["bestMove"] if result else None,
+        bestValue=best_value,
+        bestMove=best_move,
         date_started=entry["date_started"],
         topMoves=top_moves,
         targetVisits=entry.get("targetVisits"),
+        arenaExhausted=result.get("arenaExhausted") if result else None,
     )
 
 

@@ -14,13 +14,20 @@ const POLL_INTERVAL_MS = 15000;
 const QUEUED_STORAGE_KEY = 'pente-book-queued-moves';
 const DEEPENING_STORAGE_KEY = 'pente-book-deepening-moves';
 const LEVEL_STORAGE_KEY = 'pente-book-search-level';
+const STARRED_STORAGE_KEY = 'pente-book-starred-games';
 
 // Mirrors api/tasks/book.py's SEARCH_LEVEL_ITERATIONS exactly (same hardcoded
 // values, same reasoning) - every targetVisits/childTargetVisits the backend
-// ever hands back is exactly one of these three numbers (or null, for a
-// position that's never been evaluated), so labeling one back into "Fast"/
-// "Medium"/"Deep" (see levelLabel) is a plain reverse lookup, not a guess.
-const SEARCH_LEVEL_ITERATIONS = { VERY_FAST: 200_000, FAST: 2_000_000, MEDIUM: 9_000_000, DEEP: 900_000_000 };
+// ever hands back is exactly one of these numbers (or null, for a position
+// that's never been evaluated), so labeling one back into "Fast"/"Medium"/
+// "Deep"/"Max" (see levelLabel) is a plain reverse lookup, not a guess.
+const SEARCH_LEVEL_ITERATIONS = {
+  VERY_FAST: 200_000,
+  FAST: 2_000_000,
+  MEDIUM: 9_000_000,
+  DEEP: 900_000_000,
+  MAX: 999_000_000,
+};
 
 let Module, game;
 let moveHistory = [];  // move strings in play order, e.g. ["K10", "L9"]; always starts with the forced center opening
@@ -28,6 +35,7 @@ let redoStack = [];    // move strings popped off by undo, replayed by redo
 let bookEntry = null;  // last GET /pente/book response for the current position, or null while loading
 let queuedMoves = loadQueuedMoves(); // "movesJSON|move" keys the user has queued, persisted across reloads - see queueKey()
 let deepeningMoves = loadDeepeningMoves(); // same shape, for moves (or the root - see rootDeepenKey) requeued at a deeper level
+let starredGames = loadStarredGames(); // positionKey(moves) -> {moves, starredAt} - see the star button/Saved Games panel
 let requestToken = 0;  // guards against a stale fetch response overwriting a newer one
 let pollTimer = null;
 let allowedMovesBusy = false; // guards against overlapping PUT /allowed-moves calls - see addAllowedMove/removeAllowedMove
@@ -44,6 +52,19 @@ const levelSelect = document.getElementById('level');
 const queueCountEl = document.getElementById('queue-count');
 const queueSummaryEl = document.getElementById('queue-summary');
 const queueTableBody = document.querySelector('#queue-table tbody');
+const starBtn = document.getElementById('star-btn');
+const savedSummaryEl = document.getElementById('saved-summary');
+const savedTableBody = document.querySelector('#saved-table tbody');
+
+// Show each option's iteration count right in the dropdown (e.g. "Very Fast
+// (0.2M)") - the same "millions" formatting the moves table itself uses for
+// a searched position's own depth (see renderMovesTable's Status column),
+// generated rather than hardcoded in the HTML so it can't drift out of sync
+// with SEARCH_LEVEL_ITERATIONS.
+for (const option of levelSelect.options) {
+  const iterations = SEARCH_LEVEL_ITERATIONS[option.value];
+  if (iterations != null) option.textContent += ` (${+(iterations / 1e6).toFixed(2)}M)`;
+}
 
 // The search level applied to every evaluation this tab queues from now on
 // (GET's auto-queue of a freshly-seen position, and the table's Queue/Deepen
@@ -124,11 +145,31 @@ function parseMoveStr(move) {
   return { x: code - 'A'.charCodeAt(0), y: parseInt(move.slice(1), 10) - 1 };
 }
 
+// DOM child index for board coordinate (x, y) - buildBoard lays cells out
+// with row 19 (y = BOARD_SIZE - 1) at the top and row 1 (y = 0) at the
+// bottom, so this flips y before the usual row-major math, rather than
+// inserting cells in raw (x, y) order like a plain grid would. Every other
+// lookup into boardEl.children (renderBoard, cellAt) goes through this - the
+// one place that needs to know the flip, so nothing else has to.
+function cellIndex(x, y) {
+  return (BOARD_SIZE - 1 - y) * BOARD_SIZE + x;
+}
+
 // The board <div> for a move string - used to highlight a table row's move
-// on the board while hovering its link (see renderMovesTable).
+// on the board while hovering its controls (see highlightCellOnHover).
 function cellAt(move) {
   const { x, y } = parseMoveStr(move);
-  return boardEl.children[y * BOARD_SIZE + x];
+  return boardEl.children[cellIndex(x, y)];
+}
+
+// Highlights `move`'s board cell while `el` (a table row's move link or
+// Queue/Deepen/Re-run button) is hovered, so it's easy to see where a move
+// actually is without hunting for its ghost overlay number. No mouseleave
+// cleanup is needed if a click re-renders the table out from under the
+// pointer - renderBoard clears every cell's `hovered` class each render.
+function highlightCellOnHover(el, move) {
+  el.addEventListener('mouseenter', () => cellAt(move).classList.add('hovered'));
+  el.addEventListener('mouseleave', () => cellAt(move).classList.remove('hovered'));
 }
 
 // Same shape the backend enforces (api/schemas/book.py's MoveStr) - guards
@@ -222,10 +263,10 @@ function formatClockTime(date) {
 // searching right now (there's no reliable way to tell which registry entry
 // that really is - see kv_store.register_queued_job - so "starts now" is the
 // best available approximation), and each later job starts exactly when the
-// one ahead of it ends. A DEEP job's estimatedSeconds is null (arena-bound,
-// not time-bound - see SEARCH_LEVEL_SECONDS) - once one of those is hit, its
-// own end and every job scheduled after it become unknown too, not just that
-// one job.
+// one ahead of it ends. A MAX job's estimatedSeconds is null (no meaningful
+// ceiling to estimate against - see SEARCH_LEVEL_SECONDS) - once one of
+// those is hit, its own end and every job scheduled after it become unknown
+// too, not just that one job.
 function scheduleQueue(jobs) {
   let cursor = 0; // seconds from now, or null once unknown
   return jobs.map(job => {
@@ -245,7 +286,7 @@ function renderQueue({ count, jobs }) {
   if (jobs.length === 0) {
     queueSummaryEl.textContent = 'Queue is empty.';
   } else if (totalSeconds == null) {
-    queueSummaryEl.textContent = `${count} job${count === 1 ? '' : 's'} queued - a Deep search makes the total time unknown.`;
+    queueSummaryEl.textContent = `${count} job${count === 1 ? '' : 's'} queued - a Max search makes the total time unknown.`;
   } else {
     const emptyAt = formatClockTime(new Date(Date.now() + totalSeconds * 1000));
     queueSummaryEl.textContent =
@@ -275,25 +316,54 @@ function queueKey(move) {
   return JSON.stringify(moveHistory) + '|' + move;
 }
 
-// Queued moves persist in localStorage (not just in memory) so a page reload
-// doesn't forget a move was queued and offer to queue it again - useful since
-// a real search can take a long time to actually start (see
+// How long a local "I just clicked Queue/Deepen" flag is trusted before
+// being treated as stale and dropped automatically - a safety net on top of
+// clearQueueFlags's targeted clearing (on add/remove), covering anything
+// that slips past that (a failed search, a dropped request, or any other
+// case that leaves book_db never showing a sign of life for this move
+// again - see moveState/childInProgress, the real signals this is only
+// ever a stand-in for until one of them lights up). The actual gap these
+// flags bridge - between clicking and the backend registering the dispatch
+// - is normally well under a second now (see api/tasks/book.py's immediate
+// QUEUED write), so this only needs to comfortably cover that gap under a
+// real backlog, not the full duration of whatever search follows: once the
+// backend registers anything at all, moveState/childInProgress take over
+// and this flag stops being consulted anyway. Applied on every load *and*
+// swept periodically while polling (see pruneExpiredQueueFlags) - it runs
+// automatically, on any device, with no dev tools or manual "clear
+// storage" step needed to recover from a stuck flag.
+const QUEUE_FLAG_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Queued moves persist in localStorage (not just in memory, and as a map to
+// a timestamp rather than a plain set - see QUEUE_FLAG_TTL_MS) so a page
+// reload doesn't forget a move was queued and offer to queue it again -
+// useful since a real search can take a long time to actually start (see
 // SEARCH_LEVEL_ITERATIONS in api/tasks/book.py) or finish. Falls back to an
-// empty set if storage is unavailable (e.g. private browsing).
-function loadQueuedMoves() {
+// empty map if storage is unavailable (e.g. private browsing).
+function loadQueueFlagMap(storageKey) {
   try {
-    return new Set(JSON.parse(localStorage.getItem(QUEUED_STORAGE_KEY)) || []);
+    const stored = JSON.parse(localStorage.getItem(storageKey)) || {};
+    const now = Date.now();
+    return new Map(Object.entries(stored).filter(([, addedAt]) => now - addedAt < QUEUE_FLAG_TTL_MS));
   } catch (e) {
-    return new Set();
+    return new Map();
   }
 }
 
-function saveQueuedMoves() {
+function saveQueueFlagMap(storageKey, map) {
   try {
-    localStorage.setItem(QUEUED_STORAGE_KEY, JSON.stringify([...queuedMoves]));
+    localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(map)));
   } catch (e) {
     // ignore - purely a convenience, not a source of truth
   }
+}
+
+function loadQueuedMoves() {
+  return loadQueueFlagMap(QUEUED_STORAGE_KEY);
+}
+
+function saveQueuedMoves() {
+  saveQueueFlagMap(QUEUED_STORAGE_KEY, queuedMoves);
 }
 
 // Same idea as queueKey/queuedMoves above, but for the CURRENT position
@@ -312,19 +382,110 @@ function rootDeepenKey() {
 // live here to keep showing that instead of a Deepen button the user could
 // otherwise click again before the new result lands.
 function loadDeepeningMoves() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(DEEPENING_STORAGE_KEY)) || []);
-  } catch (e) {
-    return new Set();
-  }
+  return loadQueueFlagMap(DEEPENING_STORAGE_KEY);
 }
 
 function saveDeepeningMoves() {
+  saveQueueFlagMap(DEEPENING_STORAGE_KEY, deepeningMoves);
+}
+
+// Sweeps both maps for anything past QUEUE_FLAG_TTL_MS - called on every
+// loadBookEntry (i.e. on every load and every poll), not just at startup,
+// so a flag that goes stale mid-session self-heals too, not only on the
+// next reload.
+function pruneExpiredQueueFlags() {
+  const now = Date.now();
+  for (const [map, save] of [[queuedMoves, saveQueuedMoves], [deepeningMoves, saveDeepeningMoves]]) {
+    let changed = false;
+    for (const [key, addedAt] of map) {
+      if (now - addedAt >= QUEUE_FLAG_TTL_MS) {
+        map.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) save();
+  }
+}
+
+// Same idea as rootDeepenKey, for the Saved Games star button - keyed by the
+// position alone (no per-move distinction needed, unlike queueKey).
+function positionKey(moves) {
+  return JSON.stringify(moves);
+}
+
+// Starred positions, purely a per-browser bookmark list - not book data (it
+// doesn't affect solved status, allowed moves, or anything the worker
+// computes), so it lives here in localStorage rather than book_db: no new
+// endpoint, and nothing here ever touches the one thing only the worker is
+// allowed to write. positionKey(moves) -> {moves, starredAt}; the move array
+// is stored (not just derived from the key) so the Saved Games panel doesn't
+// need to re-parse it.
+function loadStarredGames() {
   try {
-    localStorage.setItem(DEEPENING_STORAGE_KEY, JSON.stringify([...deepeningMoves]));
+    return new Map(Object.entries(JSON.parse(localStorage.getItem(STARRED_STORAGE_KEY)) || {}));
+  } catch (e) {
+    return new Map();
+  }
+}
+
+function saveStarredGames() {
+  try {
+    localStorage.setItem(STARRED_STORAGE_KEY, JSON.stringify(Object.fromEntries(starredGames)));
   } catch (e) {
     // ignore - purely a convenience, not a source of truth
   }
+}
+
+// The star button doubles as its own toggle - click again to unstar (see the
+// module docstring's request: "the star button could act as a toggle to
+// also remove").
+function toggleStarred() {
+  const key = positionKey(moveHistory);
+  if (starredGames.has(key)) {
+    starredGames.delete(key);
+  } else {
+    starredGames.set(key, { moves: [...moveHistory], starredAt: Date.now() });
+  }
+  saveStarredGames();
+  renderStarButton();
+  renderSavedGames();
+}
+
+function renderStarButton() {
+  const starred = starredGames.has(positionKey(moveHistory));
+  starBtn.textContent = starred ? '★' : '☆';
+  starBtn.title = starred ? 'Remove this saved position' : 'Save this position';
+}
+
+function renderSavedGames() {
+  const games = [...starredGames.values()].sort((a, b) => b.starredAt - a.starredAt);
+  savedSummaryEl.textContent = games.length
+    ? `${games.length} saved position${games.length === 1 ? '' : 's'}.`
+    : 'No saved positions yet - click ☆ to save one.';
+
+  savedTableBody.innerHTML = '';
+  games.forEach((saved, i) => {
+    const row = document.createElement('tr');
+    // Same query-string shape syncUrl() writes, matching the queue panel's
+    // own move links - a plain link to that exact game.
+    const params = new URLSearchParams();
+    params.set('moves', saved.moves.join(','));
+    row.innerHTML = `<td>${i + 1}</td><td><a class="move-link" href="?${params}">${saved.moves.join(' ')}</a></td><td></td>`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Remove this saved position';
+    removeBtn.textContent = '★';
+    removeBtn.addEventListener('click', () => {
+      starredGames.delete(positionKey(saved.moves));
+      saveStarredGames();
+      renderStarButton();
+      renderSavedGames();
+    });
+    row.children[2].appendChild(removeBtn);
+
+    savedTableBody.appendChild(row);
+  });
 }
 
 // Where a candidate move actually stands. `m.expanded` comes straight off
@@ -370,7 +531,9 @@ function newGame(initialMoves = []) {
 function buildBoard() {
   boardEl.innerHTML = '';
   boardEl.style.setProperty('--board-size', BOARD_SIZE);
-  for (let y = 0; y < BOARD_SIZE; y++) {
+  // Top-left is A19, not A1 - row 19 at the top, row 1 at the bottom (see
+  // cellIndex) - so this walks y from its highest value down to 0, not up.
+  for (let y = BOARD_SIZE - 1; y >= 0; y--) {
     for (let x = 0; x < BOARD_SIZE; x++) {
       const cell = document.createElement('div');
       cell.className = 'cell';
@@ -394,13 +557,14 @@ function render() {
   renderBoard();
   renderMovesTable();
   renderStatus();
+  renderStarButton();
 }
 
 function renderBoard() {
   const cells = boardEl.children;
   for (let y = 0; y < BOARD_SIZE; y++) {
     for (let x = 0; x < BOARD_SIZE; x++) {
-      const cell = cells[y * BOARD_SIZE + x];
+      const cell = cells[cellIndex(x, y)];
       cell.innerHTML = '';
       cell.classList.remove('last-move', 'hovered');
       cell.style.boxShadow = '';
@@ -418,7 +582,7 @@ function renderBoard() {
   const last = moveHistory[moveHistory.length - 1];
   if (last) {
     const { x, y } = parseMoveStr(last);
-    cells[y * BOARD_SIZE + x].classList.add('last-move');
+    cells[cellIndex(x, y)].classList.add('last-move');
   }
 
   // Ghost overlay: every currently-allowed candidate reply the book knows
@@ -443,14 +607,15 @@ function renderBoard() {
     const maxPrior = Math.max(0, ...moves.map(m => m.prior));
     moves.forEach((m, i) => {
       const { x, y } = parseMoveStr(m.move);
-      const cell = cells[y * BOARD_SIZE + x];
+      const cell = cells[cellIndex(x, y)];
       if (cell.classList.contains('occupied')) return; // shouldn't happen, but never draw a ghost over a real stone
       if (m.prior > baseline * 1.0001 && maxPrior > baseline) {
         const darkness = 0.35 * (m.prior - baseline) / (maxPrior - baseline);
         cell.style.boxShadow = `inset 0 0 0 999px rgba(0,0,0,${darkness})`;
       }
-      if (m.childBestMoveValue != null) {
-        cell.dataset.tooltip = `${m.move} - ${m.childBestMoveValue.toFixed(3)}`;
+      const childValue = childValueForViewer(m);
+      if (childValue != null) {
+        cell.dataset.tooltip = `${m.move} - ${childValue.toFixed(3)}`;
       }
       const expanded = moveState(m) !== 'none';
       const ghost = document.createElement('div');
@@ -480,25 +645,50 @@ function modePrior(priors) {
   return best;
 }
 
-// Ranks two moves by how good they look, best first: Child Val (the deeper,
-// more authoritative number - see TopMove.childBestMoveValue) if both have
-// one, falling back to MCTS Val (avgValue, flipped - see renderMovesTable)
-// when either doesn't. A move with no numeric read at all on the field being
-// compared sorts after one that has it; Array.prototype.sort is stable, so
-// two moves with nothing to compare keep the engine's own strength order
-// (see ParallelMCTS::getTopMoves) instead of getting shuffled arbitrarily.
-function compareByValue(a, b) {
-  if (a.childBestMoveValue != null && b.childBestMoveValue != null) {
-    return b.childBestMoveValue - a.childBestMoveValue;
-  }
-  if (a.childBestMoveValue != null) return -1;
-  if (b.childBestMoveValue != null) return 1;
+// Every node's own value is stored from the perspective of whoever just
+// moved to reach it (confirmed empirically: a hand-built forced-loss
+// position shows the losing side's own replies as SOLVED_LOSS with a very
+// negative avgValue - see renderMovesTable's own comment for the full
+// story). For a candidate move m, that's the player actually choosing among
+// these moves - so m.avgValue already needs no flip. m.childBestMoveValue is
+// one ply further still (m's own child's best reply) - the "last mover"
+// there is the opponent, so this needs exactly one flip to read the same way.
+function childValueForViewer(m) {
+  return m.childBestMoveValue == null ? null : -m.childBestMoveValue;
+}
 
-  const aValue = a.avgValue != null ? -a.avgValue : null;
-  const bValue = b.avgValue != null ? -b.avgValue : null;
-  if (aValue != null && bValue != null) return bValue - aValue;
-  if (aValue != null) return -1;
-  if (bValue != null) return 1;
+// Same status-then-value ranking api/kv_store.py's compute_book_best_move
+// uses for bookBestMove/bookBestValue (see its own rank_key) - status has to
+// come first here too, or a proven SOLVED_LOSS move can still sort to the
+// top of the table on a fluky leftover value (e.g. a search that proved the
+// loss almost immediately, before childBestMoveValue/avgValue had enough
+// visits to mean anything - status_rank fully overrides that instead of
+// tie-breaking against it), leaving the table's own #1 row disagreeing with
+// what bookBestMove just backpropagated. A proven win beats everything;
+// among the rest, not-a-proven-loss beats a proven loss; ties within a tier
+// broken by Child Val (the deeper, more authoritative number) if both have
+// one, falling back to MCTS Val (avgValue) when either doesn't. A move with
+// no numeric read at all on the field being compared sorts after one that
+// has it; Array.prototype.sort is stable, so two moves with nothing left to
+// compare keep the engine's own strength order (see
+// ParallelMCTS::getTopMoves) instead of getting shuffled arbitrarily.
+function statusRank(m) {
+  return m.status === 'SOLVED_WIN' ? 0 : m.status === 'SOLVED_LOSS' ? 2 : 1;
+}
+
+function compareByValue(a, b) {
+  const statusDiff = statusRank(a) - statusRank(b);
+  if (statusDiff !== 0) return statusDiff;
+
+  const aChild = childValueForViewer(a);
+  const bChild = childValueForViewer(b);
+  if (aChild != null && bChild != null) return bChild - aChild;
+  if (aChild != null) return -1;
+  if (bChild != null) return 1;
+
+  if (a.avgValue != null && b.avgValue != null) return b.avgValue - a.avgValue;
+  if (a.avgValue != null) return -1;
+  if (b.avgValue != null) return 1;
   return 0;
 }
 
@@ -544,11 +734,7 @@ function renderMovesTable() {
       e.preventDefault();
       playMove(m.move);
     });
-    // Highlight the corresponding board cell while hovering this link, so
-    // it's easy to see where a move actually is without hunting for its
-    // ghost overlay number.
-    moveLink.addEventListener('mouseenter', () => cellAt(m.move).classList.add('hovered'));
-    moveLink.addEventListener('mouseleave', () => cellAt(m.move).classList.remove('hovered'));
+    highlightCellOnHover(moveLink, m.move);
 
     const state = moveState(m);
     const pending = state === 'queued' || state === 'in-progress';
@@ -568,24 +754,29 @@ function renderMovesTable() {
       statusCell.textContent = `${+(m.childTargetVisits / 1e6).toFixed(2)}M`;
     }
 
-    // MCTS Val: avgValue is stored from the perspective of the opponent (the
-    // player to move at the resulting child position - see
-    // ParallelMCTS::backpropagate's per-ply sign flip), so flip it back to
-    // the perspective of the player actually choosing among these moves.
-    // Null only for a manually-added move with no engine data yet (see
-    // _to_book_entry) - nothing to flip there either.
-    if (!pending) {
-      valueCell.textContent = m.avgValue === null ? 'N/A' : (-m.avgValue).toFixed(3);
-    }
+    // MCTS Val: avgValue is already stored from the perspective of the
+    // player actually choosing among these moves - every node's own value is
+    // recorded for whoever just moved to reach it, and that's this move's
+    // own chooser (see childValueForViewer's comment for how this was
+    // confirmed). No flip needed. Null only for a manually-added move with
+    // no engine data yet (see _to_book_entry).
+    //
+    // Shown regardless of `pending`: this move's own avgValue is a property
+    // of the *parent's* last search, not of whatever's happening to this
+    // move's own child right now - queuing/deepening/re-running the child
+    // doesn't touch it at all (only re-running the parent itself would), so
+    // there's no reason to blank an already-known value just because the
+    // child happens to be mid-search.
+    valueCell.textContent = m.avgValue === null ? 'N/A' : m.avgValue.toFixed(3);
 
     // Child Val: the avgValue of the best reply found by the child's own,
-    // independent search - one ply deeper than MCTS Val, and (unlike MCTS
-    // Val) already in this table's own to-move player's perspective, so no
-    // flip here - see TopMove.childBestMoveValue. Blank if the child's own
-    // search hasn't produced anything yet, same as Status's "never
-    // expanded" case.
-    if (m.childBestMoveValue != null) {
-      childValCell.textContent = m.childBestMoveValue.toFixed(3);
+    // independent search - one ply further than MCTS Val, so (see
+    // childValueForViewer) it needs exactly one flip MCTS Val itself
+    // doesn't. Blank if the child's own search hasn't produced anything
+    // yet, same as Status's "never expanded" case.
+    const childValue = childValueForViewer(m);
+    if (childValue != null) {
+      childValCell.textContent = childValue.toFixed(3);
     }
 
     // Actions: a Queue/Deepen/Re-run request (only ever one of the three -
@@ -608,6 +799,7 @@ function renderMovesTable() {
             btn.className = 'queue-btn';
             btn.textContent = label;
             btn.addEventListener('click', () => onDeepenClick(m.move, btn, label));
+            highlightCellOnHover(btn, m.move);
             actionsCell.appendChild(btn);
             actionsCell.appendChild(document.createTextNode(' '));
           }
@@ -617,6 +809,7 @@ function renderMovesTable() {
         btn.className = 'queue-btn';
         btn.textContent = 'Queue';
         btn.addEventListener('click', () => onQueueClick(m.move, btn));
+        highlightCellOnHover(btn, m.move);
         actionsCell.appendChild(btn);
         actionsCell.appendChild(document.createTextNode(' '));
       }
@@ -789,6 +982,7 @@ function redoMove() {
 // results without a manual refresh.
 async function loadBookEntry() {
   stopPolling();
+  pruneExpiredQueueFlags(); // self-heals a stuck flag mid-session too, not just on reload
   syncUrl(); // every moveHistory change (play/undo/redo/reset) funnels through here
   bookEntry = null;
   render();
@@ -869,7 +1063,7 @@ async function onQueueClick(move, btn) {
   btn.textContent = 'Queuing…';
   try {
     await queueEvaluation([...moveHistory, move]);
-    queuedMoves.add(queueKey(move));
+    queuedMoves.set(queueKey(move), Date.now());
     saveQueuedMoves();
     render();
     startPolling(); // pick up the job's real jobStatus once the worker gets to it
@@ -891,7 +1085,7 @@ async function requeueEvaluation(moves, key, btn, label) {
   btn.textContent = label === 'Re-run' ? 'Re-running…' : 'Requeuing…';
   try {
     await queueEvaluation(moves);
-    deepeningMoves.add(key);
+    deepeningMoves.set(key, Date.now());
     saveDeepeningMoves();
     render();
     startPolling();
@@ -918,6 +1112,7 @@ resetBtn.addEventListener('click', () => newGame());
 undoBtn.addEventListener('click', undoMove);
 redoBtn.addEventListener('click', redoMove);
 refreshBtn.addEventListener('click', loadBookEntry);
+starBtn.addEventListener('click', toggleStarred);
 
 PenteModule().then(mod => {
   Module = mod;
@@ -929,3 +1124,7 @@ PenteModule().then(mod => {
 // life of the page.
 loadQueue();
 setInterval(loadQueue, POLL_INTERVAL_MS);
+
+// Independent of everything above too - purely local state, nothing to
+// fetch, so it doesn't need to wait on PenteModule or any poll cycle either.
+renderSavedGames();

@@ -120,3 +120,12 @@ Executables: `pente`, `gomoku`, `keryopente`, `play`, `train`, `test`, `unit_tes
 2. Implement self-play training loop with NN.
 3. Train expert-level neural network
 
+## Opening Book Builder (api/, docs/)
+
+A separate FastAPI + Celery + RocksDB web app (backend) and vanilla-JS
+frontend for interactively building and curating an opening book on top of
+this engine - a different kind of work from the solver above, since it only
+ever shells out to the compiled `pente` binary rather than touching engine
+internals. See `BookBuilderArchitecture.md` for how it's built: the backend,
+the queueing system, and the frontend.
+

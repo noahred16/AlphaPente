@@ -22,9 +22,15 @@ from api.zobrist import compute_hash
 
 # Hardcoded per-level iteration counts - the only search-depth control
 # exposed to the UI (see EvaluateRequest.level). VERY_FAST/FAST/MEDIUM target
-# real wall-clock times; DEEP targets the arena limit instead (900_000_000
-# was this project's original always-on iteration count, run by hand and
-# left to search until the tree arena filled up - not a real time budget).
+# real wall-clock times; DEEP and MAX target the arena limit instead
+# (900_000_000 was this project's original always-on iteration count, run by
+# hand and left to search until the tree arena filled up - not a real time
+# budget; MAX's 999_000_000 just aims higher still, for "whatever this
+# machine can actually hold in RAM"). Note that this requested count is the
+# same regardless of which machine actually runs it - see
+# TopMove.childArenaExhausted for the signal that actually varies with a
+# machine's own RAM (and so, unlike this dict, wouldn't stay meaningless
+# forever if book_db is ever moved to a machine with more of it).
 # Calibrated against docker-compose.yml's worker config (NUM_THREADS=6,
 # ARENA_SIZE_GB=29), measured directly on an ordinary early-game position
 # with that config - per-iteration throughput isn't constant (thread
@@ -38,23 +44,28 @@ SEARCH_LEVEL_ITERATIONS: dict[SearchLevel, int] = {
     SearchLevel.FAST: 2_000_000,  # ~30s
     SearchLevel.MEDIUM: 9_000_000,  # ~2min
     SearchLevel.DEEP: 900_000_000,  # arena-bound, not time-bound
+    SearchLevel.MAX: 999_000_000,  # this machine's actual ceiling - see the comment above
 }
 
 # The same empirical benchmarks above, as a rough wall-clock estimate rather
 # than an iteration count - used only for the queue's ETA display (see
-# estimated_seconds_for/QueuedJob.estimatedSeconds). DEEP has none: it's
-# arena-bound, not time-bound, so there's nothing meaningful to estimate.
+# estimated_seconds_for/QueuedJob.estimatedSeconds). DEEP gets a rough,
+# ballpark figure like the tiers above (not a real benchmark - it's arena-
+# bound, so actual time varies by position) since 6 minutes is still a
+# reasonable planning number in practice. MAX has none: "whatever this
+# machine can actually hold" has no meaningful ceiling to estimate against.
 SEARCH_LEVEL_SECONDS: dict[SearchLevel, int | None] = {
     SearchLevel.VERY_FAST: 5,
     SearchLevel.FAST: 30,
     SearchLevel.MEDIUM: 120,
-    SearchLevel.DEEP: None,
+    SearchLevel.DEEP: 360,  # ~6min, a ballpark rather than a benchmark - see above
+    SearchLevel.MAX: None,
 }
 
 
 def estimated_seconds_for(target_visits: int) -> int | None:
     """Rough wall-clock estimate for a job dispatched at `target_visits` -
-    see SEARCH_LEVEL_SECONDS. None if it matches DEEP, or (shouldn't happen
+    see SEARCH_LEVEL_SECONDS. None if it matches MAX, or (shouldn't happen
     for a job this app itself dispatched) no known level at all."""
     for level, iterations in SEARCH_LEVEL_ITERATIONS.items():
         if iterations == target_visits:

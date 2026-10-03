@@ -243,6 +243,8 @@ def test_get_returns_existing_entry_with_result(reader_db, monkeypatch):
             "childTargetVisits": None,
             "childInProgress": False,
             "childBestMoveValue": None,
+            "childTotalVisits": None,
+            "childArenaExhausted": None,
         }
     ]
 
@@ -282,6 +284,8 @@ def test_get_surfaces_allowed_move_outside_top_moves(reader_db, monkeypatch):
             "childTargetVisits": None,
             "childInProgress": False,
             "childBestMoveValue": None,
+            "childTotalVisits": None,
+            "childArenaExhausted": None,
         },
         {
             "move": "A1",
@@ -297,6 +301,8 @@ def test_get_surfaces_allowed_move_outside_top_moves(reader_db, monkeypatch):
             "childTargetVisits": None,
             "childInProgress": False,
             "childBestMoveValue": None,
+            "childTotalVisits": None,
+            "childArenaExhausted": None,
         },
     ]
 
@@ -476,6 +482,100 @@ def test_get_reports_child_best_move_value(reader_db, monkeypatch):
     assert value_by_move == {"G10": 0.42, "H11": None}
 
 
+def test_get_reports_child_best_move_value_using_the_childs_own_live_pick(reader_db, monkeypatch):
+    """Real bug this reproduces: G10's own child (a grandchild of K10,L9) has
+    itself been searched since G10's own last search, revealing A1 - not the
+    engine's frozen pick A2 - is actually G10's own best reply.
+    childBestMoveValue used to keep reading A2's raw avgValue (0.42, from
+    G10's own frozen result["bestMove"] snapshot) forever, ignoring that
+    G10's own live bookBestMove/bookBestValue had already moved on."""
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import propagate_book_status, save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)
+
+    child_result = {
+        "totalVisits": 500,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": 0.1,
+        "bestMove": "A2",
+        "topMoves": [
+            {"move": "A1", "visits": 100, "prior": 0.2, "avgValue": -0.5, "puct": 0.1, "status": "UNSOLVED"},
+            {"move": "A2", "visits": 400, "prior": 0.3, "avgValue": 0.42, "puct": 0.2, "status": "UNSOLVED"},
+        ],
+    }
+    g10_hash = save_entry(["K10", "L9", "G10"], job_status="IDLE", result=child_result, db=reader_db)
+    # A2's own child reveals A2 is actually much worse than its frozen
+    # one-ply read (0.42) suggested - A1 is G10's real best move once this
+    # propagates.
+    save_entry(
+        ["K10", "L9", "G10", "A2"],
+        result={"solvedStatus": "UNSOLVED", "bestMove": "B3", "topMoves": [{"move": "B3", "avgValue": 0.95}]},
+        db=reader_db,
+    )
+    propagate_book_status(g10_hash, db=reader_db)
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    body = response.json()
+    assert body["topMoves"][0]["childBestMoveValue"] == -0.5  # A1's live value, not A2's frozen 0.42
+
+
+def test_get_reports_total_visits_and_arena_exhausted(reader_db, monkeypatch):
+    """The actual depth a search reached - and whether it was cut short by
+    running out of tree-arena memory - matters independently of the
+    requested targetVisits: DEEP/MAX both request the same fixed iteration
+    count no matter which machine runs them, so arenaExhausted (not
+    targetVisits) is the fact that would actually change if book_db were
+    ever moved to a machine with more RAM - see TopMove.childArenaExhausted."""
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import save_entry
+
+    result = {
+        "totalVisits": 900_000_000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "arenaExhausted": True,
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+            {"move": "H11", "visits": 500, "prior": 0.0417, "avgValue": 0.01, "puct": 0.02, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)
+    # G10's own child ran to completion with room to spare; H11 is untouched.
+    child_result = {
+        "totalVisits": 2_000_000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": 0.1,
+        "bestMove": "A2",
+        "arenaExhausted": False,
+        "topMoves": [{"move": "A2", "visits": 400, "prior": 0.3, "avgValue": 0.42, "puct": 0.2, "status": "UNSOLVED"}],
+    }
+    save_entry(["K10", "L9", "G10"], job_status="IDLE", result=child_result, db=reader_db)
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["arenaExhausted"] is True
+    exhausted_by_move = {m["move"]: m["childArenaExhausted"] for m in body["topMoves"]}
+    assert exhausted_by_move == {"G10": False, "H11": None}
+    visits_by_move = {m["move"]: m["childTotalVisits"] for m in body["topMoves"]}
+    assert visits_by_move == {"G10": 2_000_000, "H11": None}
+
+
 def test_get_reports_target_visits_and_child_target_visits(reader_db, monkeypatch):
     monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
 
@@ -508,6 +608,63 @@ def test_get_reports_target_visits_and_child_target_visits(reader_db, monkeypatc
     assert body["targetVisits"] == SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST]
     child_target_visits_by_move = {m["move"]: m["childTargetVisits"] for m in body["topMoves"]}
     assert child_target_visits_by_move == {"G10": SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP], "H11": None}
+
+
+def test_get_falls_back_to_the_engine_snapshot_when_book_best_move_was_never_computed(reader_db, monkeypatch):
+    """An entry from before bookBestMove existed (or one that's simply never
+    been touched by set_allowed_moves/evaluate_position since) has no live
+    value yet - the engine's own frozen result["bestMove"]/["rootAvgValue"]
+    is still the best available answer for exactly that case."""
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+        ],
+    }
+    save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)  # never propagated
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    body = response.json()
+    assert body["bestMove"] == "G10"
+    assert body["bestValue"] == -0.04
+
+
+def test_get_reports_the_live_best_move_once_computed(reader_db, monkeypatch):
+    """The actual fix: once propagate_book_status has run (e.g. after a
+    move's removed, or a child's own search improves), GET reports the live,
+    recomputed best move - not the engine's stale one-ply snapshot."""
+    monkeypatch.setattr(evaluate_position, "delay", lambda *a, **kw: pytest.fail("shouldn't queue a job"))
+
+    from api.kv_store import propagate_book_status, save_entry
+
+    result = {
+        "totalVisits": 1000,
+        "solvedStatus": "UNSOLVED",
+        "rootAvgValue": -0.04,
+        "bestMove": "G10",
+        "topMoves": [
+            {"move": "G10", "visits": 786, "prior": 0.0417, "avgValue": 0.0687, "puct": 0.0729, "status": "UNSOLVED"},
+            {"move": "H11", "visits": 500, "prior": 0.0417, "avgValue": 0.5, "puct": 0.02, "status": "UNSOLVED"},
+        ],
+    }
+    hash_hex = save_entry(["K10", "L9"], job_status="IDLE", result=result, db=reader_db)
+    propagate_book_status(hash_hex, db=reader_db)
+
+    response = client.get("/pente/book", params={"moves": ["K10", "L9"]})
+
+    body = response.json()
+    assert body["bestMove"] == "H11"  # higher avgValue than the engine's own frozen pick (G10)
+    # Flipped from H11's own avgValue (0.5) to match rootAvgValue's own
+    # convention - see compute_book_best_move's docstring.
+    assert body["bestValue"] == -0.5
 
 
 def test_get_flags_symmetric_duplicates_within_top_moves(reader_db, monkeypatch):
@@ -608,10 +765,20 @@ def test_get_queue_reports_pending_jobs_oldest_first(reader_db):
     assert [j["estimatedSeconds"] for j in body["jobs"]] == [5, 30]
 
 
-def test_get_queue_reports_no_estimate_for_a_deep_job(reader_db):
+def test_get_queue_reports_a_ballpark_estimate_for_a_deep_job(reader_db):
     from api.kv_store import register_queued_job
 
     register_queued_job("job1", ["K10"], SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP], db=reader_db)
+
+    response = client.get("/pente/book/queue")
+
+    assert response.json()["jobs"][0]["estimatedSeconds"] == 360
+
+
+def test_get_queue_reports_no_estimate_for_a_max_job(reader_db):
+    from api.kv_store import register_queued_job
+
+    register_queued_job("job1", ["K10"], SEARCH_LEVEL_ITERATIONS[SearchLevel.MAX], db=reader_db)
 
     response = client.get("/pente/book/queue")
 
