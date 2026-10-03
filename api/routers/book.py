@@ -17,7 +17,13 @@ from api.schemas.book import (
     SolvedStatus,
     TopMove,
 )
-from api.tasks.book import SEARCH_LEVEL_ITERATIONS, estimated_seconds_for, evaluate_position, set_allowed_moves
+from api.tasks.book import (
+    SEARCH_LEVEL_ITERATIONS,
+    depth_search,
+    estimated_seconds_for,
+    evaluate_position,
+    set_allowed_moves,
+)
 from api.zobrist import compute_canonical_hash, compute_hash
 
 router = APIRouter(prefix="/pente/book", tags=["book"])
@@ -317,6 +323,27 @@ def queue_evaluation(body: EvaluateRequest) -> EvaluateResponse:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     task = evaluate_position.delay(body.moves, target_visits=SEARCH_LEVEL_ITERATIONS[body.level])
+    return EvaluateResponse(job_id=task.id, jobStatus=JobStatus.QUEUED)
+
+
+@router.post("/depth-search", response_model=EvaluateResponse)
+def queue_depth_search(body: EvaluateRequest) -> EvaluateResponse:
+    """Queue a depth_search job: starting from `moves`, the worker itself
+    finds and expands the deepest, most-promising not-yet-searched position
+    reachable by repeatedly following the book's own current best line - see
+    api/tasks/book.py's depth_search and kv_store.find_deepest_promising_leaf.
+
+    Like POST /pente/book, this doesn't write to book_db itself. Queuing
+    several of these in a row (without waiting for each to finish) naturally
+    walks one level further down the same line each time - see
+    depth_search's own docstring for why.
+    """
+    try:
+        compute_hash(body.moves)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    task = depth_search.delay(body.moves, target_visits=SEARCH_LEVEL_ITERATIONS[body.level])
     return EvaluateResponse(job_id=task.id, jobStatus=JobStatus.QUEUED)
 
 

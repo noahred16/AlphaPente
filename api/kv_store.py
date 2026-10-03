@@ -468,6 +468,51 @@ def compute_book_best_move(entry: dict, db: Rdict) -> tuple[str | None, float | 
     return best_move, (None if best_value is None else -best_value)
 
 
+def find_deepest_promising_leaf(moves: list[str], db: Rdict) -> list[str]:
+    """Walk down from `moves`, repeatedly stepping into the current
+    best-known move at each position (compute_book_best_move's own ranking -
+    status first, then value), until reaching one that's never actually had
+    a real search run on it: no entry at all, or an entry with no result yet
+    (e.g. a bare stub created by add_parent_edge for a move that's only ever
+    been proven as part of some ancestor's own one-ply engine read - see
+    compute_book_solved_status's docstring on why that's enough to resolve a
+    status without the move ever being independently searched). That
+    position is the real next thing worth running a real search on. Returns
+    `moves` itself unchanged if it already needs evaluation.
+
+    Used by api/tasks/book.py's depth_search to find a job's actual target
+    without the caller (or the UI) needing to know the book's current shape
+    at all - just "go expand the next most promising thing past here". A
+    nice side effect: landing on a proven-but-never-independently-searched
+    stub like this is exactly how such a stub gets turned into real data,
+    the same self-healing path propagate_book_status's own callers already
+    rely on elsewhere.
+
+    `seen` guards against a cycle that should be structurally impossible -
+    propagate_book_status's own docstring notes capture counts are baked
+    into the hash and never decrease, so the position graph is provably
+    acyclic - cheap insurance, not a real expected case.
+    """
+    current_moves = moves
+    seen: set[str] = set()
+    while True:
+        hash_hex = compute_hash(current_moves)
+        if hash_hex in seen:
+            break
+        seen.add(hash_hex)
+
+        entry = get_entry(hash_hex, db=db)
+        if entry is None or entry.get("result") is None:
+            break
+
+        best_move, _ = compute_book_best_move(entry, db=db)
+        if best_move is None:
+            break
+
+        current_moves = current_moves + [best_move]
+    return current_moves
+
+
 def propagate_book_status(hash_hex: str, db: Rdict | None = None) -> None:
     """Recompute hash_hex's bookSolvedStatus and bookBestMove/bookBestValue
     and, only if any of them actually changed, recurse into every recorded
@@ -546,14 +591,23 @@ def get_entry(hash_hex: str, db: Rdict | None = None) -> dict | None:
 _QUEUE_REGISTRY_KEY = "queue:jobs"
 
 
-def register_queued_job(job_id: str, moves: list[str], target_visits: int, db: Rdict | None = None) -> None:
-    """Record an evaluate_position call as pending, from the moment it's
-    dispatched - before it even acquires api/tasks/book.py's
+def register_queued_job(
+    job_id: str, moves: list[str], target_visits: int, db: Rdict | None = None, job_type: str = "EVALUATE"
+) -> None:
+    """Record an evaluate_position (or depth_search) call as pending, from
+    the moment it's dispatched - before it even acquires api/tasks/book.py's
     _search_semaphore, so a job still waiting its turn shows up here just
     like one actually running - until unregister_queued_job removes it.
     `job_id` just needs to be unique per call (evaluate_position generates
     its own, independent of Celery's own task id, so this works whether the
     call came through Celery or - as in tests - directly).
+
+    `job_type` is "EVALUATE" (the default) or "DEPTH_SEARCH" - for the
+    latter, `moves` is the position the job was launched *from*, not the one
+    it'll actually end up searching (that's only resolved once the job's own
+    turn at _search_semaphore comes up - see depth_search), so the frontend
+    needs to know which kind of entry this is to label it correctly (see
+    QueuedJob.jobType).
 
     Lets the API report a live list of what's queued/running and how deep
     each one is set to search (see GET /pente/book/queue) without touching
@@ -567,6 +621,7 @@ def register_queued_job(job_id: str, moves: list[str], target_visits: int, db: R
             "moves": moves,
             "targetVisits": target_visits,
             "queuedAt": datetime.now(timezone.utc).isoformat(),
+            "jobType": job_type,
         }
         db[_QUEUE_REGISTRY_KEY] = json.dumps(registry)
 

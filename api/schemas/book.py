@@ -139,9 +139,9 @@ class BookEntry(BaseModel):
 
 
 class QueuedJob(BaseModel):
-    # A single evaluate_position call dispatched but not yet finished -
-    # including the one actually running right now, since there's no
-    # reliable way to tell which registry entry that is (see
+    # A single evaluate_position (or depth_search) call dispatched but not
+    # yet finished - including the one actually running right now, since
+    # there's no reliable way to tell which registry entry that is (see
     # kv_store.register_queued_job) - the frontend's ETA math treats the
     # oldest one as "running now" instead.
     moves: list[str]
@@ -153,6 +153,15 @@ class QueuedJob(BaseModel):
     # together, in order, into each job's own estimated start/end and an
     # overall "queue empty at" time.
     estimatedSeconds: int | None = None
+    # "EVALUATE" (the default): `moves` is exactly what's being searched.
+    # "DEPTH_SEARCH": `moves` is only the position the job was launched
+    # *from* - the worker itself finds and searches the deepest, most-
+    # promising not-yet-searched position reachable from there (see
+    # api/tasks/book.py's depth_search), which isn't known until the job's
+    # own turn to search actually comes up. Lets the frontend label these
+    # differently in the queue panel instead of implying `moves` itself is
+    # what's about to be searched.
+    jobType: Literal["EVALUATE", "DEPTH_SEARCH"] = "EVALUATE"
 
 
 class QueueResponse(BaseModel):

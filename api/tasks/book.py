@@ -9,6 +9,7 @@ from api.engine import run_search
 from api.kv_store import (
     add_parent_edge,
     delete_position_if_orphaned,
+    find_deepest_promising_leaf,
     get_book_db,
     get_entry,
     propagate_book_status,
@@ -108,6 +109,44 @@ def _reset_queue_registry_on_startup(**kwargs) -> None:
     reset_queued_jobs(db=get_book_db())
 
 
+def _search_and_save(moves: list[str], iterations: int, db: Rdict) -> dict:
+    """Must be called with _search_semaphore already held. Runs the actual
+    MCTS search at `moves`, persists IN_PROGRESS/FAILED/the final result, and
+    propagates any resulting solved-status/best-move change up the DAG - the
+    common second half of both evaluate_position and depth_search, once each
+    has settled on both a specific target position and its own turn to
+    actually search.
+    """
+    save_entry(moves, job_status=JobStatus.IN_PROGRESS.value, target_visits=iterations, db=db)
+    try:
+        result = run_search(moves, iterations)
+    except Exception:
+        save_entry(moves, job_status=JobStatus.FAILED.value, db=db)
+        raise
+
+    # A move the engine itself found and ranked is, by definition, in
+    # scope for this position's proof - union it into allowedMoves rather
+    # than leaving it to require a separate manual approval. Preserves
+    # anything already there (e.g. added by hand before this search
+    # finished, or kept from a previous search's allowedMoves) - this
+    # only ever adds, it never drops a move someone already removed via a
+    # later, smaller PUT.
+    existing_allowed = (get_entry(compute_hash(moves), db=db) or {}).get("allowedMoves") or []
+    engine_moves = [m["move"] for m in result["topMoves"]]
+    merged_allowed = list(dict.fromkeys([*existing_allowed, *engine_moves]))
+
+    hash_hex = save_entry(moves, job_status=JobStatus.IDLE.value, result=result, allowed_moves=merged_allowed, db=db)
+
+    # Record this position as the parent of every candidate reply it
+    # found, then recompute (and, if changed, propagate up) its own
+    # book-level solved status - see kv_store.propagate_book_status.
+    for top_move in result["topMoves"]:
+        add_parent_edge(moves + [top_move["move"]], parent_hash=hash_hex, db=db)
+    propagate_book_status(hash_hex, db=db)
+
+    return result
+
+
 @celery_app.task(name="book.evaluate")
 def evaluate_position(moves: list[str], target_visits: int | None = None, db: Rdict | None = None) -> dict:
     """Run MCTS evaluation on a position and persist the result in book_db.
@@ -147,39 +186,49 @@ def evaluate_position(moves: list[str], target_visits: int | None = None, db: Rd
     register_queued_job(job_id, moves, iterations, db=db)
     try:
         _search_semaphore.acquire()
-        save_entry(moves, job_status=JobStatus.IN_PROGRESS.value, target_visits=iterations, db=db)
-
         try:
-            result = run_search(moves, iterations)
-        except Exception:
-            save_entry(moves, job_status=JobStatus.FAILED.value, db=db)
-            raise
+            return _search_and_save(moves, iterations, db=db)
         finally:
             _search_semaphore.release()
+    finally:
+        unregister_queued_job(job_id, db=db)
 
-        # A move the engine itself found and ranked is, by definition, in
-        # scope for this position's proof - union it into allowedMoves rather
-        # than leaving it to require a separate manual approval. Preserves
-        # anything already there (e.g. added by hand before this search
-        # finished, or kept from a previous search's allowedMoves) - this
-        # only ever adds, it never drops a move someone already removed via a
-        # later, smaller PUT.
-        existing_allowed = (get_entry(compute_hash(moves), db=db) or {}).get("allowedMoves") or []
-        engine_moves = [m["move"] for m in result["topMoves"]]
-        merged_allowed = list(dict.fromkeys([*existing_allowed, *engine_moves]))
 
-        hash_hex = save_entry(
-            moves, job_status=JobStatus.IDLE.value, result=result, allowed_moves=merged_allowed, db=db
-        )
+@celery_app.task(name="book.depth_search")
+def depth_search(moves: list[str], target_visits: int | None = None, db: Rdict | None = None) -> dict:
+    """Find the deepest, most-promising not-yet-searched position reachable
+    from `moves` by repeatedly following the book's own current best-known
+    move (see kv_store.find_deepest_promising_leaf), then run the exact same
+    search-and-save path evaluate_position does, just against that computed
+    target instead of one the caller names directly.
 
-        # Record this position as the parent of every candidate reply it
-        # found, then recompute (and, if changed, propagate up) its own
-        # book-level solved status - see kv_store.propagate_book_status.
-        for top_move in result["topMoves"]:
-            add_parent_edge(moves + [top_move["move"]], parent_hash=hash_hex, db=db)
-        propagate_book_status(hash_hex, db=db)
+    The registry entry (see register_queued_job) is recorded against the
+    starting `moves`, not the eventual leaf - the leaf isn't known, and can
+    change, until this job's own turn at _search_semaphore actually comes
+    up. That's also why the traversal itself happens only *after*
+    acquire() below, not before it alongside the dispatch-time QUEUED write
+    evaluate_position does: queuing several of these back-to-back (e.g.
+    clicking the UI's Depth Search button repeatedly) dispatches them all
+    against the very same starting `moves`, but each one only resolves its
+    own actual frontier once it's actually its turn to search - by which
+    point any earlier one from the same batch has already finished and
+    saved - so the second click naturally lands one level deeper than the
+    first instead of redundantly re-searching the same leaf.
 
-        return result
+    `db` is a test-only escape hatch - see evaluate_position's own docstring.
+    """
+    db = db if db is not None else get_book_db()
+    iterations = target_visits or SEARCH_LEVEL_ITERATIONS[SearchLevel.DEEP]
+
+    job_id = uuid.uuid4().hex
+    register_queued_job(job_id, moves, iterations, db=db, job_type="DEPTH_SEARCH")
+    try:
+        _search_semaphore.acquire()
+        try:
+            leaf_moves = find_deepest_promising_leaf(moves, db=db)
+            return _search_and_save(leaf_moves, iterations, db=db)
+        finally:
+            _search_semaphore.release()
     finally:
         unregister_queued_job(job_id, db=db)
 

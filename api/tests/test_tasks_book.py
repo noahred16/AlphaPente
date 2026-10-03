@@ -5,7 +5,7 @@ import pytest
 from rocksdict import Rdict
 
 from api.engine import ENGINE_DIR
-from api.tasks.book import evaluate_position, set_allowed_moves
+from api.tasks.book import depth_search, evaluate_position, set_allowed_moves
 
 pytestmark = pytest.mark.skipif(
     not (ENGINE_DIR / "pente").exists(),
@@ -194,6 +194,101 @@ def test_evaluate_position_serializes_concurrent_searches(db, monkeypatch):
     assert all(not t.is_alive() for t in threads), "a thread is still stuck"
 
     assert max_concurrent == 1
+
+
+def test_depth_search_expands_the_books_own_best_unexpanded_child(db):
+    from api.kv_store import get_entry
+    from api.zobrist import compute_hash
+
+    evaluate_position(["K10"], target_visits=100, db=db)
+    root_entry = get_entry(compute_hash(["K10"]), db=db)
+    best_move = root_entry["bookBestMove"]
+    assert best_move is not None  # sanity: the search found at least one candidate
+
+    result = depth_search(["K10"], target_visits=100, db=db)
+
+    assert result["simulations"] == 100
+    leaf_entry = get_entry(compute_hash(["K10", best_move]), db=db)
+    assert leaf_entry["result"] == result
+    # The starting position named in the request is never itself touched by
+    # this job - only the leaf it found gets a real search.
+    assert get_entry(compute_hash(["K10"]), db=db)["jobStatus"] == "IDLE"
+
+
+def test_depth_search_does_not_redundantly_resolve_the_same_leaf_twice(db, monkeypatch):
+    """The whole point of being able to queue several of these in a row: each
+    call re-resolves the frontier fresh against whatever the previous one
+    just saved, rather than redoing the same work. Note this doesn't have to
+    mean "one level deeper than before" on the exact same line every time -
+    expanding a move can reveal it's actually worse than a sibling (the same
+    backprop that proves any other move wrong), which can make the *next*
+    call's best line descend somewhere else entirely; the one real invariant
+    worth checking here is that it's never the exact same leaf twice."""
+    from api.engine import run_search as real_run_search
+
+    searched_moves = []
+
+    def recording_run_search(moves, iterations, *args, **kwargs):
+        searched_moves.append(list(moves))
+        return real_run_search(moves, iterations, *args, **kwargs)
+
+    monkeypatch.setattr("api.tasks.book.run_search", recording_run_search)
+
+    evaluate_position(["K10"], target_visits=100, db=db)
+    depth_search(["K10"], target_visits=100, db=db)
+    depth_search(["K10"], target_visits=100, db=db)
+
+    assert searched_moves[1] != ["K10"]  # never the already-expanded root again
+    assert searched_moves[1] != searched_moves[0]  # nor the same leaf the first call just resolved
+
+
+def test_depth_search_unregisters_from_the_queue_when_done(db):
+    from api.kv_store import get_queued_jobs
+
+    depth_search(["K10"], target_visits=100, db=db)
+
+    assert get_queued_jobs(db=db) == []
+
+
+def test_depth_search_is_registered_under_the_starting_moves_with_its_own_job_type(db, monkeypatch):
+    """The registry entry can't show the real leaf - it isn't known until this
+    job's own turn at _search_semaphore comes up (see depth_search's
+    docstring) - so it's recorded against the starting `moves` instead,
+    tagged DEPTH_SEARCH so the frontend doesn't mistake `moves` itself for
+    what's actually being searched."""
+    import threading
+
+    from api.kv_store import get_queued_jobs
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_run_search(moves, iterations, *args, **kwargs):
+        started.set()
+        finish.wait(timeout=5)
+        return {
+            "simulations": iterations,
+            "solvedStatus": "UNSOLVED",
+            "rootAvgValue": 0.0,
+            "bestMove": None,
+            "topMoves": [],
+        }
+
+    monkeypatch.setattr("api.tasks.book.run_search", slow_run_search)
+
+    thread = threading.Thread(target=depth_search, args=(["K10", "L9"],), kwargs={"target_visits": 100, "db": db})
+    try:
+        thread.start()
+        started.wait(timeout=5)
+
+        jobs = get_queued_jobs(db=db)
+        assert len(jobs) == 1
+        assert jobs[0]["moves"] == ["K10", "L9"]
+        assert jobs[0]["jobType"] == "DEPTH_SEARCH"
+    finally:
+        finish.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
 
 
 def test_set_allowed_moves_persists_and_reports_status(db):

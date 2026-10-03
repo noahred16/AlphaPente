@@ -419,9 +419,11 @@ button.queue-btn {
 
 /* Moves column: a long game's move list can run much longer than the rest
    of the row - cap it and wrap (at the natural space-separated word breaks,
-   not mid-move) instead of stretching the table or overflowing it. */
+   not mid-move) instead of stretching the table or overflowing it. Moves is
+   #saved-table's 3rd column (Memo comes first there) but #queue-table's 2nd
+   (it has no memo column at all). */
 #queue-table td:nth-child(2),
-#saved-table td:nth-child(2) {
+#saved-table td:nth-child(3) {
   max-width: 220px;
   overflow-wrap: break-word;
 }

@@ -49,6 +49,7 @@ const undoBtn = document.getElementById('undo');
 const redoBtn = document.getElementById('redo');
 const refreshBtn = document.getElementById('refresh');
 const levelSelect = document.getElementById('level');
+const depthSearchBtn = document.getElementById('depth-search-btn');
 const queueCountEl = document.getElementById('queue-count');
 const queueSummaryEl = document.getElementById('queue-summary');
 const queueTableBody = document.querySelector('#queue-table tbody');
@@ -216,6 +217,22 @@ async function queueEvaluation(moves) {
   return res.json();
 }
 
+// POST /pente/book/depth-search: unlike queueEvaluation, `moves` here is just
+// where the job starts - the worker itself finds and expands the deepest,
+// most-promising not-yet-searched position reachable from there (see
+// api/tasks/book.py's depth_search). Queuing several of these in a row
+// (clicking the button again before the last one finishes) naturally walks
+// further down the same line each time - see that task's own docstring.
+async function queueDepthSearch(moves, level) {
+  const res = await fetch(`${API_BASE}/pente/book/depth-search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ moves, level }),
+  });
+  if (!res.ok) throw new Error(`POST /pente/book/depth-search failed: ${res.status}`);
+  return res.json();
+}
+
 async function putAllowedMoves(moves, allowedMoves) {
   const res = await fetch(`${API_BASE}/pente/book/allowed-moves`, {
     method: 'PUT',
@@ -305,7 +322,12 @@ function renderQueue({ count, jobs }) {
     // right now; a real navigation just reloads the page onto it.
     const params = new URLSearchParams();
     params.set('moves', job.moves.join(','));
-    row.innerHTML = `<td>${i + 1}</td><td><a class="move-link" href="?${params}">${job.moves.join(' ')}</a></td><td>${level}</td><td>${starts}</td><td>${ends}</td>`;
+    // A DEPTH_SEARCH job's own `moves` is only where it starts, not what it's
+    // actually about to search (that's only resolved once it's this job's
+    // own turn - see api/tasks/book.py's depth_search) - label it as such
+    // rather than implying this exact position is what's being searched.
+    const movesLabel = job.jobType === 'DEPTH_SEARCH' ? `Depth search from ${job.moves.join(' ')}` : job.moves.join(' ');
+    row.innerHTML = `<td>${i + 1}</td><td><a class="move-link" href="?${params}">${movesLabel}</a></td><td>${level}</td><td>${starts}</td><td>${ends}</td>`;
     queueTableBody.appendChild(row);
   });
 }
@@ -417,9 +439,12 @@ function positionKey(moves) {
 // doesn't affect solved status, allowed moves, or anything the worker
 // computes), so it lives here in localStorage rather than book_db: no new
 // endpoint, and nothing here ever touches the one thing only the worker is
-// allowed to write. positionKey(moves) -> {moves, starredAt}; the move array
-// is stored (not just derived from the key) so the Saved Games panel doesn't
-// need to re-parse it.
+// allowed to write. positionKey(moves) -> {moves, starredAt, memo}; the move
+// array is stored (not just derived from the key) so the Saved Games panel
+// doesn't need to re-parse it. `memo` is a short, optional, free-text note
+// set once at save time (see toggleStarred) - absent (undefined) on anything
+// saved before this field existed, which renderSavedGames treats the same
+// as an empty one.
 function loadStarredGames() {
   try {
     return new Map(Object.entries(JSON.parse(localStorage.getItem(STARRED_STORAGE_KEY)) || {}));
@@ -438,13 +463,18 @@ function saveStarredGames() {
 
 // The star button doubles as its own toggle - click again to unstar (see the
 // module docstring's request: "the star button could act as a toggle to
-// also remove").
+// also remove"). Only asks for a memo when actually saving - unstarring
+// needs no prompt. Cancelling that prompt (null, not just an empty string)
+// backs out of saving altogether, same as cancelling the remove-move confirm
+// dialog elsewhere in this file.
 function toggleStarred() {
   const key = positionKey(moveHistory);
   if (starredGames.has(key)) {
     starredGames.delete(key);
   } else {
-    starredGames.set(key, { moves: [...moveHistory], starredAt: Date.now() });
+    const memo = prompt('Short memo for this saved position (optional):', '');
+    if (memo === null) return;
+    starredGames.set(key, { moves: [...moveHistory], starredAt: Date.now(), memo: memo.trim() });
   }
   saveStarredGames();
   renderStarButton();
@@ -470,7 +500,11 @@ function renderSavedGames() {
     // own move links - a plain link to that exact game.
     const params = new URLSearchParams();
     params.set('moves', saved.moves.join(','));
-    row.innerHTML = `<td>${i + 1}</td><td><a class="move-link" href="?${params}">${saved.moves.join(' ')}</a></td><td></td>`;
+    row.innerHTML = `<td>${i + 1}</td><td></td><td><a class="move-link" href="?${params}">${saved.moves.join(' ')}</a></td><td></td>`;
+    // textContent, not interpolated into the innerHTML above: unlike every
+    // other field in this row (validated move labels), a memo is arbitrary
+    // free text someone typed into a prompt() - this avoids treating it as HTML.
+    row.children[1].textContent = saved.memo || '';
 
     const removeBtn = document.createElement('button');
     removeBtn.className = 'remove-btn';
@@ -482,7 +516,7 @@ function renderSavedGames() {
       renderStarButton();
       renderSavedGames();
     });
-    row.children[2].appendChild(removeBtn);
+    row.children[3].appendChild(removeBtn);
 
     savedTableBody.appendChild(row);
   });
@@ -1104,6 +1138,24 @@ function onDeepenRootClick(btn, label) {
   return requeueEvaluation(moveHistory, rootDeepenKey(), btn, label);
 }
 
+// Depth Search: queues a job that finds its own target rather than searching
+// the current position itself (see queueDepthSearch) - so, unlike
+// Queue/Deepen/Re-run, there's no specific move's state to track locally
+// afterward. The button is only disabled for the moment it takes to confirm
+// the POST landed, not for as long as the search itself runs - clicking it
+// again right away is the whole point (see the toolbar button's title).
+async function onDepthSearchClick() {
+  depthSearchBtn.disabled = true;
+  try {
+    await queueDepthSearch(moveHistory, currentLevel());
+    loadQueue(); // show it in the queue panel immediately rather than waiting for the next poll
+  } catch (e) {
+    statusEl.textContent = `Error queuing depth search: ${e.message}`;
+  } finally {
+    depthSearchBtn.disabled = false;
+  }
+}
+
 // Reset always starts fresh at the center opening, ignoring the URL (unlike
 // the initial load below) - and () => newGame(), not newGame directly, since
 // addEventListener would otherwise pass the click event itself as
@@ -1113,6 +1165,7 @@ undoBtn.addEventListener('click', undoMove);
 redoBtn.addEventListener('click', redoMove);
 refreshBtn.addEventListener('click', loadBookEntry);
 starBtn.addEventListener('click', toggleStarred);
+depthSearchBtn.addEventListener('click', onDepthSearchClick);
 
 PenteModule().then(mod => {
   Module = mod;

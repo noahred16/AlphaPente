@@ -22,6 +22,7 @@
     <option value="DEEP">Deep</option>
     <option value="MAX">Max</option>
   </select>
+  <button id="depth-search-btn" title="Queue a job that finds and expands the deepest, most-promising not-yet-searched position down the current best line from here - click again to queue another, one level further">Depth Search</button>
   <a id="nav-5x5" href="5x5.html">5x5 Demo</a>
   <span id="queue-count" title="Evaluation jobs dispatched but not yet finished" hidden></span>
 </div>
@@ -58,7 +59,7 @@
       <div id="saved-summary"></div>
       <table id="saved-table">
         <thead>
-          <tr><th>#</th><th>Moves</th><th></th></tr>
+          <tr><th>#</th><th>Memo</th><th>Moves</th><th></th></tr>
         </thead>
         <tbody></tbody>
       </table>

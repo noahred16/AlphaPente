@@ -48,9 +48,10 @@ data — treat every change near it accordingly:
 ```
  docs/                    api/ (FastAPI)         api/tasks (Celery worker)
  vanilla JS/HTML/CSS  -->  HTTP endpoints    -->  evaluate_position
- served as static         dispatches tasks       set_allowed_moves
- files, NOT part          reads book_db           |
- of docker-compose        (RocksDB "secondary")    v
+ served as static         dispatches tasks       depth_search
+ files, NOT part          reads book_db           set_allowed_moves
+ of docker-compose        (RocksDB "secondary")    |
+                                                    v
                                                  shells out to build/pente
                                                    |
                                                    v
@@ -97,9 +98,9 @@ and call each other while already holding it).
 
 | File | Role |
 |---|---|
-| `api/routers/book.py` | HTTP endpoints: `GET`/`POST /pente/book`, `PUT /pente/book/allowed-moves`, `GET /pente/book/queue`. Maps a raw book_db entry to the API's response schema (`_to_book_entry`), including several *derived* (not stored verbatim) fields — see below. |
-| `api/kv_store.py` | All book_db read/write logic: entries, the parent DAG, canonical symmetry grouping, solved-status/best-move propagation, and the queue registry. |
-| `api/tasks/book.py` | The two Celery tasks (`evaluate_position`, `set_allowed_moves`), the search-level tables, the single-search semaphore. |
+| `api/routers/book.py` | HTTP endpoints: `GET`/`POST /pente/book`, `POST /pente/book/depth-search`, `PUT /pente/book/allowed-moves`, `GET /pente/book/queue`. Maps a raw book_db entry to the API's response schema (`_to_book_entry`), including several *derived* (not stored verbatim) fields — see below. |
+| `api/kv_store.py` | All book_db read/write logic: entries, the parent DAG, canonical symmetry grouping, solved-status/best-move propagation, the frontier-finding traversal (`find_deepest_promising_leaf`), and the queue registry. |
+| `api/tasks/book.py` | The three Celery tasks (`evaluate_position`, `depth_search`, `set_allowed_moves`), the search-level tables, the single-search semaphore. |
 | `api/engine.py` | Subprocess shim: runs `./pente <moves> <iterations> -n -j`, parses the JSON on stdout. |
 | `api/zobrist.py` | `compute_hash` (position → key) and `compute_canonical_hash` (position → symmetry-group key), used to dedupe board-symmetric positions. |
 | `api/schemas/book.py` | Pydantic request/response models. |
@@ -230,6 +231,38 @@ returning it, specifically to keep agreeing with that older convention.
   | DEEP | 900,000,000 | ~6min ballpark (really arena-bound) |
   | MAX | 999,000,000 | none — "whatever this machine can hold" |
 
+- **`depth_search`** (the "Depth Search" toolbar button): a second job type
+  alongside plain `evaluate_position`, for iteratively deepening the book's
+  own current best line without having to manually drill into it move by
+  move. Given a starting position, the worker itself — not the caller —
+  finds the actual target: `find_deepest_promising_leaf` (`kv_store.py`)
+  repeatedly follows `compute_book_best_move`'s own ranking one move at a
+  time until it reaches a position that's never actually been searched (no
+  entry at all, or a bare `add_parent_edge` stub with no `result`), then runs
+  the exact same search-and-save path `evaluate_position` uses on that leaf.
+  One side effect worth knowing: this is also how a position that was only
+  ever *proven* as part of some ancestor's one-ply engine read (never
+  independently searched — see the solved-status propagation section above)
+  gets turned into real, independently-verified data.
+  - The traversal deliberately happens *after* `_search_semaphore.acquire()`,
+    not before — so queuing several of these back-to-back (clicking the
+    button again before the last one finishes) doesn't have them all resolve
+    the same leaf at dispatch time. Each one re-reads the book fresh at the
+    moment it's actually its turn to search, by which point any earlier job
+    from the same batch has already saved its result — so the next one
+    naturally lands one level further down the line. It isn't guaranteed to
+    always be the *same* line, though: expanding a move can reveal it's
+    actually worse than a sibling, the same backprop that proves any move
+    wrong, which can shift the next call onto a different branch entirely —
+    exactly the "turns out to be a bad move" case the backprop exists to
+    catch.
+  - The queue registry (`register_queued_job`) records this kind of job
+    against its *starting* position, tagged `jobType: "DEPTH_SEARCH"` — the
+    real leaf isn't known (and can change) until the job's own turn to
+    search comes up, so `GET /pente/book/queue` and the Queue panel both
+    label it "Depth search from `<moves>`" rather than implying that exact
+    position is what's being searched.
+
 ## Frontend (`docs/`)
 
 - `docs/index.html` + `docs/js/book.js` + `docs/css/style.css`: one
@@ -257,6 +290,11 @@ returning it, specifically to keep agreeing with that older convention.
 - The Queue panel polls `GET /pente/book/queue` on its own timer,
   independent of the per-position poll loop, and chains each job's own
   estimated duration into a running ETA schedule.
+- The toolbar's "Depth Search" button (unlike the per-move Queue/Deepen/
+  Re-run buttons) has no specific target move to track locally — it just
+  POSTs to `/pente/book/depth-search` and is re-enabled as soon as that
+  responds, not once the job itself finishes, so clicking it again right
+  away to queue another is the expected way to use it.
 
 ## Known gotchas worth remembering
 

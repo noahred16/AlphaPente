@@ -298,6 +298,82 @@ def test_propagate_book_status_updates_parent_best_move_when_a_childs_own_value_
     assert kv_store.get_entry(hash_hex, db=db)["bookBestMove"] == "L9"
 
 
+# ─── find_deepest_promising_leaf: the "Depth Search" button's own traversal ──
+
+
+def test_find_deepest_promising_leaf_returns_moves_unchanged_for_a_never_seen_position(db):
+    leaf = kv_store.find_deepest_promising_leaf(["K10"], db=db)
+
+    assert leaf == ["K10"]
+
+
+def test_find_deepest_promising_leaf_descends_one_level_to_an_unexpanded_child(db):
+    moves = ["K10"]
+    result = {
+        "solvedStatus": "UNSOLVED",
+        "topMoves": [
+            {"move": "L9", "status": "UNSOLVED", "avgValue": 0.9},
+            {"move": "L8", "status": "UNSOLVED", "avgValue": 0.1},
+        ],
+    }
+    kv_store.save_entry(moves, result=result, db=db)  # L9/L8 have no entries of their own at all yet
+
+    leaf = kv_store.find_deepest_promising_leaf(moves, db=db)
+
+    assert leaf == ["K10", "L9"]  # the higher-value candidate - and the real next thing to search
+
+
+def test_find_deepest_promising_leaf_chains_through_multiple_expanded_levels(db):
+    moves = ["K10"]
+    kv_store.save_entry(
+        moves,
+        result={"solvedStatus": "UNSOLVED", "topMoves": [{"move": "L9", "status": "UNSOLVED", "avgValue": 0.5}]},
+        db=db,
+    )
+    kv_store.save_entry(
+        moves + ["L9"],
+        result={"solvedStatus": "UNSOLVED", "topMoves": [{"move": "M7", "status": "UNSOLVED", "avgValue": 0.5}]},
+        db=db,
+    )
+    # M7 itself has no entry yet - the real frontier, two levels down.
+
+    leaf = kv_store.find_deepest_promising_leaf(moves, db=db)
+
+    assert leaf == ["K10", "L9", "M7"]
+
+
+def test_find_deepest_promising_leaf_lands_on_a_proven_but_never_independently_searched_stub(db):
+    """The self-healing case: a move the parent's own one-ply engine read
+    already proved SOLVED_LOSS (resolving the parent to SOLVED_WIN via
+    compute_book_solved_status's engine-status fallback) without that move
+    ever being independently searched - still a bare add_parent_edge stub,
+    no result of its own. find_deepest_promising_leaf should land exactly
+    there, regardless of the parent already being solved - that's precisely
+    how such a stub gets turned into real, independently-verified data."""
+    moves = ["K10"]
+    result = {"solvedStatus": "UNSOLVED", "topMoves": [{"move": "L9", "status": "SOLVED_LOSS", "avgValue": -1.0}]}
+    hash_hex = kv_store.save_entry(moves, result=result, db=db)
+    kv_store.add_parent_edge(moves + ["L9"], parent_hash=hash_hex, db=db)  # bare stub - no result
+    kv_store.propagate_book_status(hash_hex, db=db)
+    assert kv_store.get_entry(hash_hex, db=db)["bookSolvedStatus"] == "SOLVED_WIN"  # sanity: already "solved"
+
+    leaf = kv_store.find_deepest_promising_leaf(moves, db=db)
+
+    assert leaf == ["K10", "L9"]
+
+
+def test_find_deepest_promising_leaf_stops_at_a_terminal_node_with_no_candidates(db):
+    """A position that's been searched but found no (or no longer has any)
+    candidate moves - compute_book_best_move returns (None, None) for it -
+    is the end of the line, not an infinite loop."""
+    moves = ["K10"]
+    kv_store.save_entry(moves, result={"solvedStatus": "SOLVED_DRAW", "topMoves": []}, db=db)
+
+    leaf = kv_store.find_deepest_promising_leaf(moves, db=db)
+
+    assert leaf == moves
+
+
 # ─── symmetry: canonical grouping shares proof across orientations ───────────
 
 

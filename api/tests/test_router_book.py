@@ -8,7 +8,7 @@ from rocksdict import Rdict
 
 from api.main import app
 from api.schemas.book import SearchLevel
-from api.tasks.book import SEARCH_LEVEL_ITERATIONS, evaluate_position, set_allowed_moves
+from api.tasks.book import SEARCH_LEVEL_ITERATIONS, depth_search, evaluate_position, set_allowed_moves
 
 client = TestClient(app)
 
@@ -56,6 +56,23 @@ def test_post_defaults_to_medium_level(monkeypatch):
 
 def test_post_rejects_illegal_move():
     response = client.post("/pente/book", json={"moves": ["K10", "K10"]})
+
+    assert response.status_code == 400
+
+
+def test_post_depth_search_queues_job(monkeypatch):
+    calls = []
+    monkeypatch.setattr(depth_search, "delay", lambda *a, **kw: calls.append((a, kw)) or _FakeAsyncResult())
+
+    response = client.post("/pente/book/depth-search", json={"moves": ["K10"], "level": "FAST"})
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": "fake-task-id", "jobStatus": "QUEUED"}
+    assert calls == [((["K10"],), {"target_visits": SEARCH_LEVEL_ITERATIONS[SearchLevel.FAST]})]
+
+
+def test_post_depth_search_rejects_illegal_move():
+    response = client.post("/pente/book/depth-search", json={"moves": ["K10", "K10"]})
 
     assert response.status_code == 400
 
