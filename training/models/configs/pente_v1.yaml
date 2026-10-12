@@ -1,0 +1,41 @@
+# Example model config — first trained Pente model.
+#
+# Draft for discussion: nothing in the C++ binaries reads this yet. Values
+# below reproduce today's hardcoded defaults (TrainCommon.hpp, SelfPlayConfig,
+# NNModel.hpp) exactly.
+
+name: pente_v1
+
+# Which bootstrap dataset this model starts from — see
+# training/bootstrap/configs/<name>.yaml. Shared across any model config that
+# references it; generated once, reused by all of them.
+bootstrap: pente_base
+
+model:
+  channels: 128
+  res_blocks: 8
+
+# Self-play data generation once a trained model exists.
+self_play:
+  games_per_iteration: 200
+  simulations: 1600
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  buffer_size: 62500       # FIFO cap on stored positions (unique, pre-augmentation)
+  min_buffer_size: 625     # below this, train is skipped for the iteration
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2          # target = alpha*z + (1-alpha)*rootQ
+  val_fraction: 0.05        # held out from training, used for the promotion gate
+  val_gate_tolerance: 1.02  # candidate must not regress val loss by more than this factor
+  min_grad_steps: 200
+
+promotion_arena:
+  games: 30
+  simulations: 400
+  win_rate_threshold: 0.45  # candidate must reach this share of decisive games vs previous best

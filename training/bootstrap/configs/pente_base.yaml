@@ -1,0 +1,26 @@
+# Bootstrap config — heuristic-guided data generation that seeds a model
+# lineage. Any model config can share this by referencing its name
+# (bootstrap: pente_base), so changing e.g. a model's architecture or
+# learning rate never implies regenerating this data.
+#
+# Read by training/bootstrap.py, which drives the `generate` binary directly.
+
+name: pente_base
+
+game:
+  type: pente             # pente | gomoku | keryopente — fixes captures/rules via the matching Config preset
+  board_size: 19
+
+# training/bootstrap.py compares this section against the manifest.json saved
+# alongside training/bootstrap/data/pente_base/bootstrap.pt the last time it
+# was generated. Identical -> up to date. Different -> flagged stale, and
+# regenerating wipes the old data rather than appending onto it.
+bootstrap:
+  evaluator: heuristic
+  batches: 10
+  games_per_batch: 50
+  simulations: 1000       # low for fast local iteration; bump once the harness is settled
+  tail_moves: 0          # 0 = keep all moves; >0 = keep only the last N per game
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8  # moves after which Dirichlet noise/temp sampling turn off

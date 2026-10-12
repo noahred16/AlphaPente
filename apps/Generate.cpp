@@ -19,10 +19,13 @@ int main(int argc, char *argv[]) {
     int mctsSims         = 20000;
     bool bootstrap       = false;
     int tailMoves        = 0;     // 0 = all moves
+    bool dryRun          = false;
+    bool jsonOutput      = false;
+    std::string outDirFlag = "";  // "" = checkpoints/<game>
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail]\n"
+            "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-x] [-j] [-d dir]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -31,40 +34,55 @@ int main(int argc, char *argv[]) {
             "  -e  evaluator: auto | heuristic | nn        (default: auto)\n"
             "  -b  bootstrap mode — use heuristic, write to bootstrap.pt\n"
             "  -t  keep only the last N moves per game     (default: all)\n"
+            "  -x  dry run — play games and report timing, write nothing to disk\n"
+            "  -j  on success, print a final {\"status\": \"ok\", \"positions\": N} line for scripts\n"
+            "  -d  output dir                              (default: checkpoints/<game>;\n"
+            "      lets differently-configured bootstrap runs of the same game write to\n"
+            "      separate files instead of sharing/clobbering checkpoints/<game>)\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
             "  ./generate -g pente -n 50 -s 400\n"
             "\n"
             "  # ad hoc: bootstrap the buffer with heuristic-guided play\n"
-            "  ./generate -g pente -n 200 -s 200 -b\n";
+            "  ./generate -g pente -n 200 -s 200 -b\n"
+            "\n"
+            "  # calibrate expected throughput for an ETA, without touching bootstrap.pt\n"
+            "  ./generate -g pente -n 3 -s 50000 -b -x\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:h")) != -1) {
         if      (opt == 'g') gameFlag     = optarg;
         else if (opt == 'n') gamesPerIter = std::stoi(optarg);
         else if (opt == 's') mctsSims     = std::stoi(optarg);
         else if (opt == 'e') evalFlag     = optarg;
         else if (opt == 'b') bootstrap    = true;
         else if (opt == 't') tailMoves    = std::stoi(optarg);
+        else if (opt == 'x') dryRun       = true;
+        else if (opt == 'j') jsonOutput   = true;
+        else if (opt == 'd') outDirFlag   = optarg;
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
 
     if (bootstrap) evalFlag = "heuristic";
 
-    const std::string ckptDir    = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    const std::string ckptDir    = outDirFlag.empty()
+        ? std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag
+        : std::string(PROJECT_ROOT) + "/" + outDirFlag;
     const std::string bestPath   = ckptDir + "/best_model.pt";
     const std::string bufferPath = bootstrap ? ckptDir + "/bootstrap.pt"
                                              : ckptDir + "/buffer.pt";
 
-    std::filesystem::create_directories(ckptDir);
-    if (!std::filesystem::exists(bestPath)) {
-        std::cout << "Initializing new model...\n";
-        AlphaNet m(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
-        torch::save(m, bestPath);
-        std::cout << "Saved → " << bestPath << "\n\n";
+    if (!dryRun) {
+        std::filesystem::create_directories(ckptDir);
+        if (!std::filesystem::exists(bestPath)) {
+            std::cout << "Initializing new model...\n";
+            AlphaNet m(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+            torch::save(m, bestPath);
+            std::cout << "Saved → " << bestPath << "\n\n";
+        }
     }
 
     bool useHeuristic;
@@ -83,7 +101,8 @@ int main(int argc, char *argv[]) {
               << "  games    : " << gamesPerIter  << "\n"
               << "  sims     : " << mctsSims       << "\n"
               << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
-              << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n\n";
+              << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n"
+              << "  dry run  : " << (dryRun ? "yes — nothing will be written to disk" : "no") << "\n\n";
 
     SelfPlayConfig spConfig;
     spConfig.simulations      = mctsSims;
@@ -154,6 +173,13 @@ int main(int argc, char *argv[]) {
               << "  avg/game: " << std::setprecision(1) << totalSecs / gamesPerIter << "s"
               << "  avg/pos: "  << std::setprecision(3) << (totalPositions > 0 ? totalSecs / totalPositions : 0.0) << "s\n";
 
+    if (dryRun) {
+        std::cout << "\n── Dry run ──────────────────────────────────────────────────────\n"
+                  << "  generated: " << totalPositions << " positions — not saved (" << bufferPath << " untouched)\n";
+        if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions << "}\n";
+        return 0;
+    }
+
     // Store compactly: stone planes only as uint8, policies as float16
     // (decodeStates reconstructs the full 5-plane float input at train time).
     // Values are stored unblended as [N, 2] = (z, rootQ); the training target
@@ -177,6 +203,7 @@ int main(int argc, char *argv[]) {
     saveBuffer(buf, bufferPath);
     std::cout << "  saved  → " << bufferPath << "\n";
 
+    if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions << "}\n";
     return 0;
 }
 

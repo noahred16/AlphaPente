@@ -281,7 +281,28 @@ gdb -ex run -ex bt -ex quit --args ./pente "1  K10 ..."
 
 Training is split into two steps: `generate` (self-play → buffer) and `train` (buffer → model checkpoint).
 
-### Bootstrap (first run)
+### Bootstrap (interactive harness)
+
+`training/bootstrap.py` wraps bootstrap data generation in a small interactive
+tool: pick a config from `training/bootstrap/configs/`, see whether data
+already exists for it (and whether it's still in sync with the config),
+get an ETA, and run it with a progress bar.
+
+```bash
+source .venv/bin/activate   # repo root venv
+pip install -r training/requirements.txt
+
+python training/bootstrap.py              # prompts for a config if more than one exists
+python training/bootstrap.py pente_base    # or name one directly
+```
+
+Bootstrap settings (simulations, batches, games per batch, etc.) live in
+`training/bootstrap/configs/<name>.yaml`. Generated data and a manifest
+recording what produced it land in `training/bootstrap/data/<name>/`
+(gitignored — if you need it on another machine, regenerate from the config
+rather than copying the data over).
+
+### Bootstrap (first run, manual)
 
 Fill the replay buffer with heuristic-guided games before the network has learned anything:
 

@@ -2,6 +2,11 @@
 checkpoints/
 !checkpoints/pente/best_model.pt
 
+# Generated training data/artifacts (regenerable from training/*/configs/*.yaml);
+# the configs themselves are tracked.
+training/bootstrap/data/
+training/models/runs/
+
 # Solved-book raw .bin files: only the gzipped copy (docs/data/*.bin.gz) is
 # actually served/committed - see scripts/build_wasm.sh. The raw .bin is
 # just an intermediate, regenerable via `solve5x5 -B 4 -x -o
