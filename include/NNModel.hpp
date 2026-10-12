@@ -1,6 +1,8 @@
 #pragma once
 #ifdef WITH_TORCH
 #include <torch/torch.h>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 // Residual block: Conv->BN->ReLU->Conv->BN + skip->ReLU
@@ -32,5 +34,23 @@ struct AlphaNetImpl : torch::nn::Module {
     std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor planes, torch::Tensor captures);
 };
 TORCH_MODULE(AlphaNet);
+
+// torch::load(model, path) does NOT error on a channels mismatch — it silently
+// resizes model's tensors to match whatever is in the archive, so the loaded
+// model silently ends up at the *file's* channel count, not the one it was
+// constructed with. (A res_blocks/topology mismatch does throw on its own,
+// since that changes which named submodules exist.) Call this right after
+// torch::load to catch the channels case explicitly instead of silently
+// training/evaluating at the wrong width.
+inline void checkArchitectureMatches(const AlphaNet &model, int expectedChannels,
+                                      const std::string &path) {
+    int actualChannels = (int)model->inputConv->weight.size(0);
+    if (actualChannels != expectedChannels) {
+        throw std::runtime_error(
+            "Architecture mismatch loading " + path + ": requested " +
+            std::to_string(expectedChannels) + " channels, but torch::load silently resized to " +
+            std::to_string(actualChannels) + " channels (the file's actual shape).");
+    }
+}
 
 #endif // WITH_TORCH

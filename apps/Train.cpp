@@ -35,7 +35,8 @@ static std::pair<ReplayBuffer, ReplayBuffer> splitBuffer(const ReplayBuffer &buf
     return {trainBuf, valBuf};
 }
 
-static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::Device device) {
+static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::Device device,
+                             int batchSize, float valueLossWeight) {
     torch::NoGradGuard noGrad;
     model->to(device);
     model->eval();
@@ -45,8 +46,8 @@ static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::De
 
     double  totalLoss  = 0.0;
     int64_t numBatches = 0;
-    for (int64_t start = 0; start < n; start += BATCH_SIZE) {
-        int64_t end = std::min<int64_t>(start + BATCH_SIZE, n);
+    for (int64_t start = 0; start < n; start += batchSize) {
+        int64_t end = std::min<int64_t>(start + batchSize, n);
 
         auto captures = val.captures.slice(0, start, end).to(device);
         auto states   = decodeStates(val.states.slice(0, start, end).to(device), captures);
@@ -56,14 +57,15 @@ static double computeValLoss(AlphaNet &model, const ReplayBuffer &val, torch::De
         auto [logPolicy, valuePred] = model->forward(states, captures);
         auto pLoss = -(policies * logPolicy).sum(1).mean();
         auto vLoss = torch::mse_loss(valuePred, values);
-        totalLoss += (pLoss + VALUE_LOSS_WEIGHT * vLoss).item<double>();
+        totalLoss += (pLoss + valueLossWeight * vLoss).item<double>();
         numBatches++;
     }
     return totalLoss / numBatches;
 }
 
 static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSteps,
-                       torch::Device device) {
+                       torch::Device device, int batchSize, float learningRate,
+                       float weightDecay, float valueLossWeight) {
     model->train();
     model->to(device);
 
@@ -75,7 +77,7 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
 
     torch::optim::SGD optimizer(
         model->parameters(),
-        torch::optim::SGDOptions(LR).momentum(0.9).weight_decay(WEIGHT_DECAY));
+        torch::optim::SGDOptions(learningRate).momentum(0.9).weight_decay(weightDecay));
 
     int64_t n             = buf.size();
     double  totalPolicy   = 0.0;
@@ -85,7 +87,7 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
     std::cout << "  baseline policy loss (uniform): ~5.89\n";
 
     for (int step = 0; step < gradientSteps; step++) {
-        auto idx = torch::randint(0, n, {BATCH_SIZE}, torch::kInt64).to(device);
+        auto idx = torch::randint(0, n, {batchSize}, torch::kInt64).to(device);
 
         auto bStones   = states.index_select(0, idx);
         auto bCaptures = captures.index_select(0, idx);
@@ -100,7 +102,7 @@ static void trainModel(AlphaNet &model, const ReplayBuffer &buf, int gradientSte
 
         auto pLoss = -(bPolicies * logPolicy).sum(1).mean();
         auto vLoss = torch::mse_loss(valuePred, bValues);
-        auto loss  = pLoss + VALUE_LOSS_WEIGHT * vLoss;
+        auto loss  = pLoss + valueLossWeight * vLoss;
 
         loss.backward();
         optimizer.step();
@@ -126,19 +128,47 @@ int main(int argc, char *argv[]) {
     bool        bootstrap     = false;
     float       valueAlpha    = 0.2f;
     std::string outDirFlag    = "";  // "" = checkpoints/<game>
+    std::string inDirFlag     = "";  // "" = checkpoints/<game>
+    bool        jsonOutput    = false;
+    int         batchSize        = BATCH_SIZE;
+    float       learningRate     = LR;
+    float       weightDecay      = WEIGHT_DECAY;
+    float       valueLossWeight  = VALUE_LOSS_WEIGHT;
+    double      valFraction      = VAL_FRACTION;
+    double      valGateTolerance = VAL_GATE_TOLERANCE;
+    int         minGradSteps     = MIN_GRAD_STEPS;
+    int         channels         = AlphaNetImpl::kChannels;
+    int         resBlocks        = AlphaNetImpl::kResBlocks;
 
     auto usage = [&](std::ostream &out) {
         out <<
-            "Usage: train [-g game] [-t steps] [-a alpha] [-d dir] [-b]\n"
+            "Usage: train [-g game] [-t steps] [-a alpha] [-d dir] [-i dir] [-b] [-j]\n"
+            "              [-B batch] [-l lr] [-W decay] [-v weight] [-f fraction] [-G tolerance] [-m steps]\n"
+            "              [-c channels] [-r res_blocks]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
             "  -t  gradient steps (0 = auto from buffer)  (default: " << stepsOverride << ")\n"
             "  -a  value blend alpha: target = a*z + (1-a)*rootQ  (default: " << valueAlpha << ")\n"
-            "  -d  checkpoint output dir                  (default: checkpoints/<game>;\n"
-            "      the buffer is always read from checkpoints/<game> — lets alpha-sweep\n"
-            "      runs share one buffer without clobbering each other's best_model.pt)\n"
+            "  -d  checkpoint output dir                  (default: same as -i, or\n"
+            "      checkpoints/<game> if -i is also unset; lets alpha-sweep runs share\n"
+            "      one buffer without clobbering each other's best_model.pt)\n"
+            "  -i  buffer input dir (where bootstrap.pt/buffer.pt is read from)\n"
+            "      (default: checkpoints/<game>)\n"
             "  -b  bootstrap mode — train from bootstrap.pt instead of buffer.pt\n"
+            "  -j  on completion, print a final JSON status line for scripts to check\n"
+            "  -B  SGD batch size                          (default: " << batchSize << ")\n"
+            "  -l  learning rate                           (default: " << learningRate << ")\n"
+            "  -W  weight decay                            (default: " << weightDecay << ")\n"
+            "  -v  value loss weight (relative to policy)  (default: " << valueLossWeight << ")\n"
+            "  -f  validation fraction held out            (default: " << valFraction << ")\n"
+            "  -G  val-loss gate tolerance (promote if candidate <= baseline * this)\n"
+            "      (default: " << valGateTolerance << ")\n"
+            "  -m  min gradient steps (floor when auto-computing from buffer size)\n"
+            "      (default: " << minGradSteps << ")\n"
+            "  -c  model channels                          (default: " << channels << ";\n"
+            "      must match an existing best_model.pt's channels — shapes are fixed at save time)\n"
+            "  -r  model residual blocks                   (default: " << resBlocks << "; same caveat as -c)\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -148,21 +178,36 @@ int main(int argc, char *argv[]) {
             "  ./train -g pente -t 500\n"
             "\n"
             "  # alpha-sweep experiment against shared bootstrap data\n"
-            "  ./train -g pente -b -a 0.4 -d checkpoints/pente_a40\n";
+            "  ./train -g pente -b -a 0.4 -d checkpoints/pente_a40\n"
+            "\n"
+            "  # train a model config against a separately-generated bootstrap dataset\n"
+            "  ./train -g pente -b -i training/bootstrap/data/pente_base -d training/models/runs/pente_v1 -j\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:t:a:d:bh")) != -1) {
-        if      (opt == 'g') gameFlag      = optarg;
-        else if (opt == 't') stepsOverride = std::stoi(optarg);
-        else if (opt == 'a') valueAlpha    = std::stof(optarg);
-        else if (opt == 'd') outDirFlag    = optarg;
-        else if (opt == 'b') bootstrap     = true;
+    while ((opt = getopt(argc, argv, "g:t:a:d:i:bjB:l:W:v:f:G:m:c:r:h")) != -1) {
+        if      (opt == 'g') gameFlag         = optarg;
+        else if (opt == 't') stepsOverride    = std::stoi(optarg);
+        else if (opt == 'a') valueAlpha       = std::stof(optarg);
+        else if (opt == 'd') outDirFlag       = optarg;
+        else if (opt == 'i') inDirFlag        = optarg;
+        else if (opt == 'b') bootstrap        = true;
+        else if (opt == 'j') jsonOutput       = true;
+        else if (opt == 'B') batchSize        = std::stoi(optarg);
+        else if (opt == 'l') learningRate     = std::stof(optarg);
+        else if (opt == 'W') weightDecay      = std::stof(optarg);
+        else if (opt == 'v') valueLossWeight  = std::stof(optarg);
+        else if (opt == 'f') valFraction      = std::stod(optarg);
+        else if (opt == 'G') valGateTolerance = std::stod(optarg);
+        else if (opt == 'm') minGradSteps     = std::stoi(optarg);
+        else if (opt == 'c') channels         = std::stoi(optarg);
+        else if (opt == 'r') resBlocks        = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
 
-    const std::string bufDir     = std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag;
+    const std::string bufDir     = inDirFlag.empty() ? std::string(PROJECT_ROOT) + "/checkpoints/" + gameFlag
+                                                      : std::string(PROJECT_ROOT) + "/" + inDirFlag;
     const std::string ckptDir    = outDirFlag.empty() ? bufDir
                                                       : std::string(PROJECT_ROOT) + "/" + outDirFlag;
     const std::string bestPath   = ckptDir + "/best_model.pt";
@@ -181,16 +226,17 @@ int main(int argc, char *argv[]) {
     if (buf.size() < MIN_BUFFER_SIZE) {
         std::cout << "Buffer (" << buf.size() << ") < min (" << MIN_BUFFER_SIZE
                   << ") — skipping training.\n";
+        if (jsonOutput) std::cout << "{\"status\": \"skipped\", \"buffer_size\": " << buf.size() << "}\n";
         return 0;
     }
 
     buf.values = blendValueTargets(buf.values, valueAlpha);
 
-    auto [trainBuf, valBuf] = splitBuffer(buf, VAL_FRACTION);
+    auto [trainBuf, valBuf] = splitBuffer(buf, valFraction);
 
     int gradientSteps = stepsOverride > 0
         ? stepsOverride
-        : std::max(MIN_GRAD_STEPS, (int)(trainBuf.size() / BATCH_SIZE));
+        : std::max(minGradSteps, (int)(trainBuf.size() / batchSize));
 
     std::cout << "── Training (" << gradientSteps << " steps, " << valBuf.size()
               << " positions held out for validation) ──────────────────────────\n";
@@ -198,19 +244,21 @@ int main(int argc, char *argv[]) {
     torch::Device device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU);
     std::cout << "  device: " << device << "\n\n";
 
-    AlphaNet model(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+    AlphaNet model(channels, resBlocks);
     bool hasBaseline = std::filesystem::exists(bestPath);
-    if (hasBaseline)
+    if (hasBaseline) {
         torch::load(model, bestPath);
+        checkArchitectureMatches(model, channels, bestPath);
+    }
 
     double baselineValLoss = hasBaseline
-        ? computeValLoss(model, valBuf, device)
+        ? computeValLoss(model, valBuf, device, batchSize, valueLossWeight)
         : std::numeric_limits<double>::infinity();
 
-    trainModel(model, trainBuf, gradientSteps, device);
+    trainModel(model, trainBuf, gradientSteps, device, batchSize, learningRate, weightDecay, valueLossWeight);
 
-    double candidateValLoss = computeValLoss(model, valBuf, device);
-    bool promote = !hasBaseline || candidateValLoss <= baselineValLoss * VAL_GATE_TOLERANCE;
+    double candidateValLoss = computeValLoss(model, valBuf, device, batchSize, valueLossWeight);
+    bool promote = !hasBaseline || candidateValLoss <= baselineValLoss * valGateTolerance;
 
     std::cout << "\n── Validation gate ─────────────────────────────────────────────\n";
     if (hasBaseline)
@@ -232,6 +280,16 @@ int main(int argc, char *argv[]) {
     std::cout << "\n── Saved ────────────────────────────────────────────────────────\n"
               << "  " << iterPath << (promote ? "" : "  (not promoted)") << "\n";
     if (promote) std::cout << "  " << bestPath << "\n";
+
+    if (jsonOutput) {
+        std::cout << "{\"status\": \"ok\""
+                   << ", \"promoted\": " << (promote ? "true" : "false")
+                   << ", \"val_loss\": " << candidateValLoss
+                   << ", \"baseline_val_loss\": " << (hasBaseline ? std::to_string(baselineValLoss) : "null")
+                   << ", \"iter_path\": \"" << iterPath << "\""
+                   << ", \"best_path\": \"" << bestPath << "\""
+                   << "}\n";
+    }
 
     return 0;
 }

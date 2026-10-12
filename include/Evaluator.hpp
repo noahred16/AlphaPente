@@ -56,11 +56,15 @@ class HeuristicEvaluator : public Evaluator {
 };
 
 #ifdef WITH_TORCH
+#include "NNModel.hpp"
 #include <torch/torch.h>
 class NNEvaluator : public Evaluator {
   public:
-    NNEvaluator();  // randomly initialized weights (iteration 0)
-    explicit NNEvaluator(const std::string &modelPath);
+    // channels/resBlocks must match whatever the loaded checkpoint (or, for
+    // the no-path ctor, the model about to be trained) was/will be saved
+    // with — weight shapes are fixed at save time, so a mismatch fails to load.
+    explicit NNEvaluator(int channels = AlphaNetImpl::kChannels, int resBlocks = AlphaNetImpl::kResBlocks);  // randomly initialized weights (iteration 0)
+    explicit NNEvaluator(const std::string &modelPath, int channels = AlphaNetImpl::kChannels, int resBlocks = AlphaNetImpl::kResBlocks);
     ~NNEvaluator() override;
     std::pair<std::vector<std::pair<PenteGame::Move, float>>, float> evaluate(const PenteGame &game) override;
     std::vector<std::pair<PenteGame::Move, float>> evaluatePolicy(const PenteGame &game) override;

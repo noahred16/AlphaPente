@@ -22,10 +22,13 @@ int main(int argc, char *argv[]) {
     bool dryRun          = false;
     bool jsonOutput      = false;
     std::string outDirFlag = "";  // "" = checkpoints/<game>
+    int channels  = AlphaNetImpl::kChannels;
+    int resBlocks = AlphaNetImpl::kResBlocks;
 
     auto usage = [&](std::ostream &out) {
         out <<
             "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-x] [-j] [-d dir]\n"
+            "                [-c channels] [-r res_blocks]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -39,6 +42,10 @@ int main(int argc, char *argv[]) {
             "  -d  output dir                              (default: checkpoints/<game>;\n"
             "      lets differently-configured bootstrap runs of the same game write to\n"
             "      separate files instead of sharing/clobbering checkpoints/<game>)\n"
+            "  -c  model channels                          (default: " << channels << ";\n"
+            "      must match an existing best_model.pt's channels — shapes are fixed at save time.\n"
+            "      Irrelevant in bootstrap mode, which always uses the heuristic evaluator.)\n"
+            "  -r  model residual blocks                   (default: " << resBlocks << "; same caveat as -c)\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -52,7 +59,7 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:h")) != -1) {
         if      (opt == 'g') gameFlag     = optarg;
         else if (opt == 'n') gamesPerIter = std::stoi(optarg);
         else if (opt == 's') mctsSims     = std::stoi(optarg);
@@ -62,6 +69,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'x') dryRun       = true;
         else if (opt == 'j') jsonOutput   = true;
         else if (opt == 'd') outDirFlag   = optarg;
+        else if (opt == 'c') channels     = std::stoi(optarg);
+        else if (opt == 'r') resBlocks    = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -79,7 +88,7 @@ int main(int argc, char *argv[]) {
         std::filesystem::create_directories(ckptDir);
         if (!std::filesystem::exists(bestPath)) {
             std::cout << "Initializing new model...\n";
-            AlphaNet m(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+            AlphaNet m(channels, resBlocks);
             torch::save(m, bestPath);
             std::cout << "Saved → " << bestPath << "\n\n";
         }
@@ -118,7 +127,7 @@ int main(int argc, char *argv[]) {
 
     std::unique_ptr<Evaluator> evalPtr = useHeuristic
         ? std::unique_ptr<Evaluator>(std::make_unique<HeuristicEvaluator>())
-        : std::unique_ptr<Evaluator>(std::make_unique<NNEvaluator>(bestPath));
+        : std::unique_ptr<Evaluator>(std::make_unique<NNEvaluator>(bestPath, channels, resBlocks));
     Evaluator &eval = *evalPtr;
 
     std::mt19937 rng(std::random_device{}());

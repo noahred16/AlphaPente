@@ -1,0 +1,28 @@
+# Smaller-architecture variant of pente_v1 — same bootstrap data, fewer
+# channels/res_blocks. Demonstrates that model size is independent of the
+# bootstrap dataset: `bootstrap: pente_base` here means training/model.py
+# reads the exact same training/bootstrap/data/pente_base/bootstrap.pt that
+# pente_v1 trains from, read-only — no regeneration, no collision between
+# the two runs (each gets its own training/models/runs/<name>/).
+
+name: pente_v1_small
+
+bootstrap: pente_base
+
+model:
+  channels: 32
+  res_blocks: 2
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2
+  val_fraction: 0.05
+  val_gate_tolerance: 1.02
+  min_grad_steps: 200
+
+bootstrap_training:
+  max_cycles: 20
+  patience: 3

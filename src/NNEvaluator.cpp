@@ -16,25 +16,26 @@ struct NNEvaluator::Impl {
     // by fusing ops and eliminating PyTorch dispatch overhead.
     torch::ScalarType dtype{torch::kFloat};
 
-    Impl() {
-        model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+    explicit Impl(int channels, int resBlocks) {
+        model = AlphaNet(channels, resBlocks);
         model->eval();
         model->to(device);
     }
 
-    explicit Impl(const std::string &path) {
-        model = AlphaNet(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+    Impl(const std::string &path, int channels, int resBlocks) {
+        model = AlphaNet(channels, resBlocks);
         torch::load(model, path);
+        checkArchitectureMatches(model, channels, path);
         model->eval();
         model->to(device);
     }
 };
 
-NNEvaluator::NNEvaluator()
-    : impl_(std::make_unique<Impl>()) {}
+NNEvaluator::NNEvaluator(int channels, int resBlocks)
+    : impl_(std::make_unique<Impl>(channels, resBlocks)) {}
 
-NNEvaluator::NNEvaluator(const std::string &modelPath)
-    : impl_(std::make_unique<Impl>(modelPath)) {}
+NNEvaluator::NNEvaluator(const std::string &modelPath, int channels, int resBlocks)
+    : impl_(std::make_unique<Impl>(modelPath, channels, resBlocks)) {}
 
 NNEvaluator::~NNEvaluator() = default;
 

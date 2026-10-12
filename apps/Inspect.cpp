@@ -57,9 +57,12 @@ static void probeValueHead(const std::string &modelPath,
                             torch::Tensor states,
                             torch::Tensor captures,
                             torch::Tensor labels,
-                            int64_t sampleSize) {
-    AlphaNet model(AlphaNetImpl::kChannels, AlphaNetImpl::kResBlocks);
+                            int64_t sampleSize,
+                            int channels,
+                            int resBlocks) {
+    AlphaNet model(channels, resBlocks);
     torch::load(model, modelPath);
+    checkArchitectureMatches(model, channels, modelPath);
     model->eval();
 
     torch::Device device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU);
@@ -136,14 +139,18 @@ int main(int argc, char *argv[]) {
     int         n         = 5;
     int64_t     probeSz   = 2000;
     float       alpha     = 0.2f;
+    int         channels  = AlphaNetImpl::kChannels;
+    int         resBlocks = AlphaNetImpl::kResBlocks;
 
     int opt;
-    while ((opt = getopt(argc, argv, "b:n:m:s:a:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:n:m:s:a:c:r:")) != -1) {
         if      (opt == 'b') bufPath   = optarg;
         else if (opt == 'n') n         = std::stoi(optarg);
         else if (opt == 'm') modelPath = optarg;
         else if (opt == 's') probeSz   = std::stoi(optarg);
         else if (opt == 'a') alpha     = std::stof(optarg);
+        else if (opt == 'c') channels  = std::stoi(optarg);
+        else if (opt == 'r') resBlocks = std::stoi(optarg);
     }
 
     if (!std::filesystem::exists(bufPath)) {
@@ -182,7 +189,7 @@ int main(int argc, char *argv[]) {
             std::cerr << "Model not found: " << modelPath << "\n";
             return 1;
         }
-        probeValueHead(modelPath, states, captures, values, probeSz);
+        probeValueHead(modelPath, states, captures, values, probeSz, channels, resBlocks);
     }
 
     return 0;

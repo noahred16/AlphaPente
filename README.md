@@ -302,6 +302,38 @@ recording what produced it land in `training/bootstrap/data/<name>/`
 (gitignored — if you need it on another machine, regenerate from the config
 rather than copying the data over).
 
+### Model training (interactive harness)
+
+`training/model.py` trains a model config against its bootstrap dataset:
+repeated `train -b` cycles with early stopping on validation loss (no
+promotion-arena confirmation yet). Same interactive shape as `bootstrap.py`.
+
+```bash
+python training/model.py              # prompts for a config if more than one exists
+python training/model.py pente_v1      # or name one directly
+```
+
+A model config (`training/models/configs/<name>.yaml`) sets architecture
+(`channels`/`res_blocks`) and training hyperparameters, and references a
+bootstrap config by name — multiple model configs can share one bootstrap
+dataset (it's read-only to `model.py`, never regenerated). Output lands in
+`training/models/runs/<name>/` (gitignored): `best_model.pt`, every
+`model_iterNNNN.pt`, a `manifest.json` (what produced it, best val loss,
+staleness tracking against both the model config and the bootstrap data it
+trained on), and a `metrics.jsonl` with one line per cycle for `compare.py`.
+
+### Comparing runs
+
+```bash
+python training/compare.py                          # every run under training/models/runs/
+python training/compare.py pente_v1 pente_v1_small   # just these
+```
+
+Prints a summary table (architecture, cycles, best val loss, elapsed) and
+saves a validation-loss-by-cycle chart to `training/models/runs/comparison.png`
+(runs trained before `metrics.jsonl` existed show up in the table but are
+skipped in the chart).
+
 ### Bootstrap (first run, manual)
 
 Fill the replay buffer with heuristic-guided games before the network has learned anything:

@@ -1,8 +1,20 @@
 # Example model config — first trained Pente model.
 #
-# Draft for discussion: nothing in the C++ binaries reads this yet. Values
-# below reproduce today's hardcoded defaults (TrainCommon.hpp, SelfPlayConfig,
-# NNModel.hpp) exactly.
+# Values below reproduce today's hardcoded defaults (TrainCommon.hpp,
+# SelfPlayConfig, NNModel.hpp) exactly, so training behaves the same either
+# way until you actually change something.
+#
+# What's live: `bootstrap:`, `model:`, `train:`, and `bootstrap_training:` —
+# all read by training/model.py, which drives apps/Train.cpp's -B/-l/-W/-v/
+# -f/-G/-m/-c/-r/-a flags. `self_play:` and `promotion_arena:` aren't wired to
+# anything yet (no self-play harness exists; promotion-arena confirmation was
+# intentionally dropped for this first pass — see conversation history).
+#
+# Changing channels/res_blocks on a model that already has a trained
+# best_model.pt will refuse to load it (checkArchitectureMatches in
+# NNModel.hpp) rather than silently training/evaluating at the wrong width —
+# weight shapes are fixed at save time, so that always means starting a new
+# model, not resizing an existing one.
 
 name: pente_v1
 
@@ -34,6 +46,14 @@ train:
   val_fraction: 0.05        # held out from training, used for the promotion gate
   val_gate_tolerance: 1.02  # candidate must not regress val loss by more than this factor
   min_grad_steps: 200
+
+# Controls the outer loop training/model.py runs over `train` (one cycle =
+# one `train -b` call). Read by training/model.py, not apps/Train.cpp itself.
+# No promotion-arena confirmation yet — just early-stops on val loss, like
+# bootstrap_train.sh did minus the arena step (see conversation history).
+bootstrap_training:
+  max_cycles: 20
+  patience: 3    # stop after this many cycles with no val-loss improvement
 
 promotion_arena:
   games: 30

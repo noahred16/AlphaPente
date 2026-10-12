@@ -195,6 +195,7 @@ add_executable(unit_tests
     tests/RenjuTests.cpp
     tests/RenjuForbiddenPointFinderTests.cpp
     tests/SelfPlayPolicyTests.cpp
+    tests/NNModelTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE pente_core)
 target_include_directories(unit_tests PRIVATE apps)  # TrainCommon.hpp for AugmentTests
