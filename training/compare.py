@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Compare model training runs: a summary table plus a val-loss-vs-cycle chart.
+"""Compare model training runs: a summary table plus charts — val loss and
+benchmark suite scores, each vs. cycle.
 
 Usage:
     python training/compare.py                  # compare every run under training/models/runs/
@@ -10,10 +11,12 @@ Usage:
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from imgcat import imgcat
 
+import benchmark
 import model
 
 DEFAULT_OUTPUT = model.MODEL_RUNS_DIR / "comparison.png"
@@ -39,48 +42,95 @@ def load_run(name: str) -> tuple[dict, list[dict]]:
     return manifest, metrics
 
 
-def print_table(runs: dict[str, tuple[dict, list[dict]]]):
+def cycle_from_checkpoint(checkpoint: str) -> int:
+    """'.../model_iter0007.pt' -> 7. Valid because model.py wipes a run before
+    retraining, so iteration number and cycle number are the same sequence."""
+    return int(Path(checkpoint).stem.removeprefix("model_iter"))
+
+
+def load_benchmark_curves(name: str) -> dict:
+    """Returns {suite: [(cycle, score_pct), ...]}, sorted by cycle."""
+    curves: dict = {}
+    for row in benchmark.read_results(name):
+        cycle = cycle_from_checkpoint(row["checkpoint"])
+        curves.setdefault(row["suite"], []).append((cycle, float(row["score_pct"])))
+    for points in curves.values():
+        points.sort(key=lambda p: p[0])
+    return curves
+
+
+def print_table(runs: dict, bench: dict):
+    suite_names = sorted({suite for curves in bench.values() for suite in curves})
+
+    headers = ["name", "architecture", "cycles", "best val loss", "elapsed", *suite_names]
     rows = []
     for name, (manifest, _) in runs.items():
         m = manifest["model"]
-        rows.append((
+        row = [
             name,
             f"{m['channels']}ch/{m['res_blocks']}rb",
             str(manifest["cycles_run"]),
             f"{manifest['best_val_loss']:.4f}",
             model.bootstrap.format_eta(manifest["elapsed_s"]),
-        ))
+        ]
+        for suite in suite_names:
+            points = bench.get(name, {}).get(suite)
+            row.append(f"{points[-1][1]:.1f}%" if points else "-")
+        rows.append(row)
 
-    headers = ("name", "architecture", "cycles", "best val loss", "elapsed")
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
     print(fmt.format(*headers))
     print(fmt.format(*("-" * w for w in widths)))
     for row in rows:
         print(fmt.format(*row))
+    if suite_names:
+        print("(suite columns show the latest/highest-cycle score)")
 
 
-def plot_curves(runs: dict[str, tuple[dict, list[dict]]], output_path):
-    fig, ax = plt.subplots(figsize=(8, 5))
+def plot_charts(runs: dict, bench: dict, output_path):
+    suite_names = sorted({suite for curves in bench.values() for suite in curves})
+    panels = ["validation loss", *suite_names]
+    fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), 5), squeeze=False)
+    axes = axes[0]
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    run_color = {name: colors[i % len(colors)] for i, name in enumerate(runs)}
+
+    ax = axes[0]
     plotted = False
     for name, (_, metrics) in runs.items():
         if not metrics:
-            print(f"  (skipping '{name}' in the chart — no metrics.jsonl, trained before this was tracked)")
+            print(f"  (skipping '{name}' in the loss chart — no metrics.jsonl, trained before this was tracked)")
             continue
-        cycles = [m["cycle"] for m in metrics]
-        losses = [m["val_loss"] for m in metrics]
-        ax.plot(cycles, losses, marker="o", label=name)
+        ax.plot([m["cycle"] for m in metrics], [m["val_loss"] for m in metrics],
+                marker="o", label=name, color=run_color[name])
         plotted = True
-
-    if not plotted:
-        print("No runs have per-cycle metrics to plot — skipping chart.")
-        return
-
     ax.set_xlabel("cycle")
     ax.set_ylabel("validation loss")
-    ax.set_title("Bootstrap-training validation loss by run")
-    ax.legend()
+    ax.set_title("validation loss")
     ax.grid(alpha=0.3)
+    if plotted:
+        ax.legend()
+
+    for i, suite in enumerate(suite_names, start=1):
+        ax = axes[i]
+        for name in runs:
+            points = bench.get(name, {}).get(suite)
+            if not points:
+                continue
+            ax.plot([c for c, _ in points], [s for _, s in points],
+                    marker="o", label=name, color=run_color[name])
+        ax.set_xlabel("cycle")
+        ax.set_ylabel("score %")
+        ax.set_title(suite)
+        ax.set_ylim(-5, 105)
+        ax.grid(alpha=0.3)
+        ax.legend()
+
+    if len(panels) == 1:
+        print("No runs have benchmark.csv results yet — showing validation loss only.")
+
     fig.tight_layout()
     fig.savefig(output_path)
     print(f"Saved chart -> {output_path}")
@@ -103,10 +153,11 @@ def main():
         sys.exit(f"No runs found under {model.MODEL_RUNS_DIR}")
 
     runs = {name: load_run(name) for name in names}
+    bench = {name: load_benchmark_curves(name) for name in names}
 
-    print_table(runs)
+    print_table(runs, bench)
     print()
-    plot_curves(runs, args.output)
+    plot_charts(runs, bench, args.output)
 
 
 if __name__ == "__main__":

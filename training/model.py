@@ -247,6 +247,10 @@ def train(config: dict, bootstrap_manifest: dict):
     print(f"Done in {bootstrap.format_eta(elapsed)}, {cycles_run} cycles, best val {best_val:.4f}. "
           f"Saved -> {best_model_path(name)}")
 
+    print()
+    import benchmark  # local: benchmark.py imports this module, so avoid a top-level circular import
+    benchmark.benchmark_run(config, bootstrap_manifest)
+
 
 def format_config_summary(config: dict) -> str:
     m, t, bt = config["model"], config["train"], config["bootstrap_training"]
@@ -282,6 +286,8 @@ def wipe(name: str):
 
 def main():
     check_binary()
+    import benchmark
+    benchmark.check_binary()  # fail fast, before an expensive training run, not after
     arg_name = sys.argv[1] if len(sys.argv) > 1 else None
     config = pick_config(arg_name)
 

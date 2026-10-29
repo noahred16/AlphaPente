@@ -271,6 +271,11 @@ int main(int argc, char *argv[]) {
     int         suiteSims    = 0;     // 0 = raw policy, >0 = MCTS with N sims
     float       suiteExplorationC = 1.7f;  // exploration constant for the MCTS suite search
     std::string opponentPath;
+    int         channels     = AlphaNetImpl::kChannels;
+    int         resBlocks    = AlphaNetImpl::kResBlocks;
+    // Opponent (-P) is always loaded at the default architecture — fine while
+    // every opponent in practice is heuristic or a default-sized checkpoint;
+    // revisit if arena-ing two non-default-sized models against each other.
 
     auto resolve = [](const std::string &path) {
         if (std::filesystem::exists(path)) return path;
@@ -295,6 +300,9 @@ int main(int argc, char *argv[]) {
             "  -S  candidate (NN) sims per move            (default: " << arenaSims << ")\n"
             "  -T  opponent sims per move                  (default: same as -S)\n"
             "  -P  opponent model path                     (default: heuristic evaluator)\n"
+            "  -c  candidate model channels                (default: " << channels << ";\n"
+            "      must match -p's checkpoint — shapes are fixed at save time)\n"
+            "  -r  candidate model residual blocks         (default: " << resBlocks << "; same caveat as -c)\n"
             "\n"
             "Default (no mode flags): full battery — policy suite (raw + MCTS@800), value\n"
             "  suite, and arena vs heuristic@800/10000/100000.\n"
@@ -317,7 +325,7 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:C:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:p:t:o:s:VvaG:S:T:P:C:c:r:h")) != -1) {
         if      (opt == 'g') { /* already handled above */ }
         else if (opt == 'p') modelPath    = resolve(optarg);
         else if (opt == 'C') suiteExplorationC = std::stof(optarg);
@@ -331,6 +339,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'S') arenaSims    = std::stoi(optarg);
         else if (opt == 'T') opponentSims = std::stoi(optarg);
         else if (opt == 'P') opponentPath = resolve(optarg);
+        else if (opt == 'c') channels     = std::stoi(optarg);
+        else if (opt == 'r') resBlocks    = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -354,7 +364,7 @@ int main(int argc, char *argv[]) {
     std::unique_ptr<NNEvaluator> nnEval;
     if (modelPath != "heuristic") {
         if (std::filesystem::exists(modelPath)) {
-            nnEval        = std::make_unique<NNEvaluator>(modelPath);
+            nnEval        = std::make_unique<NNEvaluator>(modelPath, channels, resBlocks);
             evaluator     = nnEval.get();
             evaluatorName = "nn";
             std::cout << "Using NNEvaluator\n\n";
