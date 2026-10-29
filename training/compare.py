@@ -42,10 +42,18 @@ def load_run(name: str) -> tuple[dict, list[dict]]:
     return manifest, metrics
 
 
-def cycle_from_checkpoint(checkpoint: str) -> int:
+def cycle_from_checkpoint(checkpoint: str) -> int | None:
     """'.../model_iter0007.pt' -> 7. Valid because model.py wipes a run before
-    retraining, so iteration number and cycle number are the same sequence."""
-    return int(Path(checkpoint).stem.removeprefix("model_iter"))
+    retraining, so iteration number and cycle number are the same sequence.
+    Returns None for anything else (e.g. best_model.pt, used by benchmark.py's
+    --strong spot-check) — not part of the per-cycle curve."""
+    stem = Path(checkpoint).stem
+    if not stem.startswith("model_iter"):
+        return None
+    try:
+        return int(stem.removeprefix("model_iter"))
+    except ValueError:
+        return None
 
 
 def load_benchmark_curves(name: str) -> dict:
@@ -53,6 +61,8 @@ def load_benchmark_curves(name: str) -> dict:
     curves: dict = {}
     for row in benchmark.read_results(name):
         cycle = cycle_from_checkpoint(row["checkpoint"])
+        if cycle is None:
+            continue
         curves.setdefault(row["suite"], []).append((cycle, float(row["score_pct"])))
     for points in curves.values():
         points.sort(key=lambda p: p[0])
