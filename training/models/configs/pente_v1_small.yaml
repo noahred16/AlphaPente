@@ -26,3 +26,15 @@ train:
 bootstrap_training:
   max_cycles: 20
   patience: 3
+
+# Read by training/selfplay.py. 400 sims matches the arena benchmark's sims,
+# so self-play games are played at roughly the strength tier being measured.
+# Buffer cap/min-buffer-to-train are still TrainCommon.hpp compile-time
+# constants (62500/625) — not wired to this config yet.
+self_play:
+  games_per_round: 30
+  simulations: 400
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  rounds: 10

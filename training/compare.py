@@ -106,9 +106,18 @@ def plot_charts(runs: dict, bench: dict, output_path):
         ax.plot([m["cycle"] for m in metrics], [m["val_loss"] for m in metrics],
                 marker="o", label=name, color=run_color[name])
         plotted = True
+
+        # Self-play validates against a different (shifting) buffer slice each
+        # round, so its val loss isn't comparable to bootstrap-phase val loss
+        # or across self-play rounds themselves — mark where it starts rather
+        # than let the line imply one continuous, comparable trend.
+        selfplay_start = next((m["cycle"] for m in metrics if m.get("phase") == "selfplay"), None)
+        if selfplay_start is not None:
+            ax.axvline(selfplay_start - 0.5, color=run_color[name], linestyle=":", alpha=0.5)
+
     ax.set_xlabel("cycle")
     ax.set_ylabel("validation loss")
-    ax.set_title("validation loss")
+    ax.set_title("validation loss (dotted line: self-play starts — not comparable across it)")
     ax.grid(alpha=0.3)
     if plotted:
         ax.legend()
