@@ -247,6 +247,17 @@ body.book-page #board {
   width: min(94vw, 640px);
 }
 
+/* A bit more than 1 line - the book-job suffix (see book.js's renderStatus)
+   is short now but its Re-run button can still wrap onto its own line on a
+   narrow phone screen, and it's cleared to a shorter "loading…" placeholder
+   on every move while the book entry refetches; reserving only the default
+   1 line's height (still used by the 5x5 page's own shorter status text)
+   let that wrap toggle on and off each time, shoving the board below up
+   and down. */
+body.book-page #status {
+  min-height: 2.2em;
+}
+
 .cell.last-move {
   background: var(--last-move);
 }

@@ -871,16 +871,20 @@ function renderStatus() {
   // settled - UNSOLVED is the default/common case, not news.
   const solvedSuffix = bookEntry && bookEntry.solvedStatus !== 'UNSOLVED' ? `, ${bookEntry.solvedStatus}` : '';
   const levelText = bookEntry ? levelLabel(bookEntry.targetVisits) : null;
+  // Dropped the "'s turn" / "book job:" framing words below - just the
+  // status itself - so this line is short enough to not wrap (or at least
+  // wrap a lot less often) on a narrow phone screen; see #status's own
+  // min-height comment in style.css for why that wrapping mattered.
   const jobLine = bookEntry
-    ? ` — book job: ${bookEntry.jobStatus} (${bookEntry.totalVisits} visits${levelText ? `, ${levelText}` : ''}${solvedSuffix})`
-    : ' — loading book…';
+    ? ` — ${bookEntry.jobStatus} (${(bookEntry.totalVisits / 1e6).toFixed(1)}M visits${levelText ? `, ${levelText}` : ''}${solvedSuffix})`
+    : ' — loading…';
 
   if (game.isGameOver()) {
     const winner = game.getWinner(); // 0=none, 1=engine BLACK, 2=engine WHITE
     statusEl.textContent = (winner === 0 ? 'Draw' : `${displayColor(winner)} wins!`) + jobLine;
   } else {
     const player = displayColor(game.getCurrentPlayer());
-    statusEl.textContent = `${player}'s turn` + jobLine;
+    statusEl.textContent = player + jobLine;
   }
 
   // Offer to re-run the CURRENT position deeper (or, at the same level, a
