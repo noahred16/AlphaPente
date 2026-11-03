@@ -73,13 +73,17 @@ static void appendResult(const std::string &csvPath,
                          const std::string &checkpoint,
                          const std::string &evaluatorName,
                          const std::string &suiteName,
-                         int passed, int total) {
+                         int passed, int total, int draws = 0) {
     std::filesystem::create_directories(std::filesystem::path(csvPath).parent_path());
     bool needsHeader = !std::filesystem::exists(csvPath);
     std::ofstream f(csvPath, std::ios::app);
     if (needsHeader)
         f << "timestamp,checkpoint,evaluator,suite,passed,total,score_pct\n";
-    double pct = total > 0 ? 100.0 * passed / total : 0.0;
+    // Expected score (wins + 0.5*draws)/total rather than raw win rate, so a
+    // draw-heavy "basically even" result doesn't get miscounted as a loss.
+    // draws defaults to 0 for non-arena (deterministic, drawless) suites, so
+    // this is a no-op there -- same passed/total as before.
+    double pct = total > 0 ? 100.0 * (passed + 0.5 * draws) / total : 0.0;
     f << isoTimestamp() << ","
       << checkpoint << ","
       << evaluatorName << ","
@@ -89,7 +93,27 @@ static void appendResult(const std::string &csvPath,
       << std::fixed << std::setprecision(1) << pct << "\n";
 }
 
-// ── Arena (NN vs Heuristic) ───────────────────────────────────────────────────
+// ── Arena (NN vs Heuristic/NN, paired fixed openings) ─────────────────────────
+//
+// 10 hand-picked early-game positions, each played as a pair: candidate as
+// Black then candidate as White, from the identical resulting board (not
+// independent random games) -- this cancels out first-move advantage instead
+// of averaging over it. numGames cycles through the list again if more than
+// 20 games are requested (e.g. --strong's 40). Both sides search with
+// dirichletAlpha=0 (the Config default) -- deterministic best play, no
+// exploration, since this is evaluation, not self-play data generation.
+static const std::vector<std::string> kArenaOpenings = {
+    "1. K10 L9 2. N10",
+    "1. K10 L9 2. N8",
+    "1. K10 L9 2. K13",
+    "1. K10 L9 2. K14",
+    "1. K10 K9 2. N10",
+    "1. K10 K9 2. O10",
+    "1. K10 K9 2. K7",
+    "1. K10 N8",
+    "1. K10 M9",
+    "1. K10 N9",
+};
 
 struct ArenaResult { int nnWins, hWins, draws; };
 
@@ -114,12 +138,16 @@ static ArenaResult runArena(Evaluator *candidateEval, Evaluator *opponentEval,
     oppCfg.arenaSize            = GameUtils::arenaSizeFromEnv();
     oppCfg.evaluator            = opponentEval;
 
+    int numOpenings = static_cast<int>(kArenaOpenings.size());
     for (int g = 0; g < numGames; g++) {
+        int openingIdx = (g / 2) % numOpenings;
         bool candIsBlack = (g % 2 == 0);
 
         ParallelMCTS candMcts(candCfg), oppMcts(oppCfg);
         PenteGame game(gameConfig);
         game.reset();
+        for (const auto &mv : GameUtils::parseGameString(kArenaOpenings[openingIdx].c_str()))
+            game.makeMove(mv.c_str());
 
         while (!game.isGameOver()) {
             bool isBlackTurn = (game.getCurrentPlayer() == PenteGame::BLACK);
@@ -145,6 +173,7 @@ static ArenaResult runArena(Evaluator *candidateEval, Evaluator *opponentEval,
         std::string candColor = candIsBlack ? "B" : "W";
         std::string outcome   = draw ? "draw" : (candWon ? "nn" : opponentLabel);
         std::cout << "  game " << std::setw(2) << (g + 1)
+                  << "  opening " << (openingIdx + 1)
                   << "  nn=" << candColor
                   << "  winner: " << outcome
                   << "  (nn " << result.nnWins << "/"
@@ -307,6 +336,11 @@ int main(int argc, char *argv[]) {
             "Default (no mode flags): full battery — policy suite (raw + MCTS@800), value\n"
             "  suite, and arena vs heuristic@800/10000/100000.\n"
             "\n"
+            "Arena games are paired from 10 fixed opening positions (candidate as Black,\n"
+            "then White, from the identical resulting board) rather than independent random\n"
+            "games — cancels first-move advantage. -G cycles through the list again past 20.\n"
+            "score_pct is the expected score (wins + 0.5*draws)/total, not raw win rate.\n"
+            "\n"
             "Examples:\n"
             "  # full default battery\n"
             "  ./benchmark -g pente\n"
@@ -455,7 +489,7 @@ int main(int argc, char *argv[]) {
                           << "  draws " << ar.draws
                           << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
                 std::string arenaEval = "nn@800-vs-" + std::string(opp.label);
-                appendResult(outPath, relModelPath, arenaEval, "arena", ar.nnWins, arenaGames);
+                appendResult(outPath, relModelPath, arenaEval, "arena", ar.nnWins, arenaGames, ar.draws);
                 std::cout << "Appended to " << outPath << "\n";
             }
         }
@@ -516,7 +550,10 @@ int main(int argc, char *argv[]) {
 
         if (!opponentPath.empty()) {
             if (std::filesystem::exists(opponentPath)) {
-                opponentNNEval  = std::make_unique<NNEvaluator>(opponentPath);
+                // Same -c/-r as the candidate: every real opponent (previous
+                // best_model.pt, a roster checkpoint) comes from the same
+                // model config/run, so it shares the candidate's architecture.
+                opponentNNEval  = std::make_unique<NNEvaluator>(opponentPath, channels, resBlocks);
                 opponentEvalPtr = opponentNNEval.get();
                 opponentIsNN    = true;
                 opponentLabel   = std::filesystem::path(opponentPath).stem().string();
@@ -541,7 +578,7 @@ int main(int argc, char *argv[]) {
                       << "  (" << std::fixed << std::setprecision(1) << nnPct << "% nn win rate)\n";
 
             std::string arenaLabel = "nn@" + std::to_string(arenaSims) + "-vs-" + opponentLabel + "@" + std::to_string(oppSims);
-            appendResult(outPath, relModelPath, arenaLabel, "arena", ar.nnWins, arenaGames);
+            appendResult(outPath, relModelPath, arenaLabel, "arena", ar.nnWins, arenaGames, ar.draws);
             std::cout << "Appended arena result to " << outPath << "\n";
         }
     }

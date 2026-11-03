@@ -8,8 +8,11 @@ one important way: self-play's buffer shifts round to round (each round adds
 fresh, model-generated games), so val loss isn't comparable *across* rounds
 the way it is in bootstrap-training (one fixed dataset, one fixed val split).
 There's no "track the global best round and force-promote it" step here —
-promotion is left entirely to Train.cpp's own per-round gate (candidate vs.
-that round's immediate baseline), same as the old scripts/train_loop.sh did.
+promotion is left to Train.cpp's own per-round val-loss gate (candidate vs.
+that round's immediate baseline), confirmed by a real-game arena against the
+pre-promotion best_model.pt (benchmark.promotion_arena) before it's allowed
+to stick — same two-step gate the old scripts/train_loop.sh used, just with
+the new paired-opening/expected-score arena methodology.
 
 Also not idempotent the way bootstrap.py/model.py are: each invocation just
 runs `rounds` more rounds on top of whatever's already in the run. Requires
@@ -23,6 +26,7 @@ Usage:
 import argparse
 import datetime
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -30,6 +34,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+import benchmark
 import model
 
 GENERATE_BIN = model.BUILD_DIR / "generate"
@@ -39,7 +44,6 @@ def check_binaries():
     if not GENERATE_BIN.exists():
         sys.exit(f"{GENERATE_BIN} not found — build it first: cd build && make generate")
     model.check_binary()  # train
-    import benchmark
     benchmark.check_binary()
 
 
@@ -115,9 +119,89 @@ def fail(result: subprocess.CompletedProcess, message: str):
     sys.exit(message)
 
 
+# ── Elo ladder ────────────────────────────────────────────────────────────────
+# elo.json: one roster entry per rated checkpoint. Base entry (the last
+# bootstrapped model, i.e. whatever best_model.pt is when self-play first
+# starts) is hardcoded to benchmark.ELO_BASE_RATING; every 10 self-play
+# rounds after that, the current best_model.pt is rated against the most
+# recent roster entry.
+
+def elo_path(name: str) -> Path:
+    return model.run_dir(name) / "elo.json"
+
+
+def load_roster(name: str) -> list:
+    path = elo_path(name)
+    return json.loads(path.read_text()) if path.exists() else []
+
+
+def save_roster(name: str, roster: list):
+    elo_path(name).write_text(json.dumps(roster, indent=2))
+
+
+def count_selfplay_rounds(name: str) -> int:
+    path = model.metrics_path(name)
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text().splitlines()
+               if line.strip() and json.loads(line).get("phase") == "selfplay")
+
+
+def ensure_base_elo_entry(name: str) -> list:
+    roster = load_roster(name)
+    if roster:
+        return roster
+    base_path = benchmark.resolve_best_iter_path(name)
+    roster = [{
+        "cycle": int(base_path.stem.removeprefix("model_iter")),
+        "iter_path": str(base_path),
+        "elo": benchmark.ELO_BASE_RATING,
+        "anchor_cycle": None,
+        "score_pct": None,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }]
+    save_roster(name, roster)
+    return roster
+
+
+def update_elo_roster(config: dict, game_type: str, name: str):
+    roster = ensure_base_elo_entry(name)
+    candidate_path = benchmark.resolve_best_iter_path(name)
+    cycle = int(candidate_path.stem.removeprefix("model_iter"))
+    if roster[-1]["cycle"] == cycle:
+        return  # best_model.pt hasn't moved since the last check -- nothing new to rate
+
+    anchor = roster[-1]
+    score = benchmark.elo_match(config, game_type, candidate_path, Path(anchor["iter_path"]))
+    if score in (0.0, 100.0) and len(roster) >= 2:
+        # Shutout against the closest anchor -- the log-odds formula blows up
+        # at the exact edges, so fall back one step to a (presumably) less
+        # lopsided comparison instead. elo_from_score's own clamp is the
+        # final safety net if even this saturates.
+        anchor = roster[-2]
+        score = benchmark.elo_match(config, game_type, candidate_path, Path(anchor["iter_path"]))
+
+    elo = benchmark.elo_from_score(score, anchor["elo"])
+    roster.append({
+        "cycle": cycle,
+        "iter_path": str(candidate_path),
+        "elo": elo,
+        "anchor_cycle": anchor["cycle"],
+        "score_pct": score,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    save_roster(name, roster)
+    tqdm.write(f"  elo: {candidate_path.stem} rated {elo:.0f} "
+               f"({score:.1f}% vs {Path(anchor['iter_path']).stem} @ {anchor['elo']:.0f})")
+
+
 def selfplay(config: dict, bootstrap_manifest: dict, rounds: int):
     name = config["name"]
     game_type = bootstrap_manifest["game"]["type"]
+    run_dir = model.run_dir(name)
+    snapshot_path = run_dir / benchmark.PROMOTION_SNAPSHOT_NAME
+
+    ensure_base_elo_entry(name)
 
     start = time.perf_counter()
     for i in tqdm(range(rounds), desc=name, unit="round"):
@@ -125,6 +209,10 @@ def selfplay(config: dict, bootstrap_manifest: dict, rounds: int):
         if gen_payload is None or gen_payload.get("status") != "ok":
             tqdm.write("")
             fail(gen_result, f"Self-play generation failed on round {i + 1}/{rounds}.")
+
+        # Snapshot before training overwrites best_model.pt in place — this is
+        # what the promotion arena below plays the candidate against.
+        shutil.copy(model.best_model_path(name), snapshot_path)
 
         train_result, train_payload = run_train(config, game_type)
         if train_payload is None:
@@ -135,27 +223,42 @@ def selfplay(config: dict, bootstrap_manifest: dict, rounds: int):
             sys.exit(f"Buffer too small to train on ({train_payload['buffer_size']} positions) "
                       f"after round {i + 1} — need more games/round or more rounds.")
 
+        promoted = train_payload["promoted"]
+        arena_score = None
+        if promoted:
+            arena_score = benchmark.promotion_arena(config, game_type, Path(train_payload["iter_path"]), snapshot_path)
+            if arena_score <= benchmark.PROMOTION_GATE_THRESHOLD:
+                shutil.copy(snapshot_path, model.best_model_path(name))
+                promoted = False
+                tqdm.write(f"  round {i + 1}: promotion arena {arena_score:.1f}% — "
+                           f"reverted, best_model.pt unchanged")
+            else:
+                tqdm.write(f"  round {i + 1}: promotion arena {arena_score:.1f}% — confirmed")
+
         cycle = int(Path(train_payload["iter_path"]).stem.removeprefix("model_iter"))
         with model.metrics_path(name).open("a") as f:
             f.write(json.dumps({
                 "cycle": cycle,
                 "phase": "selfplay",
                 "val_loss": train_payload["val_loss"],
-                "promoted": train_payload["promoted"],
+                "promoted": promoted,
+                "arena_score_pct": arena_score,
                 "iter_path": train_payload["iter_path"],
                 "positions_generated": gen_payload["positions"],
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }) + "\n")
 
-        status = "promoted" if train_payload["promoted"] else "not promoted"
+        status = "promoted" if promoted else "not promoted"
         tqdm.write(f"  round {i + 1}: +{gen_payload['positions']} positions, "
                    f"val {train_payload['val_loss']:.4f} ({status})")
+
+        if count_selfplay_rounds(name) % 10 == 0:
+            update_elo_roster(config, game_type, name)
     elapsed = time.perf_counter() - start
 
     print(f"Done in {model.bootstrap.format_eta(elapsed)}, {rounds} rounds.")
 
     print()
-    import benchmark
     benchmark.benchmark_run(config, bootstrap_manifest)
 
 

@@ -16,10 +16,23 @@ suggested rather than to track every checkpoint's lifecycle (at 40 games/1600
 sims it's much too slow to backfill across dozens of checkpoints).
 
 A checkpoint that clears 90% on the fast arena tier also gets escalated
-automatically: 20 games at 1600, then (if that also clears 90%) 3200, then
-6400 sims/side, stopping at the first tier that misses 90%. Each tier is its
-own idempotent (checkpoint, evaluator) pair, so re-running just resumes/backfills
-the ladder rather than repeating it.
+automatically: 20 games at 1600, then (if that also clears 90%) 3200, 6400,
+then 12800 sims/side, stopping at the first tier that misses 90%. Each tier is
+its own idempotent (checkpoint, evaluator) pair, so re-running just
+resumes/backfills the ladder rather than repeating it.
+
+Every arena above (fast tier, escalation, --strong) is paired from 10 fixed
+opening positions rather than independent random games — see Benchmark.cpp's
+kArenaOpenings — and scored as expected score (wins + 0.5*draws)/total rather
+than raw win rate.
+
+Also provides promotion_arena(), called by selfplay.py after each round's
+train call: confirms a val-loss-gated promotion with real games against the
+pre-promotion best_model.pt before letting it stick.
+
+Also provides elo_match()/elo_from_score(), used by selfplay.py to maintain
+a rolling Elo ladder (elo.json per run): every 10 self-play rounds, the
+current best_model.pt is rated against the most recent roster entry.
 
 Usage:
     python training/benchmark.py [config_name]
@@ -29,6 +42,7 @@ Usage:
 import argparse
 import csv
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -56,8 +70,31 @@ STRONG_ARENA_SIMS = 1600
 # Auto-escalation ladder for a checkpoint that clears 90% on the fast tier:
 # 20 games each, sims/side climbing until one tier misses 90%.
 ESCALATION_GAMES = 20
-ESCALATION_SIMS_TIERS = [1600, 3200, 6400]
+ESCALATION_SIMS_TIERS = [1600, 3200, 6400, 12800]
 ESCALATION_THRESHOLD = 90.0
+
+# Promotion-confirmation arena (selfplay.py): candidate vs. the pre-promotion
+# best_model.pt, every round the val-loss gate (Train.cpp) would otherwise
+# promote on its own. Val loss is measured against a held-out slice of that
+# round's own self-play buffer, which can't tell "actually plays better" apart
+# from "fit this round's buffer slightly differently" — so require a real-game
+# edge too before the promotion sticks. 400 sims/side matches self-play's own
+# sims (fast enough not to dominate round time); threshold is on *expected*
+# score so a draw-heavy "basically even" result correctly fails to promote
+# rather than needing an outright plurality of wins.
+PROMOTION_SNAPSHOT_NAME = "prev_best_snapshot.pt"
+PROMOTION_ARENA_GAMES = 20
+PROMOTION_ARENA_SIMS = 400
+PROMOTION_GATE_THRESHOLD = 52.5  # expected score %, same units as score_pct
+
+# Elo ladder (selfplay.py): every 10 self-play rounds, rate the current
+# best_model.pt against the most recent roster entry and derive an Elo via
+# the standard logistic formula. Base entry (the last bootstrapped model) is
+# hardcoded to ELO_BASE_RATING; everything else is relative to it.
+ELO_ARENA_GAMES = 20
+ELO_ARENA_SIMS = 400
+ELO_BASE_RATING = 1000.0
+_ELO_SCORE_CLAMP = 0.025  # avoid -inf/+inf on an exact 0/20 or 20/20 sweep
 
 # (suite label as Benchmark.cpp records it, extra CLI args to produce it)
 SUITES = [
@@ -240,6 +277,59 @@ def strong_arena(config: dict, bootstrap_manifest: dict, checkpoint=None,
         sys.exit(f"Strong arena failed on {checkpoint.name}.")
     print(result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "")
     print(f"Done. Results -> {csv_path(name)}")
+
+
+def promotion_evaluator_label() -> str:
+    return arena_label(PROMOTION_ARENA_SIMS).replace("heuristic", Path(PROMOTION_SNAPSHOT_NAME).stem)
+
+
+def promotion_arena(config: dict, game_type: str, candidate: Path, prev_best_snapshot: Path) -> float:
+    """Candidate vs. prev_best_snapshot, paired fixed-opening arena. Returns
+    the expected score (0-100) and records the result in benchmark.csv like
+    any other arena run (checkpoint = candidate, so it's always a fresh row —
+    no idempotency check needed, every round has a distinct candidate)."""
+    result = run_one(config, game_type, candidate,
+                     ["-a", "-G", str(PROMOTION_ARENA_GAMES),
+                      "-S", str(PROMOTION_ARENA_SIMS), "-T", str(PROMOTION_ARENA_SIMS),
+                      "-P", str(prev_best_snapshot)])
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr, file=sys.stderr)
+        sys.exit("Promotion arena failed.")
+
+    name = config["name"]
+    rel = str(candidate.relative_to(model.REPO_ROOT))
+    label = promotion_evaluator_label()
+    return float(next(r["score_pct"] for r in reversed(read_results(name))
+                      if r["checkpoint"] == rel and r["evaluator"] == label))
+
+
+def elo_match(config: dict, game_type: str, candidate: Path, anchor: Path) -> float:
+    """Candidate vs. anchor (a roster entry's iter_path), paired fixed-opening
+    arena. Returns the raw expected score (0-100); recorded in benchmark.csv
+    like any other arena run."""
+    result = run_one(config, game_type, candidate,
+                     ["-a", "-G", str(ELO_ARENA_GAMES),
+                      "-S", str(ELO_ARENA_SIMS), "-T", str(ELO_ARENA_SIMS),
+                      "-P", str(anchor)])
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr, file=sys.stderr)
+        sys.exit("Elo arena failed.")
+
+    name = config["name"]
+    rel = str(candidate.relative_to(model.REPO_ROOT))
+    label = arena_label(ELO_ARENA_SIMS).replace("heuristic", anchor.stem)
+    return float(next(r["score_pct"] for r in reversed(read_results(name))
+                      if r["checkpoint"] == rel and r["evaluator"] == label))
+
+
+def elo_from_score(score_pct: float, anchor_elo: float) -> float:
+    """Standard logistic Elo: given a candidate's expected score against a
+    fixed-rating anchor, solve for the candidate's rating. score_pct is
+    clamped away from the exact 0/100 edges, where the log blows up."""
+    score = min(max(score_pct / 100.0, _ELO_SCORE_CLAMP), 1 - _ELO_SCORE_CLAMP)
+    return anchor_elo - 400.0 * math.log10(1.0 / score - 1.0)
 
 
 def main():
