@@ -81,12 +81,13 @@ def load_benchmark_curves(name: str) -> dict:
     return curves
 
 
-def load_elo(name: str) -> dict[int, float]:
-    """Returns {cycle: elo}."""
+def load_elo(name: str) -> dict:
+    """Returns {cycle: roster entry}, each with elo/anchor_cycle/score_pct
+    (anchor_cycle and score_pct are None for the base entry)."""
     path = model.run_dir(name) / "elo.json"
     if not path.exists():
         return {}
-    return {entry["cycle"]: entry["elo"] for entry in json.loads(path.read_text())}
+    return {entry["cycle"]: entry for entry in json.loads(path.read_text())}
 
 
 def split_phase(metrics: list) -> tuple[list, list]:
@@ -199,7 +200,7 @@ def print_cycle_table(name: str, phase_label: str, metrics: list, bench_rows: li
 
     times = [completed_at(m) for m in metrics]
 
-    headers = ["cycle", "val_loss", "promoted", "completed", "duration", "elo", *columns]
+    headers = ["cycle", "val_loss", "promoted", "completed", "duration", "elo", "elo_vs", *columns]
     rows = []
     for i, m in enumerate(metrics):
         t = times[i]
@@ -207,13 +208,17 @@ def print_cycle_table(name: str, phase_label: str, metrics: list, bench_rows: li
         duration_str = "-"
         if t and i > 0 and times[i - 1]:
             duration_str = model.bootstrap.format_eta((t - times[i - 1]).total_seconds())
+        entry = elo.get(m["cycle"])
+        elo_str = f"{entry['elo']:.0f}" if entry else "-"
+        elo_vs_str = f"{entry['score_pct']:.1f}% vs c{entry['anchor_cycle']}" if entry and entry.get("anchor_cycle") is not None else "-"
         rows.append([
             str(m["cycle"]),
             f"{m['val_loss']:.4f}",
             "yes" if m.get("promoted") else "no",
             completed_str,
             duration_str,
-            f"{elo[m['cycle']]:.0f}" if m["cycle"] in elo else "-",
+            elo_str,
+            elo_vs_str,
             *[by_cycle.get(m["cycle"], {}).get(c, "N/A") for c in columns],
         ])
 
@@ -325,7 +330,7 @@ def main():
         extra_cols=[
             ("name", lambda n: n),
             ("rounds", lambda n: str(len(selfplay_metrics[n]))),
-            ("elo", lambda n: f"{elo[n][max(elo[n])]:.0f}" if elo.get(n) else "-"),
+            ("elo", lambda n: f"{elo[n][max(elo[n])]['elo']:.0f}" if elo.get(n) else "-"),
         ],
         include_suites=False,
     )
