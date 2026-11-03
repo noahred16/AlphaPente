@@ -1,0 +1,41 @@
+# Mid-sized variant of pente_v1 — same bootstrap data, same train/self_play
+# hyperparams as pente_v1_small, only channels/res_blocks changed, so any
+# quality difference between the two runs is attributable to model size
+# alone. Picked via training/size_sweep timing: generate (self-play) cost
+# stays flat from 16ch up through ~64ch (latency/overhead-bound, not
+# compute-bound at this scale), then rises sharply past 96ch — 64ch/3rb sits
+# right at the edge of that "free capacity" zone.
+
+name: pente_v1_medium
+
+bootstrap: pente_base
+
+model:
+  channels: 64
+  res_blocks: 3
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2
+  val_fraction: 0.05
+  val_gate_tolerance: 1.02
+  min_grad_steps: 200
+
+bootstrap_training:
+  max_cycles: 20
+  patience: 3
+
+# Read by training/selfplay.py. 400 sims matches the arena benchmark's sims,
+# so self-play games are played at roughly the strength tier being measured.
+# Buffer cap/min-buffer-to-train are still TrainCommon.hpp compile-time
+# constants (62500/625) — not wired to this config yet.
+self_play:
+  games_per_round: 30
+  simulations: 400
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  rounds: 10
