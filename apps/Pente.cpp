@@ -21,8 +21,14 @@ int main(int argc, char *argv[]) {
     bool boardOnly = false;
     std::string promisingMovesArg;
     std::string nnPath;
+    // Mirrors NNModel.hpp's AlphaNetImpl::kChannels/kResBlocks defaults — not
+    // referenced directly since NNModel.hpp is only included under WITH_TORCH,
+    // but this file (unlike Generate.cpp/Train.cpp/Benchmark.cpp) also builds
+    // without it.
+    int channels = 128;
+    int resBlocks = 8;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:B:jDM:h")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:B:jDM:hc:r:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
@@ -34,6 +40,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'p') nnPath = optarg;
         else if (opt == 'b') batchSize = std::atoi(optarg);
         else if (opt == 'B') boardSize = std::max(1, std::min(19, std::atoi(optarg)));
+        else if (opt == 'c') channels = std::atoi(optarg);
+        else if (opt == 'r') resBlocks = std::atoi(optarg);
         else if (opt == 'h') {
             std::cout <<
                 "Usage: pente [options] [\"move string\"] [iterations]\n"
@@ -46,6 +54,8 @@ int main(int argc, char *argv[]) {
                 "  -p <path>       Use NN evaluator at custom path\n"
                 "  -b <size>       Eval batch size (default: 512)\n"
                 "  -B <size>       Board size, NxN centered board (default: 19)\n"
+                "  -c <n>          NN channels (default: 128) — must match the checkpoint\n"
+                "  -r <n>          NN res blocks (default: 8) — must match the checkpoint\n"
                 "  -n              Non-interactive: run search once and exit\n"
                 "  -s              Use serial (single-threaded) MCTS\n"
                 "  -u              Use uniform random evaluator\n"
@@ -144,7 +154,7 @@ int main(int argc, char *argv[]) {
 #ifdef WITH_TORCH
     std::unique_ptr<NNEvaluator> nnEval;
     if (!nnPath.empty()) {
-        nnEval = std::make_unique<NNEvaluator>(nnPath);
+        nnEval = std::make_unique<NNEvaluator>(nnPath, channels, resBlocks);
         evaluator = nnEval.get();
     }
 #endif
