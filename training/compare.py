@@ -59,78 +59,133 @@ def cycle_from_checkpoint(checkpoint: str) -> int | None:
 
 
 def load_benchmark_curves(name: str) -> dict:
-    """Returns {suite: [(cycle, score_pct), ...]}, sorted by cycle."""
+    """Returns {column: [(cycle, score_pct), ...]}, sorted by cycle. Arena
+    rows are split by column the same way print_cycle_table does (sims
+    tier / opponent via arena_column(), elo-ladder matches excluded via
+    is_roster_match()) -- otherwise different sims tiers and opponents
+    collapse into one meaningless "latest" value under a shared "arena" key."""
     curves: dict = {}
     for row in benchmark.read_results(name):
         cycle = cycle_from_checkpoint(row["checkpoint"])
         if cycle is None:
             continue
-        curves.setdefault(row["suite"], []).append((cycle, float(row["score_pct"])))
+        if row["suite"] == "arena":
+            if is_roster_match(row["evaluator"]):
+                continue
+            col = arena_column(row["evaluator"])
+        else:
+            col = row["suite"]
+        curves.setdefault(col, []).append((cycle, float(row["score_pct"])))
     for points in curves.values():
         points.sort(key=lambda p: p[0])
     return curves
 
 
-def print_table(runs: dict, bench: dict):
-    suite_names = sorted({suite for curves in bench.values() for suite in curves})
+def load_elo(name: str) -> dict[int, float]:
+    """Returns {cycle: elo}."""
+    path = model.run_dir(name) / "elo.json"
+    if not path.exists():
+        return {}
+    return {entry["cycle"]: entry["elo"] for entry in json.loads(path.read_text())}
 
-    headers = ["name", "architecture", "cycles", "best val loss", "elapsed", *suite_names]
+
+def split_phase(metrics: list) -> tuple[list, list]:
+    """Bootstrap trains repeated epochs over one static dataset; self-play's
+    buffer shifts round to round, so they're measured differently (see
+    benchmark.py's BOOTSTRAP_SUITES/SELFPLAY_SUITES) and shown separately."""
+    bootstrap = [m for m in metrics if m.get("phase") != "selfplay"]
+    selfplay = [m for m in metrics if m.get("phase") == "selfplay"]
+    return bootstrap, selfplay
+
+
+def print_table(label: str, runs: dict, bench: dict, elo: dict, cycles_of_interest: dict,
+                 extra_cols: list, include_suites: bool = True):
+    """One row per run. extra_cols: [(header, fn(name) -> str), ...], for
+    columns that aren't a plain suite lookup (e.g. architecture, elo)."""
+    suite_names = sorted({suite for curves in bench.values() for suite in curves})
+    if not include_suites:
+        suite_names = [s for s in suite_names if s not in ("open-three-suite", "value-suite-value-sign")]
+    headers = [h for h, _ in extra_cols] + suite_names
+
     rows = []
-    for name, (manifest, _) in runs.items():
-        m = manifest["model"]
-        row = [
-            name,
-            f"{m['channels']}ch/{m['res_blocks']}rb",
-            str(manifest["cycles_run"]),
-            f"{manifest['best_val_loss']:.4f}",
-            model.bootstrap.format_eta(manifest["elapsed_s"]),
-        ]
+    row_names = []
+    for name in runs:
+        cycles = cycles_of_interest.get(name, set())
+        if not cycles:
+            continue
+        row_names.append(name)
+        row = [fn(name) for _, fn in extra_cols]
         for suite in suite_names:
-            points = bench.get(name, {}).get(suite)
+            points = [(c, s) for c, s in bench.get(name, {}).get(suite, []) if c in cycles]
             row.append(f"{points[-1][1]:.1f}%" if points else "-")
         rows.append(row)
 
+    if not rows:
+        return
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(f"\n{label}")
     print(fmt.format(*headers))
     print(fmt.format(*("-" * w for w in widths)))
     for row in rows:
         print(fmt.format(*row))
     if suite_names:
-        print("(suite columns show the latest/highest-cycle score)")
+        print("(suite columns show the latest/highest-cycle score within this phase)")
 
 
 def arena_column(evaluator: str) -> str:
-    """'nn@1600-vs-heuristic@1600' -> 'arena@1600'. Falls back to the raw
-    evaluator string for anything that doesn't match the usual nn-vs-heuristic
-    shape, rather than hiding it."""
+    """'nn@1600-vs-heuristic@1600' -> 'arena@1600'. 'nn@400-vs-prev_best_snapshot@400'
+    -> 'promotion@400'. Falls back to the raw evaluator string for anything
+    else, rather than hiding it."""
     m = re.match(r"nn@(\d+)-vs-heuristic@\d+", evaluator)
-    return f"arena@{m.group(1)}" if m else evaluator
+    if m:
+        return f"arena@{m.group(1)}"
+    m = re.match(rf"nn@(\d+)-vs-{re.escape(Path(benchmark.PROMOTION_SNAPSHOT_NAME).stem)}@\d+", evaluator)
+    if m:
+        return f"promotion@{m.group(1)}"
+    return evaluator
 
 
-def print_cycle_table(name: str, metrics: list, bench_rows: list):
-    """Full per-cycle history for one run: val loss / promotion from
-    metrics.jsonl, joined with every suite and arena sims-tier recorded for
-    that cycle's checkpoint. A tier that was never run for a given cycle
+def is_roster_match(evaluator: str) -> bool:
+    """Elo-ladder matches (vs. whichever roster checkpoint was the most
+    recent entry at the time — a different opponent name every match, so
+    not a stable table column). Represented via the elo column instead."""
+    return re.match(r"nn@\d+-vs-model_iter\d+@\d+$", evaluator) is not None
+
+
+def print_cycle_table(name: str, phase_label: str, metrics: list, bench_rows: list,
+                       elo: dict, include_suites: bool):
+    """Full per-cycle history for one run's bootstrap or self-play phase:
+    val loss / promotion from metrics.jsonl, joined with every suite and
+    arena sims-tier recorded for that cycle's checkpoint, plus the elo rating
+    for cycles that have one. A tier that was never run for a given cycle
     (e.g. arena@1600+ only exists past the 90% escalation threshold) prints
     as N/A rather than being silently omitted."""
     if not metrics:
         return
 
+    cycle_set = {m["cycle"] for m in metrics}
     by_cycle: dict = {}
     columns: list = []
     for row in bench_rows:
         cycle = cycle_from_checkpoint(row["checkpoint"])
-        if cycle is None:
+        if cycle is None or cycle not in cycle_set:
             continue
-        col = arena_column(row["evaluator"]) if row["suite"] == "arena" else row["suite"]
+        if row["suite"] == "arena":
+            if is_roster_match(row["evaluator"]):
+                continue
+            col = arena_column(row["evaluator"])
+        else:
+            if not include_suites:
+                continue
+            col = row["suite"]
         if col not in columns:
             columns.append(col)
         by_cycle.setdefault(cycle, {})[col] = f"{float(row['score_pct']):.1f}"
 
     def sort_key(col):
-        m = re.match(r"arena@(\d+)", col)
-        return (0, int(m.group(1))) if m else (1, col)
+        m = re.match(r"(arena|promotion)@(\d+)", col)
+        return (0, m.group(1), int(m.group(2))) if m else (1, col, 0)
     columns.sort(key=sort_key)
 
     # Older cycles were recorded before metrics.jsonl tracked a timestamp —
@@ -144,7 +199,7 @@ def print_cycle_table(name: str, metrics: list, bench_rows: list):
 
     times = [completed_at(m) for m in metrics]
 
-    headers = ["cycle", "phase", "val_loss", "promoted", "completed", "duration", *columns]
+    headers = ["cycle", "val_loss", "promoted", "completed", "duration", "elo", *columns]
     rows = []
     for i, m in enumerate(metrics):
         t = times[i]
@@ -154,17 +209,17 @@ def print_cycle_table(name: str, metrics: list, bench_rows: list):
             duration_str = model.bootstrap.format_eta((t - times[i - 1]).total_seconds())
         rows.append([
             str(m["cycle"]),
-            m.get("phase", "bootstrap"),
             f"{m['val_loss']:.4f}",
             "yes" if m.get("promoted") else "no",
             completed_str,
             duration_str,
+            f"{elo[m['cycle']]:.0f}" if m["cycle"] in elo else "-",
             *[by_cycle.get(m["cycle"], {}).get(c, "N/A") for c in columns],
         ])
 
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-    print(f"\n{name}: per-cycle history")
+    print(f"\n{name}: {phase_label} per-cycle history")
     print(fmt.format(*headers))
     print(fmt.format(*("-" * w for w in widths)))
     for row in rows:
@@ -246,10 +301,39 @@ def main():
 
     runs = {name: load_run(name) for name in names}
     bench = {name: load_benchmark_curves(name) for name in names}
+    elo = {name: load_elo(name) for name in names}
 
-    print_table(runs, bench)
+    bootstrap_metrics = {}
+    selfplay_metrics = {}
     for name, (_, metrics) in runs.items():
-        print_cycle_table(name, metrics, benchmark.read_results(name))
+        bootstrap_metrics[name], selfplay_metrics[name] = split_phase(metrics)
+    bootstrap_cycles = {n: {m["cycle"] for m in ms} for n, ms in bootstrap_metrics.items()}
+    selfplay_cycles = {n: {m["cycle"] for m in ms} for n, ms in selfplay_metrics.items()}
+
+    print_table(
+        "Bootstrap", runs, bench, elo, bootstrap_cycles,
+        extra_cols=[
+            ("name", lambda n: n),
+            ("architecture", lambda n: f"{runs[n][0]['model']['channels']}ch/{runs[n][0]['model']['res_blocks']}rb"),
+            ("cycles", lambda n: str(runs[n][0]["cycles_run"])),
+            ("best val loss", lambda n: f"{runs[n][0]['best_val_loss']:.4f}"),
+            ("elapsed", lambda n: model.bootstrap.format_eta(runs[n][0]["elapsed_s"])),
+        ],
+    )
+    print_table(
+        "Self-play", runs, bench, elo, selfplay_cycles,
+        extra_cols=[
+            ("name", lambda n: n),
+            ("rounds", lambda n: str(len(selfplay_metrics[n]))),
+            ("elo", lambda n: f"{elo[n][max(elo[n])]:.0f}" if elo.get(n) else "-"),
+        ],
+        include_suites=False,
+    )
+
+    for name in runs:
+        bench_rows = benchmark.read_results(name)
+        print_cycle_table(name, "bootstrap", bootstrap_metrics[name], bench_rows, elo[name], include_suites=True)
+        print_cycle_table(name, "self-play", selfplay_metrics[name], bench_rows, elo[name], include_suites=False)
     print()
     plot_charts(runs, bench, args.output)
 

@@ -97,11 +97,33 @@ ELO_BASE_RATING = 1000.0
 _ELO_SCORE_CLAMP = 0.025  # avoid -inf/+inf on an exact 0/20 or 20/20 sweep
 
 # (suite label as Benchmark.cpp records it, extra CLI args to produce it)
-SUITES = [
+# Bootstrap checkpoints get the full battery. Self-play checkpoints skip the
+# two heuristic suites (tactical pattern-matching, value-head sign) -- by the
+# time self-play starts those are already near-saturated and stop telling
+# you anything the arena doesn't cover better; self-play tracks arena only.
+ARENA_SUITE = ("arena", ["-a", "-G", str(ARENA_GAMES), "-S", str(ARENA_SIMS), "-T", str(ARENA_SIMS)])
+BOOTSTRAP_SUITES = [
     ("open-three-suite", ["-t", str(OPEN_THREE_SUITE)]),
     ("value-suite-value-sign", ["-V"]),
-    ("arena", ["-a", "-G", str(ARENA_GAMES), "-S", str(ARENA_SIMS), "-T", str(ARENA_SIMS)]),
+    ARENA_SUITE,
 ]
+SELFPLAY_SUITES = [ARENA_SUITE]
+
+
+def selfplay_cycles(name: str) -> set:
+    """Cycle numbers trained during self-play (as opposed to bootstrap),
+    read from metrics.jsonl's phase field."""
+    path = model.metrics_path(name)
+    if not path.exists():
+        return set()
+    cycles = set()
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        entry = json.loads(line)
+        if entry.get("phase") == "selfplay":
+            cycles.add(entry["cycle"])
+    return cycles
 
 
 def arena_label(sims: int) -> str:
@@ -160,16 +182,17 @@ def benchmark_run(config: dict, bootstrap_manifest: dict):
         print(f"'{name}': no checkpoints to benchmark yet.")
         return
 
+    sp_cycles = selfplay_cycles(name)
     done = already_done(name)
     pending = [
         (ckpt, suite, args)
         for ckpt in checkpoints
-        for suite, args in SUITES
+        for suite, args in (SELFPLAY_SUITES if int(ckpt.stem.removeprefix("model_iter")) in sp_cycles else BOOTSTRAP_SUITES)
         if (str(ckpt.relative_to(model.REPO_ROOT)), suite) not in done
     ]
 
     if not pending:
-        print(f"'{name}': all {len(checkpoints)} checkpoints already benchmarked ({len(SUITES)} suites each).")
+        print(f"'{name}': all {len(checkpoints)} checkpoints already benchmarked.")
     else:
         print(f"Benchmarking '{name}': {len(pending)} (checkpoint, suite) pairs pending...")
         for ckpt, suite, extra_args in tqdm(pending, desc=name, unit="run"):
