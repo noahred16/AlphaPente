@@ -15,6 +15,12 @@ confidence interval, used to confirm a trend the fast per-checkpoint arena
 suggested rather than to track every checkpoint's lifecycle (at 40 games/1600
 sims it's much too slow to backfill across dozens of checkpoints).
 
+A checkpoint that clears 90% on the fast arena tier also gets escalated
+automatically: 20 games at 1600, then (if that also clears 90%) 3200, then
+6400 sims/side, stopping at the first tier that misses 90%. Each tier is its
+own idempotent (checkpoint, evaluator) pair, so re-running just resumes/backfills
+the ladder rather than repeating it.
+
 Usage:
     python training/benchmark.py [config_name]
     python training/benchmark.py [config_name] --strong [--games N] [--sims N] [--checkpoint path]
@@ -22,8 +28,10 @@ Usage:
 
 import argparse
 import csv
+import json
 import subprocess
 import sys
+from pathlib import Path
 
 from tqdm import tqdm
 
@@ -45,12 +53,25 @@ ARENA_SIMS = 400
 STRONG_ARENA_GAMES = 40
 STRONG_ARENA_SIMS = 1600
 
+# Auto-escalation ladder for a checkpoint that clears 90% on the fast tier:
+# 20 games each, sims/side climbing until one tier misses 90%.
+ESCALATION_GAMES = 20
+ESCALATION_SIMS_TIERS = [1600, 3200, 6400]
+ESCALATION_THRESHOLD = 90.0
+
 # (suite label as Benchmark.cpp records it, extra CLI args to produce it)
 SUITES = [
     ("open-three-suite", ["-t", str(OPEN_THREE_SUITE)]),
     ("value-suite-value-sign", ["-V"]),
     ("arena", ["-a", "-G", str(ARENA_GAMES), "-S", str(ARENA_SIMS), "-T", str(ARENA_SIMS)]),
 ]
+
+
+def arena_label(sims: int) -> str:
+    # Benchmark.cpp always records the suite column as plain "arena" — the
+    # sims/games detail lives in the evaluator column instead, e.g.
+    # "nn@1600-vs-heuristic@1600" (see its arenaLabel construction).
+    return f"nn@{sims}-vs-heuristic@{sims}"
 
 
 def check_binary():
@@ -112,17 +133,85 @@ def benchmark_run(config: dict, bootstrap_manifest: dict):
 
     if not pending:
         print(f"'{name}': all {len(checkpoints)} checkpoints already benchmarked ({len(SUITES)} suites each).")
+    else:
+        print(f"Benchmarking '{name}': {len(pending)} (checkpoint, suite) pairs pending...")
+        for ckpt, suite, extra_args in tqdm(pending, desc=name, unit="run"):
+            result = run_one(config, game_type, ckpt, extra_args)
+            if result.returncode != 0:
+                tqdm.write("")
+                print(result.stdout)
+                print(result.stderr, file=sys.stderr)
+                sys.exit(f"Benchmark failed on {ckpt.name} ({suite}).")
+        print(f"Done. Results -> {csv_path(name)}")
+
+    for ckpt in checkpoints:
+        escalate_checkpoint(config, bootstrap_manifest, ckpt)
+
+
+def escalate_checkpoint(config: dict, bootstrap_manifest: dict, checkpoint) -> None:
+    """If `checkpoint` cleared ESCALATION_THRESHOLD on the fast arena tier,
+    keep re-confirming it at climbing sims/side (ESCALATION_SIMS_TIERS),
+    stopping at the first tier that misses the threshold. Safe to call on
+    every checkpoint on every benchmark_run() — idempotent per (checkpoint,
+    evaluator), so it just resumes/backfills the ladder rather than
+    repeating finished tiers.
+    """
+    name = config["name"]
+    game_type = bootstrap_manifest["game"]["type"]
+    rel = str(checkpoint.relative_to(model.REPO_ROOT))
+    by_evaluator = {row["evaluator"]: row["score_pct"] for row in read_results(name) if row["checkpoint"] == rel}
+
+    score = by_evaluator.get(arena_label(ARENA_SIMS))
+    if score is None or float(score) < ESCALATION_THRESHOLD:
         return
 
-    print(f"Benchmarking '{name}': {len(pending)} (checkpoint, suite) pairs pending...")
-    for ckpt, suite, extra_args in tqdm(pending, desc=name, unit="run"):
-        result = run_one(config, game_type, ckpt, extra_args)
+    score = float(score)
+    for sims in ESCALATION_SIMS_TIERS:
+        if score < ESCALATION_THRESHOLD:
+            break
+        label = arena_label(sims)
+        existing = by_evaluator.get(label)
+        if existing is not None:
+            score = float(existing)
+            continue
+
+        print(f"'{name}': {checkpoint.name} hit {score:.1f}% — escalating to "
+              f"{ESCALATION_GAMES} games @ {sims} sims/side...")
+        result = run_one(config, game_type, checkpoint,
+                         ["-a", "-G", str(ESCALATION_GAMES), "-S", str(sims), "-T", str(sims)])
         if result.returncode != 0:
-            tqdm.write("")
             print(result.stdout)
             print(result.stderr, file=sys.stderr)
-            sys.exit(f"Benchmark failed on {ckpt.name} ({suite}).")
-    print(f"Done. Results -> {csv_path(name)}")
+            sys.exit(f"Escalation arena failed on {checkpoint.name} @ {sims} sims.")
+
+        score = float(next(r["score_pct"] for r in reversed(read_results(name))
+                           if r["checkpoint"] == rel and r["evaluator"] == label))
+        print(f"  -> {score:.1f}%")
+
+
+def resolve_best_iter_path(name: str) -> Path:
+    """best_model.pt is a fixed filename that gets overwritten on every
+    promotion, so (best_model.pt, suite/evaluator) is a meaningless
+    idempotency key across runs: it collides with whatever used to be at
+    that path even after the weights underneath it have moved on. Resolve
+    it to the concrete model_iterNNNN.pt it currently matches instead —
+    byte-identical, since Train.cpp/model.py only ever copy an
+    already-promoted checkpoint onto best_model.pt — by finding the last
+    promoted cycle recorded in metrics.jsonl.
+    """
+    path = model.metrics_path(name)
+    if not path.exists():
+        sys.exit(f"No metrics.jsonl for '{name}' — can't resolve best_model.pt to a cycle.")
+    best_iter_path = None
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        entry = json.loads(line)
+        if entry.get("promoted"):
+            best_iter_path = entry["iter_path"]
+    if best_iter_path is None:
+        sys.exit(f"No promoted cycle found in {path} — can't resolve best_model.pt.")
+    return Path(best_iter_path)
 
 
 def strong_arena(config: dict, bootstrap_manifest: dict, checkpoint=None,
@@ -130,13 +219,12 @@ def strong_arena(config: dict, bootstrap_manifest: dict, checkpoint=None,
     name = config["name"]
     game_type = bootstrap_manifest["game"]["type"]
     checkpoint = checkpoint or model.best_model_path(name)
+    if checkpoint.name == "best_model.pt":
+        checkpoint = resolve_best_iter_path(name)
     if not checkpoint.exists():
         sys.exit(f"Checkpoint not found: {checkpoint}")
 
-    # Benchmark.cpp always records the suite column as plain "arena" — the
-    # sims/games detail lives in the evaluator column instead, e.g.
-    # "nn@1600-vs-heuristic@1600" (see its arenaLabel construction).
-    evaluator_label = f"nn@{sims}-vs-heuristic@{sims}"
+    evaluator_label = arena_label(sims)
     rel = str(checkpoint.relative_to(model.REPO_ROOT))
     already = {(row["checkpoint"], row["evaluator"]) for row in read_results(name)}
     if (rel, evaluator_label) in already:

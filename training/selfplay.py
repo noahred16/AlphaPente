@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import json
 import subprocess
 import sys
@@ -143,6 +144,7 @@ def selfplay(config: dict, bootstrap_manifest: dict, rounds: int):
                 "promoted": train_payload["promoted"],
                 "iter_path": train_payload["iter_path"],
                 "positions_generated": gen_payload["positions"],
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }) + "\n")
 
         status = "promoted" if train_payload["promoted"] else "not promoted"

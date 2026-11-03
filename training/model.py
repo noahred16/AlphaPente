@@ -223,7 +223,8 @@ def train(config: dict, bootstrap_manifest: dict):
 
         with metrics_path(name).open("a") as f:
             f.write(json.dumps({"cycle": cycle + 1, "val_loss": val, "promoted": promoted,
-                                "iter_path": payload["iter_path"]}) + "\n")
+                                "iter_path": payload["iter_path"],
+                                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()}) + "\n")
 
         if not promoted and stale >= bt["patience"]:
             tqdm.write(f"  early stop after cycle {cycle + 1}")

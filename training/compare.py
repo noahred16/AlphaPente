@@ -9,7 +9,9 @@ Usage:
 """
 
 import argparse
+import datetime
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -98,6 +100,77 @@ def print_table(runs: dict, bench: dict):
         print("(suite columns show the latest/highest-cycle score)")
 
 
+def arena_column(evaluator: str) -> str:
+    """'nn@1600-vs-heuristic@1600' -> 'arena@1600'. Falls back to the raw
+    evaluator string for anything that doesn't match the usual nn-vs-heuristic
+    shape, rather than hiding it."""
+    m = re.match(r"nn@(\d+)-vs-heuristic@\d+", evaluator)
+    return f"arena@{m.group(1)}" if m else evaluator
+
+
+def print_cycle_table(name: str, metrics: list, bench_rows: list):
+    """Full per-cycle history for one run: val loss / promotion from
+    metrics.jsonl, joined with every suite and arena sims-tier recorded for
+    that cycle's checkpoint. A tier that was never run for a given cycle
+    (e.g. arena@1600+ only exists past the 90% escalation threshold) prints
+    as N/A rather than being silently omitted."""
+    if not metrics:
+        return
+
+    by_cycle: dict = {}
+    columns: list = []
+    for row in bench_rows:
+        cycle = cycle_from_checkpoint(row["checkpoint"])
+        if cycle is None:
+            continue
+        col = arena_column(row["evaluator"]) if row["suite"] == "arena" else row["suite"]
+        if col not in columns:
+            columns.append(col)
+        by_cycle.setdefault(cycle, {})[col] = f"{float(row['score_pct']):.1f}"
+
+    def sort_key(col):
+        m = re.match(r"arena@(\d+)", col)
+        return (0, int(m.group(1))) if m else (1, col)
+    columns.sort(key=sort_key)
+
+    # Older cycles were recorded before metrics.jsonl tracked a timestamp —
+    # fall back to the checkpoint file's own mtime, which is exactly when
+    # that cycle finished regardless.
+    def completed_at(m: dict) -> datetime.datetime | None:
+        if "timestamp" in m:
+            return datetime.datetime.fromisoformat(m["timestamp"])
+        path = Path(m["iter_path"])
+        return datetime.datetime.fromtimestamp(path.stat().st_mtime).astimezone() if path.exists() else None
+
+    times = [completed_at(m) for m in metrics]
+
+    headers = ["cycle", "phase", "val_loss", "promoted", "completed", "duration", *columns]
+    rows = []
+    for i, m in enumerate(metrics):
+        t = times[i]
+        completed_str = t.strftime("%Y-%m-%d %H:%M:%S") if t else "N/A"
+        duration_str = "-"
+        if t and i > 0 and times[i - 1]:
+            duration_str = model.bootstrap.format_eta((t - times[i - 1]).total_seconds())
+        rows.append([
+            str(m["cycle"]),
+            m.get("phase", "bootstrap"),
+            f"{m['val_loss']:.4f}",
+            "yes" if m.get("promoted") else "no",
+            completed_str,
+            duration_str,
+            *[by_cycle.get(m["cycle"], {}).get(c, "N/A") for c in columns],
+        ])
+
+    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(f"\n{name}: per-cycle history")
+    print(fmt.format(*headers))
+    print(fmt.format(*("-" * w for w in widths)))
+    for row in rows:
+        print(fmt.format(*row))
+
+
 def plot_charts(runs: dict, bench: dict, output_path):
     suite_names = sorted({suite for curves in bench.values() for suite in curves})
     panels = ["validation loss", *suite_names]
@@ -175,6 +248,8 @@ def main():
     bench = {name: load_benchmark_curves(name) for name in names}
 
     print_table(runs, bench)
+    for name, (_, metrics) in runs.items():
+        print_cycle_table(name, metrics, benchmark.read_results(name))
     print()
     plot_charts(runs, bench, args.output)
 
