@@ -382,6 +382,13 @@ class ParallelMCTS {
     // Search state
     PenteGame initialGame_;  // Initial game state for workers
 
+    // Root visit floor (Config::minRootVisits) applies only to the first
+    // search() call since construction/reset() -- the position the session
+    // started on -- not to every position reached afterward via reuseSubtree()
+    // or a repeated search on the same position. Re-flooring every move would
+    // silently balloon a small requested iteration count on every move played.
+    bool rootFloorApplied_ = false;
+
     // Statistics
     std::atomic<int> totalIterations{0};   // completed backprops across all workers
     std::atomic<int> totalInProgress{0};   // selections claimed across all workers

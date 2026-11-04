@@ -483,17 +483,14 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         injectDirichletNoise();
     tl_slab = nullptr;
 
-    // Root visit floor: temporarily inflate the iteration budget by exactly the
-    // remaining deficit needed to bring every not-yet-solved root child up to
+    // Root visit floor: applies only once per session (see rootFloorApplied_).
+    // On that first call, temporarily inflate the iteration budget by exactly
+    // the deficit needed to bring every not-yet-solved root child up to
     // config_.minRootVisits (selectBestMoveIndex() enforces the floor itself);
-    // restored below so callers inspecting config_ afterward still see the value
-    // they set. Computed as a deficit rather than a blanket
-    // minRootVisits * numLegalMoves because prepareRoot() reuses the existing
-    // tree for a repeated search on the same position (e.g. the interactive
-    // loop asking for a few more iterations without playing a move) — children
-    // that already cleared the floor on a prior call must not have it re-added.
+    // restored below so callers inspecting config_ afterward still see the
+    // value they set.
     int requestedMaxIterations = config_.maxIterations;
-    if (config_.minRootVisits > 0 && root_) {
+    if (config_.minRootVisits > 0 && root_ && !rootFloorApplied_) {
         int deficit = 0;
         for (int i = 0; i < root_->childCapacity; ++i) {
             ThreadSafeNode *child = root_->children[i].load(std::memory_order_acquire);
@@ -504,6 +501,7 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
                 deficit += config_.minRootVisits - visits;
         }
         config_.maxIterations = requestedMaxIterations + deficit;
+        rootFloorApplied_ = true;
     }
 
     if (config_.numEvalThreads > 0) evalPool_->start();
@@ -707,6 +705,10 @@ void ParallelMCTS::reset() {
     totalIterations = 0;
     totalInProgress = 0;
     arenaExhausted_.store(false, std::memory_order_relaxed);
+    // rootFloorApplied_ is intentionally NOT cleared here: reset() also fires
+    // from reuseSubtree()'s "move wasn't already an expanded candidate" fallback,
+    // which happens mid-session any time a played move falls outside the tree's
+    // existing root children -- not the deliberate start of a new session.
 
     // Transposition entries point into the arena just reset above; leaving them
     // would let a later search reuse them as if they were live nodes over memory
