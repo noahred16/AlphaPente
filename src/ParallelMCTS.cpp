@@ -486,11 +486,15 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     if (config_.numEvalThreads > 0) evalPool_->start();
     workerPool_->start();
 
-    // Scale timeout with iteration count: assume at least 20k iters/sec floor,
-    // with a 60s minimum. For 9M iterations this gives ~450s vs the 136s actually
-    // needed at typical throughput — avoids the 60s hardcoded cutoff.
+    // Scale timeout with iteration count: assume at least 2k iters/sec (measured
+    // throughput for pente_v1_medium — 64ch/3rb — on an idle machine was ~2.4k/sec,
+    // well below the 20k/sec this used to assume), with a 3-minute minimum so a
+    // heavier model or a large reused tree doesn't spuriously cut off a small
+    // interactive request. This is a safety-net ceiling, not an expected duration —
+    // typical throughput on a smaller/fresher tree is much higher than 2k/sec, so
+    // real searches finish well before hitting it.
     auto timeoutMs = std::chrono::milliseconds(
-        std::max(60000LL, static_cast<long long>(config_.maxIterations) / 20LL));
+        std::max(180000LL, static_cast<long long>(config_.maxIterations) / 2LL));
     bool completed = workerPool_->waitForCompletion(timeoutMs);
     if (!completed)
         std::cerr << "Warning: parallel MCTS search timed out\n";
