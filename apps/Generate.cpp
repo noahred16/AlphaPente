@@ -24,11 +24,14 @@ int main(int argc, char *argv[]) {
     std::string outDirFlag = "";  // "" = checkpoints/<game>
     int channels  = AlphaNetImpl::kChannels;
     int resBlocks = AlphaNetImpl::kResBlocks;
+    float dirichletAlpha     = 0.3f;
+    float dirichletEpsilon   = 0.25f;
+    int   explorationDropoff = 8;
 
     auto usage = [&](std::ostream &out) {
         out <<
             "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-x] [-j] [-d dir]\n"
-            "                [-c channels] [-r res_blocks]\n"
+            "                [-c channels] [-r res_blocks] [-a alpha] [-E epsilon] [-o dropoff]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -46,6 +49,11 @@ int main(int argc, char *argv[]) {
             "      must match an existing best_model.pt's channels — shapes are fixed at save time.\n"
             "      Irrelevant in bootstrap mode, which always uses the heuristic evaluator.)\n"
             "  -r  model residual blocks                   (default: " << resBlocks << "; same caveat as -c)\n"
+            "  -a  Dirichlet noise alpha                   (default: " << dirichletAlpha << ")\n"
+            "  -E  Dirichlet noise epsilon                 (default: " << dirichletEpsilon << ")\n"
+            "  -o  exploration dropoff: move count after which Dirichlet noise and\n"
+            "      temperature sampling are disabled (pure max-visits play)\n"
+            "      (default: " << explorationDropoff << ")\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -59,18 +67,21 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:h")) != -1) {
-        if      (opt == 'g') gameFlag     = optarg;
-        else if (opt == 'n') gamesPerIter = std::stoi(optarg);
-        else if (opt == 's') mctsSims     = std::stoi(optarg);
-        else if (opt == 'e') evalFlag     = optarg;
-        else if (opt == 'b') bootstrap    = true;
-        else if (opt == 't') tailMoves    = std::stoi(optarg);
-        else if (opt == 'x') dryRun       = true;
-        else if (opt == 'j') jsonOutput   = true;
-        else if (opt == 'd') outDirFlag   = optarg;
-        else if (opt == 'c') channels     = std::stoi(optarg);
-        else if (opt == 'r') resBlocks    = std::stoi(optarg);
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:h")) != -1) {
+        if      (opt == 'g') gameFlag           = optarg;
+        else if (opt == 'n') gamesPerIter       = std::stoi(optarg);
+        else if (opt == 's') mctsSims           = std::stoi(optarg);
+        else if (opt == 'e') evalFlag           = optarg;
+        else if (opt == 'b') bootstrap          = true;
+        else if (opt == 't') tailMoves          = std::stoi(optarg);
+        else if (opt == 'x') dryRun             = true;
+        else if (opt == 'j') jsonOutput         = true;
+        else if (opt == 'd') outDirFlag         = optarg;
+        else if (opt == 'c') channels           = std::stoi(optarg);
+        else if (opt == 'r') resBlocks          = std::stoi(optarg);
+        else if (opt == 'a') dirichletAlpha     = std::stof(optarg);
+        else if (opt == 'E') dirichletEpsilon   = std::stof(optarg);
+        else if (opt == 'o') explorationDropoff = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -114,9 +125,10 @@ int main(int argc, char *argv[]) {
               << "  dry run  : " << (dryRun ? "yes — nothing will be written to disk" : "no") << "\n\n";
 
     SelfPlayConfig spConfig;
-    spConfig.simulations      = mctsSims;
-    spConfig.dirichletAlpha   = 0.3f;
-    spConfig.dirichletEpsilon = 0.25f;
+    spConfig.simulations        = mctsSims;
+    spConfig.dirichletAlpha     = dirichletAlpha;
+    spConfig.dirichletEpsilon   = dirichletEpsilon;
+    spConfig.explorationDropoff = explorationDropoff;
     // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
     // threads feeding a single eval thread. Worker count is NOT scaled with
     // NUM_THREADS — many threads sharing one MCTS tree contend heavily near

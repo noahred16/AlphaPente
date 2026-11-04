@@ -83,6 +83,9 @@ def run_generate(config: dict, game_type: str):
         "-d", str(run_dir),
         "-c", str(m["channels"]),
         "-r", str(m["res_blocks"]),
+        "-a", str(sp["dirichlet_alpha"]),
+        "-E", str(sp["dirichlet_epsilon"]),
+        "-o", str(sp["exploration_dropoff"]),
         "-j",
     ]
     result = subprocess.run(args, cwd=model.REPO_ROOT, capture_output=True, text=True)
