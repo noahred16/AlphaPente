@@ -19,6 +19,7 @@ int main(int argc, char *argv[]) {
     bool useUniform = false;
     bool jsonOutput = false;
     bool boardOnly = false;
+    int minRootVisits = 0;
     std::string promisingMovesArg;
     std::string nnPath;
     // Mirrors NNModel.hpp's AlphaNetImpl::kChannels/kResBlocks defaults — not
@@ -28,7 +29,7 @@ int main(int argc, char *argv[]) {
     int channels = 128;
     int resBlocks = 8;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:B:jDM:hc:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:suNp:b:B:jDM:hc:r:v:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
@@ -42,6 +43,7 @@ int main(int argc, char *argv[]) {
         else if (opt == 'B') boardSize = std::max(1, std::min(19, std::atoi(optarg)));
         else if (opt == 'c') channels = std::atoi(optarg);
         else if (opt == 'r') resBlocks = std::atoi(optarg);
+        else if (opt == 'v') minRootVisits = std::atoi(optarg);
         else if (opt == 'h') {
             std::cout <<
                 "Usage: pente [options] [\"move string\"] [iterations]\n"
@@ -60,6 +62,11 @@ int main(int argc, char *argv[]) {
                 "  -s              Use serial (single-threaded) MCTS\n"
                 "  -u              Use uniform random evaluator\n"
                 "  -o <n>          Number of move offsets for heuristic (default: 16)\n"
+                "  -v <n>          Minimum visits forced onto every legal root move before\n"
+                "                  normal PUCT refinement runs, in addition to the requested\n"
+                "                  iteration count (default: 0 = disabled). Parallel search\n"
+                "                  only (ignored with -s). Carries over to every subsequent\n"
+                "                  move in the interactive loop.\n"
                 "  -j              Print one JSON object (search stats + top moves) instead\n"
                 "                  of human-readable text; implies -n\n"
                 "  -D              Print the board for the given position and exit (no search)\n"
@@ -159,6 +166,10 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    if (useSerial && minRootVisits > 0 && !quiet) {
+        std::cout << "Note: -v (root visit floor) is ignored with -s (serial search)\n";
+    }
+
     if (useSerial) {
         MCTS::Config config;
         config.maxIterations = mctsIterations;
@@ -184,6 +195,7 @@ int main(int argc, char *argv[]) {
         config.evaluationBatchSize = batchSize;
         config.arenaSize = GameUtils::arenaSizeFromEnv(2);  // 2 GB default; override with ARENA_SIZE_GB
         config.evaluator = evaluator;
+        config.minRootVisits = minRootVisits;
 
         ParallelMCTS mcts(config);
         if (jsonOutput)

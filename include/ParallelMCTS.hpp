@@ -58,6 +58,16 @@ class ParallelMCTS {
         float dirichletAlpha   = 0.0f;
         float dirichletEpsilon = 0.25f;
 
+        // Root-only visit floor: before letting PUCT concentrate search as usual,
+        // force every not-yet-solved root move to receive at least this many visits,
+        // so a move that looks bad on the first few rollouts isn't starved before
+        // it's had a fair look. search() adds the floor-filling iterations on top
+        // of maxIterations automatically (effective budget becomes
+        // maxIterations + minRootVisits * numLegalRootMoves); maxIterations itself
+        // still governs the normal refinement phase that follows. 0 = disabled
+        // (default, no behavior change).
+        int minRootVisits = 0;
+
         // Canonical-hash transposition sharing (see ThreadSafeNode::canonicalSym):
         // while getMoveCount() <= this, nodes are looked up/shared by canonical
         // (symmetry-folded) hash instead of each being allocated fresh per parent.

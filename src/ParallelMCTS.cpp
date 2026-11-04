@@ -483,6 +483,17 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         injectDirichletNoise();
     tl_slab = nullptr;
 
+    // Root visit floor: temporarily inflate the iteration budget so every legal
+    // root move gets config_.minRootVisits visits on top of the normal
+    // maxIterations refinement budget (selectBestMoveIndex() enforces the floor
+    // itself); restored below so callers inspecting config_ afterward still see
+    // the value they set.
+    int requestedMaxIterations = config_.maxIterations;
+    if (config_.minRootVisits > 0 && root_) {
+        config_.maxIterations = requestedMaxIterations +
+            config_.minRootVisits * static_cast<int>(root_->childCapacity);
+    }
+
     if (config_.numEvalThreads > 0) evalPool_->start();
     workerPool_->start();
 
@@ -530,6 +541,7 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         }
     }
 
+    config_.maxIterations = requestedMaxIterations;
     return getBestMove();
 }
 
@@ -1340,6 +1352,30 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     // parent's own value estimate instead (negated: node->value is in the previous-
     // mover's perspective, i.e. the opponent of node's own mover).
     double fpu = -static_cast<double>(node->value);
+
+    // Root visit floor (Config::minRootVisits): while any not-yet-solved root
+    // move still sits below the floor, force selection to the least-visited such
+    // move instead of scoring by PUCT. Only applies at the root -- deeper nodes
+    // are reached unevenly by design and keep standard, unconstrained PUCT.
+    // Concurrent workers naturally spread across under-floor children because
+    // addVirtualLoss() (called right after select() returns) raises this child's
+    // effective-visits count for the next thread's call, same as ordinary PUCT
+    // relies on to avoid every worker piling onto one path.
+    if (node == root_ && config_.minRootVisits > 0) {
+        int floorIndex = -1;
+        int32_t floorVisits = std::numeric_limits<int32_t>::max();
+        for (int i = 0; i < cap; ++i) {
+            ThreadSafeNode *child = node->children[i].load(std::memory_order_acquire);
+            if (child && child->solvedStatus.load(std::memory_order_acquire) != SolvedStatus::UNSOLVED)
+                continue;  // proven subtree: more visits wouldn't add information
+            int32_t effectiveVisits = child ? virtualLossManager_->getEffectiveVisits(child) : 0;
+            if (effectiveVisits < config_.minRootVisits && effectiveVisits < floorVisits) {
+                floorVisits = effectiveVisits;
+                floorIndex = i;
+            }
+        }
+        if (floorIndex >= 0) return floorIndex;
+    }
 
     int bestIndex = -1;
     double bestValue = -std::numeric_limits<double>::infinity();
