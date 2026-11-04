@@ -483,15 +483,27 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         injectDirichletNoise();
     tl_slab = nullptr;
 
-    // Root visit floor: temporarily inflate the iteration budget so every legal
-    // root move gets config_.minRootVisits visits on top of the normal
-    // maxIterations refinement budget (selectBestMoveIndex() enforces the floor
-    // itself); restored below so callers inspecting config_ afterward still see
-    // the value they set.
+    // Root visit floor: temporarily inflate the iteration budget by exactly the
+    // remaining deficit needed to bring every not-yet-solved root child up to
+    // config_.minRootVisits (selectBestMoveIndex() enforces the floor itself);
+    // restored below so callers inspecting config_ afterward still see the value
+    // they set. Computed as a deficit rather than a blanket
+    // minRootVisits * numLegalMoves because prepareRoot() reuses the existing
+    // tree for a repeated search on the same position (e.g. the interactive
+    // loop asking for a few more iterations without playing a move) — children
+    // that already cleared the floor on a prior call must not have it re-added.
     int requestedMaxIterations = config_.maxIterations;
     if (config_.minRootVisits > 0 && root_) {
-        config_.maxIterations = requestedMaxIterations +
-            config_.minRootVisits * static_cast<int>(root_->childCapacity);
+        int deficit = 0;
+        for (int i = 0; i < root_->childCapacity; ++i) {
+            ThreadSafeNode *child = root_->children[i].load(std::memory_order_acquire);
+            if (child && child->solvedStatus.load(std::memory_order_acquire) != SolvedStatus::UNSOLVED)
+                continue;  // proven subtree: floor already moot
+            int32_t visits = child ? virtualLossManager_->getEffectiveVisits(child) : 0;
+            if (visits < config_.minRootVisits)
+                deficit += config_.minRootVisits - visits;
+        }
+        config_.maxIterations = requestedMaxIterations + deficit;
     }
 
     if (config_.numEvalThreads > 0) evalPool_->start();
