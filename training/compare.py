@@ -200,7 +200,7 @@ def print_cycle_table(name: str, phase_label: str, metrics: list, bench_rows: li
 
     times = [completed_at(m) for m in metrics]
 
-    headers = ["cycle", "val_loss", "promoted", "completed", "duration", "elo", "elo_vs", *columns]
+    headers = ["cycle", "val_loss", "entropy", "promoted", "completed", "duration", "elo", "elo_vs", *columns]
     rows = []
     for i, m in enumerate(metrics):
         t = times[i]
@@ -211,9 +211,12 @@ def print_cycle_table(name: str, phase_label: str, metrics: list, bench_rows: li
         entry = elo.get(m["cycle"])
         elo_str = f"{entry['elo']:.0f}" if entry else "-"
         elo_vs_str = f"{entry['score_pct']:.1f}% vs c{entry['anchor_cycle']}" if entry and entry.get("anchor_cycle") is not None else "-"
+        entropy = m.get("avg_policy_entropy")
+        entropy_str = f"{entropy:.3f}" if entropy is not None else "-"
         rows.append([
             str(m["cycle"]),
             f"{m['val_loss']:.4f}",
+            entropy_str,
             "yes" if m.get("promoted") else "no",
             completed_str,
             duration_str,

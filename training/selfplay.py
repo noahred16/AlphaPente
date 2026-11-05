@@ -248,11 +248,13 @@ def selfplay(config: dict, bootstrap_manifest: dict, rounds: int):
                 "arena_score_pct": arena_score,
                 "iter_path": train_payload["iter_path"],
                 "positions_generated": gen_payload["positions"],
+                "avg_policy_entropy": gen_payload["avg_policy_entropy"],
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }) + "\n")
 
         status = "promoted" if promoted else "not promoted"
-        tqdm.write(f"  round {i + 1}: +{gen_payload['positions']} positions, "
+        tqdm.write(f"  round {i + 1}: +{gen_payload['positions']} positions "
+                   f"(entropy {gen_payload['avg_policy_entropy']:.3f}), "
                    f"val {train_payload['val_loss']:.4f} ({status})")
 
         if count_selfplay_rounds(name) % 10 == 0:
