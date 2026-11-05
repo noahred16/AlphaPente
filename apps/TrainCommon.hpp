@@ -23,6 +23,15 @@ struct ReplayBuffer {
     torch::Tensor captures;  // [N, 2]
     torch::Tensor policies;  // [N, 361] float16
     torch::Tensor values;    // [N, 2] — game outcome z, root Q (blended at train time)
+    // [N] float — this position's true ply index within its own self-play
+    // game, even though SelfPlay.cpp's exploration-dropoff trimming may mean
+    // the game's actual move 0 was never stored. Lets apps/Replay.cpp find
+    // game boundaries without assuming every game's first stored row is an
+    // empty board, which is no longer true. Undefined (not just absent per
+    // position) for buffers saved before this field existed; mergeAndTrim
+    // backfills -1 ("unknown") for that portion when merging with newer data
+    // that does have it.
+    torch::Tensor moveIndex;
     int64_t size() const { return states.defined() ? states.size(0) : 0; }
 };
 
@@ -93,6 +102,13 @@ inline ReplayBuffer loadBuffer(const std::string &path) {
         ar.read("captures", buf.captures);
         ar.read("policies", buf.policies);
         ar.read("values",   buf.values);
+        try {
+            ar.read("move_index", buf.moveIndex);
+        } catch (const std::exception &) {
+            // Saved before this field existed — leave undefined. Caught
+            // separately from the block below so a buffer missing only this
+            // (newest, least essential) field doesn't lose everything else.
+        }
         if (buf.states.defined() && buf.states.size(1) == 5) {
             // Legacy full-float format — convert to compact form.
             buf.states   = buf.states.slice(1, 0, 2).to(torch::kU8).contiguous();
@@ -118,6 +134,7 @@ inline void saveBuffer(const ReplayBuffer &buf, const std::string &path) {
     ar.write("captures", buf.captures);
     ar.write("policies", buf.policies);
     ar.write("values",   buf.values);
+    if (buf.moveIndex.defined()) ar.write("move_index", buf.moveIndex);
     ar.save_to(path);
 }
 
@@ -126,22 +143,29 @@ inline ReplayBuffer mergeAndTrim(ReplayBuffer existing,
                                   torch::Tensor newCaptures,
                                   torch::Tensor newPolicies,
                                   torch::Tensor newValues,
+                                  torch::Tensor newMoveIndex,
                                   int64_t maxSize = BUFFER_SIZE) {
     if (!existing.states.defined()) {
-        existing = {newStates, newCaptures, newPolicies, newValues};
+        existing = {newStates, newCaptures, newPolicies, newValues, newMoveIndex};
     } else {
-        existing.states   = torch::cat({existing.states,   newStates},   0);
-        existing.captures = torch::cat({existing.captures, newCaptures}, 0);
-        existing.policies = torch::cat({existing.policies, newPolicies}, 0);
-        existing.values   = torch::cat({existing.values,   newValues},   0);
+        // existing predates move_index (see ReplayBuffer) but new data always
+        // has it — backfill -1 ("unknown") so the two tensors can concatenate.
+        if (!existing.moveIndex.defined())
+            existing.moveIndex = torch::full({existing.size()}, -1.0f);
+        existing.states     = torch::cat({existing.states,    newStates},    0);
+        existing.captures   = torch::cat({existing.captures,  newCaptures},  0);
+        existing.policies   = torch::cat({existing.policies,  newPolicies},  0);
+        existing.values     = torch::cat({existing.values,    newValues},    0);
+        existing.moveIndex  = torch::cat({existing.moveIndex, newMoveIndex}, 0);
     }
     int64_t n = existing.states.size(0);
     if (maxSize > 0 && n > maxSize) {
         int64_t drop = n - maxSize;
-        existing.states   = existing.states.slice(0, drop);
-        existing.captures = existing.captures.slice(0, drop);
-        existing.policies = existing.policies.slice(0, drop);
-        existing.values   = existing.values.slice(0, drop);
+        existing.states    = existing.states.slice(0, drop);
+        existing.captures  = existing.captures.slice(0, drop);
+        existing.policies  = existing.policies.slice(0, drop);
+        existing.values    = existing.values.slice(0, drop);
+        existing.moveIndex = existing.moveIndex.slice(0, drop);
     }
     return existing;
 }

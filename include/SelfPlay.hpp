@@ -14,11 +14,19 @@ struct SelfPlayExample {
     PenteGame::Player player; // whose turn it was
     float outcome = 0.0f;     // final game result z (+1/-1/0), previous-player perspective
     float rootValue = 0.0f;   // root's own totalValue/visits at search time, same perspective as outcome
+    float policyEntropy = 0.0f;  // entropy of the MCTS visit distribution, normalized by log(legal moves) to [0, 1]
+    int   moveIndex = 0;      // this position's true ply index within its game, counting
+                               // from the game's real start even if runGame later trims
+                               // that start away (see the exploration-dropoff comment below)
 };
 
 struct SelfPlayConfig {
     int   simulations        = 100;
-    int   explorationDropoff = 8;    // moves after which Dirichlet noise and temp sampling are disabled
+    // Upper bound on a per-game randomized exploration cutoff (runGame draws
+    // a fresh Uniform(0, explorationDropoff) for each game) — not a fixed
+    // cutoff itself. See runGame's own comment: positions before that game's
+    // draw are dropped from its returned examples, not merely explored.
+    int   explorationDropoff = 8;
     // Exploration constant is not a fixed knob here — runGame scales it by game
     // phase via GameUtils::explorationConstantForMoveCount, matching the pente
     // app's tuning (a limited sim budget needs more exploitation-focused search

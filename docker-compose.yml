@@ -67,6 +67,38 @@ services:
     depends_on:
       - redis
 
+  # Separate from the opening-book builder above: a read-only viewer over
+  # self-play training data (training/models/runs/<run>/buffer.pt), not
+  # book_db — no RocksDB/Celery involved, just files already on disk.
+  #
+  # Its own image is pure Python — it never builds apps/Replay.cpp itself.
+  # `replay` needs the CUDA-enabled LibTorch vendored at libs/libtorch/
+  # (4.1GB, gitignored, not something a Docker build context should ever
+  # copy), so instead this bind-mounts the host's own already-built
+  # build/replay and libs/libtorch and runs the prebuilt binary directly -
+  # same spirit as api/engine.py shelling out to a prebuilt `pente`, except
+  # here the binary comes from a host build rather than one baked into the
+  # image. Concretely: run `cmake --build build --target replay` on the host
+  # (same as any other target in this repo) before `docker compose up` for
+  # this service to have a binary to call - see Dockerfile.
+  dashboard:
+    build: ./training/dashboard
+    ports:
+      - "8010:8010"
+    environment:
+      - REPLAY_BIN=/opt/pente-build/replay
+      - RUNS_DIR=/data/runs
+      - RUN_NAME=pente_v1_medium
+      # DT_RUNPATH on build/replay points at the host's absolute
+      # libs/libtorch/lib path, but LD_LIBRARY_PATH is checked first by the
+      # dynamic loader, so this bind mount's own in-container path works
+      # without needing to replicate that host path inside the container.
+      - LD_LIBRARY_PATH=/opt/libtorch/lib
+    volumes:
+      - ./build:/opt/pente-build:ro
+      - ./libs/libtorch:/opt/libtorch:ro
+      - ./training/models/runs:/data/runs:ro
+
 volumes:
   # Shared between api and worker so both see the same on-disk book_db - the
   # worker is its sole read-write owner, the api reads it as a RocksDB

@@ -183,6 +183,7 @@ add_pente_executable(renju      apps/Renju.cpp)
 add_pente_executable(keryopente apps/KeryoPente.cpp)
 add_pente_executable(benchmark  apps/Benchmark.cpp)
 add_pente_executable(inspect    apps/Inspect.cpp)
+add_pente_executable(replay     apps/Replay.cpp)
 
 # ─── Unit tests ───────────────────────────────────────────────────────────────
 

@@ -38,14 +38,27 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     constexpr int B = PenteGame::BOARD_SIZE;
     std::vector<SelfPlayExample> examples;
 
+    // Exploration (Dirichlet noise + temperature sampling below) makes the
+    // *chosen* move occasionally worse than the search's own best estimate —
+    // fine for move diversity, but every position *after* that chosen move
+    // then has its z outcome partly determined by a choice that wasn't really
+    // the engine's judgment. Instead of a fixed per-game cutoff, draw a fresh
+    // one per game: positions before it are exploratory and get dropped from
+    // the returned examples entirely (see the erase() at the bottom), so
+    // every example that's actually kept has deterministic (argmax) play the
+    // rest of the way to the game's end — its z is never contaminated by a
+    // sampling event that hadn't happened yet when it was recorded.
+    std::uniform_int_distribution<int> dropoffDist(0, cfg.explorationDropoff);
+    int gameDropoff = dropoffDist(rng);
+
     while (!game.isGameOver()) {
         // Both scale with game phase: exploration constant tapers continuously
         // (see GameUtils::explorationConstantForMoveCount — matches the pente
         // app's tuning), while Dirichlet noise is a one-time on/off switch at
-        // explorationDropoff.
+        // gameDropoff.
         auto c = mcts.getConfig();
         c.explorationConstant = GameUtils::explorationConstantForMoveCount(game.getMoveCount());
-        c.dirichletEpsilon    = (game.getMoveCount() >= cfg.explorationDropoff) ? 0.0f : cfg.dirichletEpsilon;
+        c.dirichletEpsilon    = (game.getMoveCount() >= gameDropoff) ? 0.0f : cfg.dirichletEpsilon;
         mcts.setConfig(c);
         mcts.search(game);
 
@@ -88,15 +101,21 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         assert(totalVisits > 0 && "search recorded no root visits");
 
         auto policyTensor = torch::zeros({B * B});
+        float entropy = 0.0f;
         if (totalVisits > 0) {
             auto acc = policyTensor.accessor<float, 1>();
             for (int i = 0; i < cap; i++) {
                 if (visits[i] > 0) {
                     PenteGame::Move mv = toPhysical(root->moves[i]);
-                    acc[mv.y * B + mv.x] = (float)visits[i] / (float)totalVisits;
+                    float p = (float)visits[i] / (float)totalVisits;
+                    acc[mv.y * B + mv.x] = p;
+                    entropy -= p * std::log(p);
                 }
             }
         }
+        // Normalized by log(legal moves) so it's comparable across game phase
+        // (fewer legal moves late in the game) rather than depending on board size.
+        float policyEntropy = (cap > 1) ? entropy / std::log((float)cap) : 0.0f;
 
         int32_t rootVisits = root->visits.load(std::memory_order_relaxed);
         float rootQ = rootVisits > 0
@@ -104,14 +123,15 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
             : 0.0f;
 
         auto [planes, captures] = NNEvaluator::gameToTensors(game);
-        examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f, rootQ});
+        examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f, rootQ, policyEntropy,
+                             game.getMoveCount()});
 
         int chosen = 0;
         if (solvedWinIdx >= 0) {
             // A proven win exists — always play it regardless of exploration mode.
             // Sampling a different move here would corrupt the value target for this position.
             chosen = solvedWinIdx;
-        } else if (game.getMoveCount() >= cfg.explorationDropoff || totalVisits == 0) {
+        } else if (game.getMoveCount() >= gameDropoff || totalVisits == 0) {
             chosen = (int)(std::max_element(visits.begin(), visits.end()) - visits.begin());
         } else {
             std::uniform_int_distribution<int> dist(0, totalVisits - 1);
@@ -137,6 +157,12 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
                    : (ex.player == winner)        ? -1.0f   // current player won → previous player lost
                                                   :  1.0f;  // current player lost → previous player won
     }
+
+    // Drop this game's exploratory prefix (see gameDropoff above) — if the
+    // whole game ended before gameDropoff, every position in it was
+    // exploratory, so nothing from it is usable.
+    size_t drop = std::min((size_t)gameDropoff, examples.size());
+    examples.erase(examples.begin(), examples.begin() + drop);
 
     return examples;
 }

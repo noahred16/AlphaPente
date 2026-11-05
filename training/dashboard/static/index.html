@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Self-Play Game Viewer</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Self-Play Game Viewer</h1>
+    <span id="run-name"></span>
+  </header>
+
+  <main>
+    <section id="game-list">
+      <h2>Recent games</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>plies</th><th>winner</th><th>caps (b/w)</th></tr>
+        </thead>
+        <tbody id="game-list-body"></tbody>
+      </table>
+      <div id="pagination">
+        <button id="prev-page">&laquo; prev</button>
+        <span id="page-label"></span>
+        <button id="next-page">next &raquo;</button>
+      </div>
+    </section>
+
+    <section id="board-panel">
+      <div id="board-header">
+        <span id="game-label">Select a game</span>
+        <div id="step-controls">
+          <button id="step-first" title="First ply">|&laquo;</button>
+          <button id="step-prev" title="Previous ply">&laquo;</button>
+          <span id="ply-label"></span>
+          <button id="step-next" title="Next ply">&raquo;</button>
+          <button id="step-last" title="Last ply">&raquo;|</button>
+        </div>
+      </div>
+      <svg id="board" viewBox="0 0 560 560"></svg>
+    </section>
+
+    <section id="move-table-panel">
+      <h2>Moves</h2>
+      <table>
+        <thead>
+          <tr><th>ply</th><th>move</th><th>caps</th><th>z</th><th>rootQ</th><th>H</th></tr>
+        </thead>
+        <tbody id="move-table-body"></tbody>
+      </table>
+      <div id="ply-detail"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

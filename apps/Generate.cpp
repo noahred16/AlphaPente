@@ -51,8 +51,11 @@ int main(int argc, char *argv[]) {
             "  -r  model residual blocks                   (default: " << resBlocks << "; same caveat as -c)\n"
             "  -a  Dirichlet noise alpha                   (default: " << dirichletAlpha << ")\n"
             "  -E  Dirichlet noise epsilon                 (default: " << dirichletEpsilon << ")\n"
-            "  -o  exploration dropoff: move count after which Dirichlet noise and\n"
-            "      temperature sampling are disabled (pure max-visits play)\n"
+            "  -o  exploration dropoff: upper bound on a per-game random cutoff:\n"
+            "      each game draws its own Uniform(0, dropoff) move count, explores\n"
+            "      (Dirichlet noise + temp sampling) only up to it, and drops every\n"
+            "      position before it from that game's stored examples (so no kept\n"
+            "      position's z outcome depends on a not-yet-happened random choice)\n"
             "      (default: " << explorationDropoff << ")\n"
             "\n"
             "Examples:\n"
@@ -144,8 +147,10 @@ int main(int argc, char *argv[]) {
 
     std::mt19937 rng(std::random_device{}());
     std::vector<torch::Tensor> allPlanes, allCaptures, allPolicies, allValues;
+    std::vector<float> allMoveIndices;
     int totalPositions = 0, bWins = 0, wWins = 0, draws = 0;
     int lastGameMoves = 0;
+    double entropySum = 0.0;
 
     std::cout << "── Self-play (" << gamesPerIter << " games) ──────────────────────────\n";
 
@@ -171,6 +176,8 @@ int main(int argc, char *argv[]) {
             allCaptures.push_back(ex.captures);
             allPolicies.push_back(ex.policy);
             allValues.push_back(torch::tensor({ex.outcome, ex.rootValue}));
+            allMoveIndices.push_back((float)ex.moveIndex);
+            entropySum += ex.policyEntropy;
             totalPositions++;
         }
 
@@ -190,14 +197,17 @@ int main(int argc, char *argv[]) {
     }
 
     double totalSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    double avgPolicyEntropy = totalPositions > 0 ? entropySum / totalPositions : 0.0;
     std::cout << "\n  total: " << std::fixed << std::setprecision(1) << totalSecs << "s"
               << "  avg/game: " << std::setprecision(1) << totalSecs / gamesPerIter << "s"
-              << "  avg/pos: "  << std::setprecision(3) << (totalPositions > 0 ? totalSecs / totalPositions : 0.0) << "s\n";
+              << "  avg/pos: "  << std::setprecision(3) << (totalPositions > 0 ? totalSecs / totalPositions : 0.0) << "s\n"
+              << "  avg policy entropy (normalized): " << std::setprecision(3) << avgPolicyEntropy << "\n";
 
     if (dryRun) {
         std::cout << "\n── Dry run ──────────────────────────────────────────────────────\n"
                   << "  generated: " << totalPositions << " positions — not saved (" << bufferPath << " untouched)\n";
-        if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions << "}\n";
+        if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions
+                                   << ", \"avg_policy_entropy\": " << avgPolicyEntropy << "}\n";
         return 0;
     }
 
@@ -209,6 +219,7 @@ int main(int argc, char *argv[]) {
     auto newCaptures = torch::stack(allCaptures, 0);
     auto newPolicies = torch::stack(allPolicies, 0).to(torch::kHalf);
     auto newValues   = torch::stack(allValues,   0);
+    auto newMoveIdx  = torch::tensor(allMoveIndices);
 
     std::cout << "\n── " << (bootstrap ? "Bootstrap" : "Buffer")
               << " ───────────────────────────────────────────────────────\n";
@@ -216,15 +227,16 @@ int main(int argc, char *argv[]) {
     std::cout << "  existing: " << buf.size() << " positions\n"
               << "  new     : " << totalPositions << " positions\n";
     if (bootstrap) {
-        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues, /*maxSize=*/0);
+        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues, newMoveIdx, /*maxSize=*/0);
     } else {
-        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues);
+        buf = mergeAndTrim(buf, newStates, newCaptures, newPolicies, newValues, newMoveIdx);
     }
     std::cout << "  total   : " << buf.size() << " positions\n";
     saveBuffer(buf, bufferPath);
     std::cout << "  saved  → " << bufferPath << "\n";
 
-    if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions << "}\n";
+    if (jsonOutput) std::cout << "{\"status\": \"ok\", \"positions\": " << totalPositions
+                               << ", \"avg_policy_entropy\": " << avgPolicyEntropy << "}\n";
     return 0;
 }
 
