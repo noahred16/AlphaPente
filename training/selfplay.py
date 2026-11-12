@@ -88,6 +88,16 @@ def run_generate(config: dict, game_type: str):
         "-o", str(sp["exploration_dropoff"]),
         "-j",
     ]
+    # Gumbel root selection (see Generate.cpp's -G/-k/-C): replaces PUCT +
+    # Dirichlet noise at the root with Gumbel-Top-k + Sequential Halving, and
+    # the policy training target with softmax(logit+completedQ). -a/-E above
+    # are passed through but ignored by the engine in this mode.
+    if sp.get("search_mode") == "gumbel":
+        args += [
+            "-G",
+            "-k", str(sp["gumbel_m"]),
+            "-C", str(sp["gumbel_c_scale"]),
+        ]
     result = subprocess.run(args, cwd=model.REPO_ROOT, capture_output=True, text=True)
     return result, _parse_json_line(result)
 

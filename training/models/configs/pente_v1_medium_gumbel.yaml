@@ -1,0 +1,59 @@
+# Same model size/bootstrap/train hyperparams as pente_v1_medium -- the only
+# difference is self_play.search_mode, so any quality/Elo difference between
+# the two runs is attributable to Gumbel root selection (Gumbel-Top-k +
+# Sequential Halving, replacing PUCT + Dirichlet noise at the root) alone.
+# See ParallelMCTS::SearchMode::GUMBEL / runGumbelRootSearch.
+
+name: pente_v1_medium_gumbel
+
+bootstrap: pente_base
+
+model:
+  channels: 64
+  res_blocks: 3
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2
+  val_fraction: 0.05
+  val_gate_tolerance: 1.02
+  min_grad_steps: 200
+
+bootstrap_training:
+  max_cycles: 20
+  patience: 3
+
+# Read by training/selfplay.py. dirichlet_alpha/epsilon are kept at
+# pente_v1_medium's values but ignored by the engine under search_mode:
+# gumbel (Gumbel-Top-k is the exploration mechanism in this mode -- see
+# ParallelMCTS::search's mutual-exclusion warning). gumbel_m=16 covers every
+# legal root move early in the game (first few plies have well under 16
+# candidates) and still subsamples sensibly once the board opens up;
+# gumbel_c_scale=1.0 is the paper's default completedQ weighting -- unlike
+# the synthetic-evaluator unit tests, this isn't tuned to force a
+# near-deterministic winner, since real self-play wants Gumbel-Top-k's
+# genuine stochastic exploration.
+#
+# games_per_round=60 (vs. pente_v1_medium's 30): a measured round at this
+# iter0 model produced ~460-470 kept positions over 30 games (~15.5/game,
+# noticeably fewer than PUCT's ~700-850/round here) -- spreading only 400
+# sims/move across up to gumbel_m=16 root candidates via Sequential Halving
+# leaves ~6 sims/candidate in an early phase, well below what PUCT's
+# continuously-concentrated budget gets at the same sim count, so these
+# early, still-weak-model games end faster. 625 positions is
+# TrainCommon.hpp's compile-time min-buffer-to-train floor; 30 games/round
+# undershoots it almost every round. 60 games/round (~930 expected) gives
+# real headroom without changing simulations/model size.
+self_play:
+  games_per_round: 60
+  simulations: 400
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  rounds: 10
+  search_mode: gumbel
+  gumbel_m: 16
+  gumbel_c_scale: 1.0

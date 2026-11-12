@@ -2,6 +2,7 @@
 #ifdef WITH_TORCH
 
 #include "Evaluator.hpp"
+#include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include <random>
 #include <torch/torch.h>
@@ -35,6 +36,17 @@ struct SelfPlayConfig {
     float dirichletEpsilon   = 0.25f;
     int   numWorkerThreads   = 4;
     int   numEvalThreads     = 1;
+
+    // SearchMode::GUMBEL replaces PUCT+Dirichlet root selection with Gumbel-Top-k
+    // sampling + Sequential Halving (see ParallelMCTS::runGumbelRootSearch); the
+    // policy target then comes from gumbelPolicyTarget() instead of
+    // policyTargetVisits(), and the move actually played is always the search's
+    // own result rather than sampled from visit counts -- Gumbel-Top-k at the
+    // root is itself the exploration mechanism. dirichletAlpha/Epsilon above are
+    // ignored in this mode.
+    ParallelMCTS::SearchMode searchMode = ParallelMCTS::SearchMode::PUCT;
+    int   gumbelM      = 16;
+    float gumbelCScale = 1.0f;
 };
 
 // Build the policy-target visit counts from raw root-child visits. If a proven
@@ -44,6 +56,13 @@ struct SelfPlayConfig {
 // once it is proven lost, and in a lost position the raw distribution is the
 // best-resistance target.
 std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx);
+
+// Gumbel policy target (SearchMode::GUMBEL): softmax(logit(a) + cScale*completedQ(a))
+// over every root child, visited or not -- logits is modified in place and
+// returned. Mirrors policyTargetVisits' solvedWinIdx override: a proven winning
+// child takes all the mass instead of being blended through the softmax.
+std::vector<float> gumbelPolicyTarget(std::vector<float> logits, const std::vector<float> &completedQ,
+                                       float cScale, int solvedWinIdx);
 
 // Run one self-play game. Returns one SelfPlayExample per move made.
 // The final game outcome z and each position's own root Q estimate are kept

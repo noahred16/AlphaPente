@@ -8,6 +8,7 @@
 #include "PenteGame.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 
 std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx) {
     if (solvedWinIdx >= 0) {
@@ -16,6 +17,26 @@ std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx) {
         visits[solvedWinIdx] = std::max(total, 1);
     }
     return visits;
+}
+
+std::vector<float> gumbelPolicyTarget(std::vector<float> logits, const std::vector<float> &completedQ,
+                                       float cScale, int solvedWinIdx) {
+    for (size_t i = 0; i < logits.size(); ++i) logits[i] += cScale * completedQ[i];
+
+    if (solvedWinIdx >= 0) {
+        std::vector<float> out(logits.size(), 0.0f);
+        out[solvedWinIdx] = 1.0f;
+        return out;
+    }
+
+    float maxLogit = *std::max_element(logits.begin(), logits.end());
+    float sum = 0.0f;
+    for (float &v : logits) {
+        v = std::exp(v - maxLogit);
+        sum += v;
+    }
+    for (float &v : logits) v /= sum;
+    return logits;
 }
 
 std::vector<SelfPlayExample> runGame(Evaluator &eval,
@@ -33,6 +54,9 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     mctsConfig.seed               = static_cast<uint32_t>(rng());
     mctsConfig.dirichletAlpha     = cfg.dirichletAlpha;
     mctsConfig.dirichletEpsilon   = cfg.dirichletEpsilon;
+    mctsConfig.searchMode         = cfg.searchMode;
+    mctsConfig.gumbelM            = cfg.gumbelM;
+    mctsConfig.gumbelCScale       = cfg.gumbelCScale;
     ParallelMCTS mcts(mctsConfig);
 
     constexpr int B = PenteGame::BOARD_SIZE;
@@ -58,9 +82,18 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         // gameDropoff.
         auto c = mcts.getConfig();
         c.explorationConstant = GameUtils::explorationConstantForMoveCount(game.getMoveCount());
-        c.dirichletEpsilon    = (game.getMoveCount() >= gameDropoff) ? 0.0f : cfg.dirichletEpsilon;
+        if (cfg.searchMode == ParallelMCTS::SearchMode::GUMBEL) {
+            // Gumbel-Top-k + Sequential Halving is the exploration mechanism in
+            // this mode; zero these rather than leave a stale non-zero alpha
+            // from mctsConfig's construction, which would trip search()'s
+            // mutual-exclusion warning every move for no reason.
+            c.dirichletAlpha   = 0.0f;
+            c.dirichletEpsilon = 0.0f;
+        } else {
+            c.dirichletEpsilon = (game.getMoveCount() >= gameDropoff) ? 0.0f : cfg.dirichletEpsilon;
+        }
         mcts.setConfig(c);
-        mcts.search(game);
+        PenteGame::Move searchMove = mcts.search(game);
 
         const auto *root = mcts.getRoot();
         int cap          = static_cast<int>(root->childCapacity);
@@ -91,25 +124,55 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
                 solvedWinIdx = i;
         }
 
-        visits = policyTargetVisits(std::move(visits), solvedWinIdx);
-        int totalVisits = 0;
-        for (int i = 0; i < cap; i++) totalVisits += visits[i];
-
-        // Should not happen: search always records visits unless it ran zero
-        // iterations (e.g. arena exhausted). If violated, the recorded policy
-        // target is all-zero and the chosen move arbitrary.
-        assert(totalVisits > 0 && "search recorded no root visits");
-
         auto policyTensor = torch::zeros({B * B});
         float entropy = 0.0f;
-        if (totalVisits > 0) {
+        bool gumbel = (cfg.searchMode == ParallelMCTS::SearchMode::GUMBEL);
+
+        if (gumbel) {
+            // Policy target is softmax(logit(a) + cScale*completedQ(a)) over every
+            // root child, visited or not -- NOT a function of visit counts.
+            // root->priors are already-softmaxed, legal-move-renormalized
+            // probabilities rather than raw logits, but log(prob) differs from
+            // the true logit only by a per-node additive constant that the
+            // softmax below is invariant to.
+            std::vector<float> logits(cap), completedQ(cap);
+            for (int i = 0; i < cap; i++) {
+                logits[i] = std::log(std::max(root->priors[i], 1e-9f));
+                const auto *child = root->children[i].load(std::memory_order_acquire);
+                int32_t v = child ? child->visits.load(std::memory_order_relaxed) : 0;
+                completedQ[i] = (child && v > 0)
+                    ? static_cast<float>(child->totalValue.load(std::memory_order_relaxed) / v)
+                    : -root->value;
+            }
+            auto target = gumbelPolicyTarget(std::move(logits), completedQ, cfg.gumbelCScale, solvedWinIdx);
+
             auto acc = policyTensor.accessor<float, 1>();
             for (int i = 0; i < cap; i++) {
-                if (visits[i] > 0) {
+                if (target[i] > 0.0f) {
                     PenteGame::Move mv = toPhysical(root->moves[i]);
-                    float p = (float)visits[i] / (float)totalVisits;
-                    acc[mv.y * B + mv.x] = p;
-                    entropy -= p * std::log(p);
+                    acc[mv.y * B + mv.x] = target[i];
+                    entropy -= target[i] * std::log(target[i]);
+                }
+            }
+        } else {
+            visits = policyTargetVisits(std::move(visits), solvedWinIdx);
+            int totalVisits = 0;
+            for (int i = 0; i < cap; i++) totalVisits += visits[i];
+
+            // Should not happen: search always records visits unless it ran zero
+            // iterations (e.g. arena exhausted). If violated, the recorded policy
+            // target is all-zero and the chosen move arbitrary.
+            assert(totalVisits > 0 && "search recorded no root visits");
+
+            if (totalVisits > 0) {
+                auto acc = policyTensor.accessor<float, 1>();
+                for (int i = 0; i < cap; i++) {
+                    if (visits[i] > 0) {
+                        PenteGame::Move mv = toPhysical(root->moves[i]);
+                        float p = (float)visits[i] / (float)totalVisits;
+                        acc[mv.y * B + mv.x] = p;
+                        entropy -= p * std::log(p);
+                    }
                 }
             }
         }
@@ -126,23 +189,34 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
         examples.push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f, rootQ, policyEntropy,
                              game.getMoveCount()});
 
-        int chosen = 0;
-        if (solvedWinIdx >= 0) {
-            // A proven win exists — always play it regardless of exploration mode.
-            // Sampling a different move here would corrupt the value target for this position.
-            chosen = solvedWinIdx;
-        } else if (game.getMoveCount() >= gameDropoff || totalVisits == 0) {
-            chosen = (int)(std::max_element(visits.begin(), visits.end()) - visits.begin());
+        PenteGame::Move mv;
+        if (gumbel) {
+            // Gumbel-Top-k at the root is itself the exploration mechanism --
+            // always play whatever the search returned (the Sequential-Halving
+            // winner, or the engine's own proven-win move) rather than
+            // resampling by visit count on top of it.
+            mv = searchMove;
         } else {
-            std::uniform_int_distribution<int> dist(0, totalVisits - 1);
-            int r = dist(rng), cum = 0;
-            for (int i = 0; i < cap; i++) {
-                cum += visits[i];
-                if (r < cum) { chosen = i; break; }
+            int chosen = 0;
+            int totalVisits = 0;
+            for (int v : visits) totalVisits += v;
+            if (solvedWinIdx >= 0) {
+                // A proven win exists — always play it regardless of exploration mode.
+                // Sampling a different move here would corrupt the value target for this position.
+                chosen = solvedWinIdx;
+            } else if (game.getMoveCount() >= gameDropoff || totalVisits == 0) {
+                chosen = (int)(std::max_element(visits.begin(), visits.end()) - visits.begin());
+            } else {
+                std::uniform_int_distribution<int> dist(0, totalVisits - 1);
+                int r = dist(rng), cum = 0;
+                for (int i = 0; i < cap; i++) {
+                    cum += visits[i];
+                    if (r < cum) { chosen = i; break; }
+                }
             }
+            mv = toPhysical(root->moves[chosen]);
         }
 
-        PenteGame::Move mv = toPhysical(root->moves[chosen]);
         game.makeMove(mv.x, mv.y);
         mcts.reuseSubtree(mv);
     }

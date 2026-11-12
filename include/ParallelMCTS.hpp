@@ -34,7 +34,7 @@ class ParallelMCTS {
         SOLVED_LOSS,
         SOLVED_DRAW   // Proven draw (board full, no legal moves, no winner)
     };
-    enum class SearchMode { PUCT };
+    enum class SearchMode { PUCT, GUMBEL };
 
     // Configuration parameters
     struct Config {
@@ -67,6 +67,14 @@ class ParallelMCTS {
         // still governs the normal refinement phase that follows. 0 = disabled
         // (default, no behavior change).
         int minRootVisits = 0;
+
+        // Gumbel root selection (SearchMode::GUMBEL): sample this many root
+        // candidates via Gumbel-Top-k, then run Sequential Halving across them
+        // instead of PUCT+Dirichlet-noise root selection. Ignored in PUCT mode.
+        int gumbelM = 16;
+        // Scales completedQ(a) in the Sequential-Halving score g(a)+logit(a)+
+        // gumbelCScale*completedQ(a), and in the SelfPlay Gumbel policy target.
+        float gumbelCScale = 1.0f;
 
         // Canonical-hash transposition sharing (see ThreadSafeNode::canonicalSym):
         // while getMoveCount() <= this, nodes are looked up/shared by canonical
@@ -311,6 +319,10 @@ class ParallelMCTS {
     void pushEvalRequest(const EvaluationRequest &request);
     std::vector<EvaluationRequest> drainEvalQueue();
     std::vector<EvaluationResult> drainBackpropQueue();
+    // Drains both queues and removes the virtual losses each discarded item's
+    // searchPath accumulated (exposed for testing; see runWorkerPhase, which
+    // calls this at every search()/Sequential-Halving phase boundary).
+    void drainQueuesRemovingVirtualLoss();
 
   private:
     // MCTS phases
@@ -322,6 +334,21 @@ class ParallelMCTS {
     // Helper methods
     int selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &game) const;
     void injectDirichletNoise();
+
+    // Gumbel root selection (SearchMode::GUMBEL). Runs Gumbel-Top-k sampling +
+    // Sequential Halving at the root in place of injectDirichletNoise() +
+    // the plain PUCT worker-pool loop; deeper-tree selection stays ordinary
+    // PUCT via selectBestMoveIndex/rootCandidateMask_.
+    PenteGame::Move runGumbelRootSearch(const PenteGame &game);
+    // Root child i's own backed-up Q if visited, else the parent's FPU
+    // fallback (-root_->value) -- same sign convention selectBestMoveIndex
+    // already uses for unvisited children.
+    float completedQ(int i) const;
+    // Runs the worker/eval pools for exactly iterationBudget more iterations
+    // (mutates config_.maxIterations, caller restores it), then drains both
+    // queues, removing virtual losses along each discarded item's searchPath
+    // so a phase boundary never leaks VL into the next phase or move.
+    void runWorkerPhase(int iterationBudget);
 
     // Canonical-hash transposition sharing (Config::canonicalHashDepth). Looks up
     // `hash` in the sharded table; on a miss, allocates a fresh node, publishes it,
@@ -388,6 +415,15 @@ class ParallelMCTS {
     // or a repeated search on the same position. Re-flooring every move would
     // silently balloon a small requested iteration count on every move played.
     bool rootFloorApplied_ = false;
+
+    // Gumbel root selection scratch state (see runGumbelRootSearch). Empty
+    // rootCandidateMask_ means "unrestricted" -- zero behavioral change for
+    // PUCT-mode selectBestMoveIndex calls.
+    std::vector<float> rootGumbel_;
+    std::vector<uint8_t> rootCandidateMask_;
+    // Dedups the dirichletAlpha/minRootVisits-ignored-under-GUMBEL warning so
+    // self-play (which calls search() every move) doesn't spam stderr.
+    bool gumbelMutualExclusionWarned_ = false;
 
     // Statistics
     std::atomic<int> totalIterations{0};   // completed backprops across all workers

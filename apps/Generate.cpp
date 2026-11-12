@@ -27,11 +27,15 @@ int main(int argc, char *argv[]) {
     float dirichletAlpha     = 0.3f;
     float dirichletEpsilon   = 0.25f;
     int   explorationDropoff = 8;
+    bool  gumbel             = false;
+    int   gumbelM            = 16;
+    float gumbelCScale       = 1.0f;
 
     auto usage = [&](std::ostream &out) {
         out <<
             "Usage: generate [-g game] [-n games] [-s sims] [-e evaluator] [-b] [-t tail] [-x] [-j] [-d dir]\n"
             "                [-c channels] [-r res_blocks] [-a alpha] [-E epsilon] [-o dropoff]\n"
+            "                [-G] [-k gumbel_m] [-C gumbel_c_scale]\n"
             "\n"
             "Options:\n"
             "  -g  game: pente | gomoku | keryopente      (default: " << gameFlag << ")\n"
@@ -49,14 +53,21 @@ int main(int argc, char *argv[]) {
             "      must match an existing best_model.pt's channels — shapes are fixed at save time.\n"
             "      Irrelevant in bootstrap mode, which always uses the heuristic evaluator.)\n"
             "  -r  model residual blocks                   (default: " << resBlocks << "; same caveat as -c)\n"
-            "  -a  Dirichlet noise alpha                   (default: " << dirichletAlpha << ")\n"
-            "  -E  Dirichlet noise epsilon                 (default: " << dirichletEpsilon << ")\n"
+            "  -a  Dirichlet noise alpha                   (default: " << dirichletAlpha << "; ignored with -G)\n"
+            "  -E  Dirichlet noise epsilon                 (default: " << dirichletEpsilon << "; ignored with -G)\n"
             "  -o  exploration dropoff: upper bound on a per-game random cutoff:\n"
             "      each game draws its own Uniform(0, dropoff) move count, explores\n"
             "      (Dirichlet noise + temp sampling) only up to it, and drops every\n"
             "      position before it from that game's stored examples (so no kept\n"
             "      position's z outcome depends on a not-yet-happened random choice)\n"
-            "      (default: " << explorationDropoff << ")\n"
+            "      (default: " << explorationDropoff << "; with -G, only trims the exploratory prefix --\n"
+            "      Gumbel-Top-k is the search's own exploration mechanism, not Dirichlet/temp sampling)\n"
+            "  -G  Gumbel root selection (ParallelMCTS::SearchMode::GUMBEL) instead of\n"
+            "      PUCT + Dirichlet noise: Gumbel-Top-k sampling + Sequential Halving at the\n"
+            "      root, and a softmax(logit+completedQ) policy training target instead of\n"
+            "      visit counts. -a/-E are ignored in this mode.\n"
+            "  -k  Gumbel root candidate count (gumbel_m)   (default: " << gumbelM << "; ignored without -G)\n"
+            "  -C  Gumbel completedQ scale (gumbel_c_scale) (default: " << gumbelCScale << "; ignored without -G)\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -66,11 +77,14 @@ int main(int argc, char *argv[]) {
             "  ./generate -g pente -n 200 -s 200 -b\n"
             "\n"
             "  # calibrate expected throughput for an ETA, without touching bootstrap.pt\n"
-            "  ./generate -g pente -n 3 -s 50000 -b -x\n";
+            "  ./generate -g pente -n 3 -s 50000 -b -x\n"
+            "\n"
+            "  # self-play with Gumbel root selection instead of PUCT+Dirichlet\n"
+            "  ./generate -g pente -n 50 -s 400 -G\n";
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:Gk:C:h")) != -1) {
         if      (opt == 'g') gameFlag           = optarg;
         else if (opt == 'n') gamesPerIter       = std::stoi(optarg);
         else if (opt == 's') mctsSims           = std::stoi(optarg);
@@ -85,6 +99,9 @@ int main(int argc, char *argv[]) {
         else if (opt == 'a') dirichletAlpha     = std::stof(optarg);
         else if (opt == 'E') dirichletEpsilon   = std::stof(optarg);
         else if (opt == 'o') explorationDropoff = std::stoi(optarg);
+        else if (opt == 'G') gumbel             = true;
+        else if (opt == 'k') gumbelM            = std::stoi(optarg);
+        else if (opt == 'C') gumbelCScale       = std::stof(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -124,6 +141,9 @@ int main(int argc, char *argv[]) {
               << "  games    : " << gamesPerIter  << "\n"
               << "  sims     : " << mctsSims       << "\n"
               << "  evaluator: " << (useHeuristic ? "heuristic" : "nn") << "\n"
+              << "  search   : " << (gumbel ? "gumbel (m=" + std::to_string(gumbelM) +
+                                               ", cScale=" + std::to_string(gumbelCScale) + ")"
+                                             : "puct") << "\n"
               << "  tail     : " << (tailMoves > 0 ? std::to_string(tailMoves) + " moves" : "all") << "\n"
               << "  dry run  : " << (dryRun ? "yes — nothing will be written to disk" : "no") << "\n\n";
 
@@ -132,6 +152,9 @@ int main(int argc, char *argv[]) {
     spConfig.dirichletAlpha     = dirichletAlpha;
     spConfig.dirichletEpsilon   = dirichletEpsilon;
     spConfig.explorationDropoff = explorationDropoff;
+    spConfig.searchMode         = gumbel ? ParallelMCTS::SearchMode::GUMBEL : ParallelMCTS::SearchMode::PUCT;
+    spConfig.gumbelM            = gumbelM;
+    spConfig.gumbelCScale       = gumbelCScale;
     // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
     // threads feeding a single eval thread. Worker count is NOT scaled with
     // NUM_THREADS — many threads sharing one MCTS tree contend heavily near

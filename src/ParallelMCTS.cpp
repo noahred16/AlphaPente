@@ -479,6 +479,22 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
     setupSlabs();
     tl_slab = &workerSlabs_[0];  // main thread uses slab 0 during prepareRoot
     prepareRoot(game);
+
+    if (config_.searchMode == SearchMode::GUMBEL) {
+        tl_slab = nullptr;
+        // Gumbel-Top-k + Sequential Halving is itself the exploration
+        // mechanism; it subsumes both of these PUCT-only knobs. Warn once
+        // (self-play calls search() every move) rather than silently
+        // compounding them or silently ignoring a config the caller set.
+        if (!gumbelMutualExclusionWarned_ &&
+            (config_.dirichletAlpha > 0.0f || config_.minRootVisits > 0)) {
+            std::cerr << "Warning: SearchMode::GUMBEL ignores dirichletAlpha/minRootVisits "
+                          "(Gumbel-Top-k + Sequential Halving replace that exploration mechanism)\n";
+            gumbelMutualExclusionWarned_ = true;
+        }
+        return runGumbelRootSearch(game);
+    }
+
     if (config_.dirichletAlpha > 0.0f)
         injectDirichletNoise();
     tl_slab = nullptr;
@@ -504,32 +520,7 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
         rootFloorApplied_ = true;
     }
 
-    if (config_.numEvalThreads > 0) evalPool_->start();
-    workerPool_->start();
-
-    // Scale timeout with iteration count: assume at least 2k iters/sec (measured
-    // throughput for pente_v1_medium — 64ch/3rb — on an idle machine was ~2.4k/sec,
-    // well below the 20k/sec this used to assume), with a 3-minute minimum so a
-    // heavier model or a large reused tree doesn't spuriously cut off a small
-    // interactive request. This is a safety-net ceiling, not an expected duration —
-    // typical throughput on a smaller/fresher tree is much higher than 2k/sec, so
-    // real searches finish well before hitting it.
-    auto timeoutMs = std::chrono::milliseconds(
-        std::max(180000LL, static_cast<long long>(config_.maxIterations) / 2LL));
-    bool completed = workerPool_->waitForCompletion(timeoutMs);
-    if (!completed)
-        std::cerr << "Warning: parallel MCTS search timed out\n";
-
-    workerPool_->stop();
-    if (config_.numEvalThreads > 0) {
-        evalPool_->stop();
-        // Drain both queues so stale items from an early-terminated search never
-        // carry over into the next call.  Leftover eval requests would be processed
-        // immediately by the fresh eval threads on the next search() call, causing a
-        // burst of concurrent NN forward passes and stale backprops into the new tree.
-        drainEvalQueue();
-        drainBackpropQueue();
-    }
+    runWorkerPhase(config_.maxIterations);
 
     // If search terminated early because a WIN was proved, credit the remaining
     // iterations to that child so its visit count reflects how strongly we back it.
@@ -553,6 +544,141 @@ PenteGame::Move ParallelMCTS::search(const PenteGame &game) {
 
     config_.maxIterations = requestedMaxIterations;
     return getBestMove();
+}
+
+void ParallelMCTS::runWorkerPhase(int iterationBudget) {
+    // Absolute target, not a delta: totalIterations is a running counter across
+    // every phase of this search() call (zero at session start, carried across
+    // Sequential-Halving phases), and workerThreadMain's loop condition compares
+    // it against config_.maxIterations directly.
+    config_.maxIterations = totalIterations.load(std::memory_order_relaxed) + iterationBudget;
+
+    if (config_.numEvalThreads > 0) evalPool_->start();
+    workerPool_->start();
+
+    // Scale timeout with iteration count: assume at least 2k iters/sec (measured
+    // throughput for pente_v1_medium — 64ch/3rb — on an idle machine was ~2.4k/sec,
+    // well below the 20k/sec this used to assume), with a 3-minute minimum so a
+    // heavier model or a large reused tree doesn't spuriously cut off a small
+    // interactive request. This is a safety-net ceiling, not an expected duration —
+    // typical throughput on a smaller/fresher tree is much higher than 2k/sec, so
+    // real searches finish well before hitting it.
+    auto timeoutMs = std::chrono::milliseconds(
+        std::max(180000LL, static_cast<long long>(iterationBudget) / 2LL));
+    bool completed = workerPool_->waitForCompletion(timeoutMs);
+    if (!completed)
+        std::cerr << "Warning: parallel MCTS search phase timed out\n";
+
+    workerPool_->stop();
+    if (config_.numEvalThreads > 0) {
+        evalPool_->stop();
+        drainQueuesRemovingVirtualLoss();
+    }
+}
+
+void ParallelMCTS::drainQueuesRemovingVirtualLoss() {
+    // Drain both queues so stale items from an early-terminated phase never
+    // carry over into the next call -- leftover eval requests would be
+    // processed immediately by the fresh eval threads on the next phase,
+    // causing a burst of concurrent NN forward passes and stale backprops
+    // into the tree -- and remove the virtual losses each discarded item's
+    // searchPath accumulated, so a phase boundary (Sequential Halving runs
+    // several per move) never leaves stale VL biasing PUCT/Gumbel stats for
+    // the rest of the search or game.
+    for (auto &req : drainEvalQueue())
+        for (auto *n : req.searchPath)
+            if (n->virtualLosses.load(std::memory_order_relaxed) > 0)
+                virtualLossManager_->removeVirtualLoss(n);
+    for (auto &res : drainBackpropQueue())
+        for (auto *n : res.searchPath)
+            if (n->virtualLosses.load(std::memory_order_relaxed) > 0)
+                virtualLossManager_->removeVirtualLoss(n);
+}
+
+float ParallelMCTS::completedQ(int i) const {
+    ThreadSafeNode *child = root_->children[i].load(std::memory_order_acquire);
+    if (child) {
+        int32_t visits = child->visits.load(std::memory_order_relaxed);
+        if (visits > 0)
+            return static_cast<float>(child->totalValue.load(std::memory_order_relaxed) / visits);
+    }
+    // Unvisited: same FPU fallback selectBestMoveIndex uses (root_->value is in
+    // the previous mover's perspective, i.e. the opponent of root_'s own mover).
+    return -root_->value;
+}
+
+PenteGame::Move ParallelMCTS::runGumbelRootSearch(const PenteGame &game) {
+    if (!root_ || root_->childCapacity == 0) return getBestMove();
+
+    int cap = root_->childCapacity;
+    int m = std::min(config_.gumbelM, cap);
+    int requestedMaxIterations = config_.maxIterations;
+
+    if (m <= 1) {
+        // Degrade gracefully to a single plain-PUCT pass over the full budget
+        // rather than running Sequential Halving over a single candidate.
+        rootCandidateMask_.clear();
+        runWorkerPhase(requestedMaxIterations);
+        config_.maxIterations = requestedMaxIterations;
+        return getBestMove();
+    }
+
+    // Gumbel-Top-k: sample one g(a) ~ Gumbel(0,1) per legal root action, then
+    // take the top-m indices by g(a)+logit(a). root_->priors are already
+    // softmaxed, legal-move-renormalized probabilities rather than raw
+    // logits, but log(prob) differs from the true logit only by a per-node
+    // additive constant (the renormalization divides every legal prob by the
+    // same total), which both this ranking and the score below are invariant to.
+    rootGumbel_.resize(cap);
+    std::extreme_value_distribution<float> gumbel(0.0f, 1.0f);
+    std::vector<int> candidates(cap);
+    for (int i = 0; i < cap; ++i) {
+        rootGumbel_[i] = gumbel(rng_);
+        candidates[i] = i;
+    }
+    auto logit = [&](int i) { return std::log(std::max(root_->priors[i], 1e-9f)); };
+    std::partial_sort(candidates.begin(), candidates.begin() + m, candidates.end(),
+                       [&](int a, int b) { return rootGumbel_[a] + logit(a) > rootGumbel_[b] + logit(b); });
+    candidates.resize(m);
+
+    // Sequential Halving: spend the iteration budget across ceil(log2(m))
+    // phases, halving the candidate set after each one, until one survives.
+    int remainingBudget = requestedMaxIterations;
+    while (candidates.size() > 1 && !root_->isTerminal()) {
+        int numCandidates = static_cast<int>(candidates.size());
+        int phasesLeft = std::max(1, static_cast<int>(std::ceil(std::log2(static_cast<double>(numCandidates)))));
+        int phaseBudget = std::max(numCandidates, remainingBudget / phasesLeft);
+        remainingBudget -= phaseBudget;
+
+        rootCandidateMask_.assign(cap, 0);
+        for (int idx : candidates) rootCandidateMask_[idx] = 1;
+
+        runWorkerPhase(phaseBudget);
+
+        if (root_->isTerminal()) break;
+
+        auto score = [&](int i) { return rootGumbel_[i] + logit(i) + config_.gumbelCScale * completedQ(i); };
+        std::sort(candidates.begin(), candidates.end(), [&](int a, int b) { return score(a) > score(b); });
+        candidates.resize(std::max(1, (numCandidates + 1) / 2));
+    }
+
+    rootCandidateMask_.clear();
+    config_.maxIterations = requestedMaxIterations;
+
+    if (root_->isTerminal()) return getBestMove();
+
+    PenteGame::Move move = root_->moves[candidates[0]];
+    // root_->moves[] is in canonical coords when root_->canonicalSym >= 0 --
+    // un-rotate back to physical coords before returning to the caller, same
+    // as getBestMove() does.
+    if (root_->canonicalSym >= 0) {
+        int rootSym = -1;
+        initialGame_.getCanonicalHash(rootSym);
+        int px, py;
+        Zobrist::instance().applyInverseSym(rootSym, move.x, move.y, px, py);
+        return PenteGame::Move(px, py);
+    }
+    return move;
 }
 
 void ParallelMCTS::injectDirichletNoise() {
@@ -1375,7 +1501,7 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     // addVirtualLoss() (called right after select() returns) raises this child's
     // effective-visits count for the next thread's call, same as ordinary PUCT
     // relies on to avoid every worker piling onto one path.
-    if (node == root_ && config_.minRootVisits > 0) {
+    if (node == root_ && config_.minRootVisits > 0 && rootCandidateMask_.empty()) {
         int floorIndex = -1;
         int32_t floorVisits = std::numeric_limits<int32_t>::max();
         for (int i = 0; i < cap; ++i) {
@@ -1394,10 +1520,17 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
     int bestIndex = -1;
     double bestValue = -std::numeric_limits<double>::infinity();
 
+    // Gumbel root selection (runGumbelRootSearch) restricts each Sequential
+    // Halving phase to a surviving candidate subset via rootCandidateMask_.
+    // Only ever set for node==root_; every other node sees an empty mask and
+    // this is a no-op.
+    bool maskActive = (node == root_ && !rootCandidateMask_.empty());
+
     // Score all children (visited and unvisited) in one pass.
     // Unvisited (null) children contribute exploitation=fpu so their exploration
     // term drives selection until they are visited — correct AlphaZero PUCT.
     for (int i = 0; i < cap; ++i) {
+        if (maskActive && !rootCandidateMask_[i]) continue;
         ThreadSafeNode *child = node->children[i].load(std::memory_order_acquire);
 
         int32_t effectiveVisits;
@@ -1424,7 +1557,12 @@ int ParallelMCTS::selectBestMoveIndex(ThreadSafeNode *node, const PenteGame &gam
         double exploration = explorationFactor * node->priors[i] * sqrtParentVisits / (1.0 + effectiveVisits);
         double score       = exploitation + exploration;
 
-        if (score > bestValue) {
+        // Under an active mask, "every scored candidate is -inf" must still
+        // yield a selectable index (one masked candidate is a known loss, say) --
+        // unlike the unmasked case, -1 here would wrongly read as "every child
+        // of this node is resolved" to select()'s caller, when really only the
+        // masked subset was ever considered.
+        if (score > bestValue || (maskActive && bestIndex < 0)) {
             bestValue = score;
             bestIndex = i;
         }

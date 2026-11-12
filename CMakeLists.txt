@@ -191,6 +191,7 @@ add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
     tests/ParallelMCTSTests.cpp
+    tests/GumbelMCTSTests.cpp
     tests/MCTSTests.cpp
     tests/AugmentTests.cpp
     tests/RenjuTests.cpp
