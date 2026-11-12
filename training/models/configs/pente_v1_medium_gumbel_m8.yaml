@@ -1,0 +1,51 @@
+# gumbel_m sweep winner (see pente_v1_medium_gumbel_m4's comment for the
+# full m16/m8/m4 comparison): at matched round-5 checkpoints, m8 beat m16
+# 16-4 head-to-head and closed much of the gap to PUCT (30% vs m16's 20%),
+# while m4 was worse on both counts (45% vs m16, 0% vs PUCT) -- m16's
+# fan-out was leaving each Sequential-Halving candidate too few of the 400
+# sims/move, but cutting further to m4 starts losing real exploration
+# coverage instead. m8 is the adopted value.
+#
+# Run dir was seeded with pente_v1_medium_gumbel/model_iter0018.pt (that
+# run's own bootstrap-final checkpoint, i.e. where ITS self-play actually
+# started) as both model_iter0018.pt and best_model.pt, so this run's first
+# 5 rounds started from the exact same weights as the m16/m4 sweep arms.
+# Now extending to 10 total self-play rounds (run with -n 5 to add the
+# remaining 5 on top of the first 5 already done) to match
+# pente_v1_medium_gumbel's original scope for a full, direct comparison.
+#
+# Same model/bootstrap/train sections as pente_v1_medium(_gumbel) --
+# unchanged, see those configs' comments.
+
+name: pente_v1_medium_gumbel_m8
+
+bootstrap: pente_base
+
+model:
+  channels: 64
+  res_blocks: 3
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2
+  val_fraction: 0.05
+  val_gate_tolerance: 1.02
+  min_grad_steps: 200
+
+bootstrap_training:
+  max_cycles: 20
+  patience: 3
+
+self_play:
+  games_per_round: 60
+  simulations: 400
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  rounds: 40
+  search_mode: gumbel
+  gumbel_m: 8
+  gumbel_c_scale: 1.0

@@ -1,0 +1,46 @@
+# Experiment: continuing the gumbel_m sweep (see pente_v1_medium_gumbel_m8's
+# comment) -- m8 beat m16 16-4 at matched round 5, but still lost to PUCT
+# 6-14. Trying m4 to see if pushing the fan-out down further keeps closing
+# the gap, or whether too few Gumbel-Top-k candidates starts hurting
+# exploration coverage instead.
+#
+# Run dir seeded the same way as pente_v1_medium_gumbel_m8: from
+# pente_v1_medium_gumbel/model_iter0018.pt (that run's own bootstrap-final
+# checkpoint), as both model_iter0018.pt and best_model.pt, plus a matching
+# metrics.jsonl bootstrap entry. gumbel_m is the only variable changed.
+#
+# Same model/bootstrap/train sections as pente_v1_medium(_gumbel) --
+# unchanged, see those configs' comments.
+
+name: pente_v1_medium_gumbel_m4
+
+bootstrap: pente_base
+
+model:
+  channels: 64
+  res_blocks: 3
+
+train:
+  batch_size: 256
+  learning_rate: 0.01
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  value_alpha: 0.2
+  val_fraction: 0.05
+  val_gate_tolerance: 1.02
+  min_grad_steps: 200
+
+bootstrap_training:
+  max_cycles: 20
+  patience: 3
+
+self_play:
+  games_per_round: 60
+  simulations: 400
+  dirichlet_alpha: 0.3
+  dirichlet_epsilon: 0.25
+  exploration_dropoff: 8
+  rounds: 5
+  search_mode: gumbel
+  gumbel_m: 4
+  gumbel_c_scale: 1.0
