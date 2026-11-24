@@ -20,7 +20,15 @@ struct SelfPlayExample {
                                // that start away (see the exploration-dropoff comment below)
 };
 
+// PUCT (ParallelMCTS, Dirichlet-noise exploration) is the only mode runGame
+// actually executes today. GUMBEL is accepted by SelfPlayConfig and checked
+// by validateSelfPlayConfig so the config/CLI surface and its hyperparameters
+// can be built and tested ahead of runGame switching over to GumbelSearch.
+enum class SelfPlaySearchMode { PUCT, GUMBEL };
+
 struct SelfPlayConfig {
+    SelfPlaySearchMode searchMode = SelfPlaySearchMode::PUCT;
+
     int   simulations        = 100;
     // Upper bound on a per-game randomized exploration cutoff (runGame draws
     // a fresh Uniform(0, explorationDropoff) for each game) — not a fixed
@@ -31,11 +39,25 @@ struct SelfPlayConfig {
     // phase via GameUtils::explorationConstantForMoveCount, matching the pente
     // app's tuning (a limited sim budget needs more exploitation-focused search
     // early/tactically, and can afford broader exploration once the game settles).
+    // PUCT only -- Gumbel-Top-k supplies its own exploration (see gumbelNoise
+    // below) and ignores these.
     float dirichletAlpha     = 0.3f;
     float dirichletEpsilon   = 0.25f;
     int   numWorkerThreads   = 4;
     int   numEvalThreads     = 1;
+
+    // Gumbel only (searchMode == GUMBEL) -- see GumbelTree::Config.
+    int   gumbelMaxConsideredActions = 16;
+    bool  gumbelNoise                = true;
 };
+
+// Throws std::invalid_argument, with a message naming the offending field,
+// if cfg has a value that can never be sane (e.g. zero simulations) or a
+// combination that doesn't make sense together (e.g. a Dirichlet knob moved
+// off its default under a search mode that doesn't read it, or GUMBEL mode
+// itself, which runGame can't execute yet). Call this right after building a
+// SelfPlayConfig from CLI flags, before starting any games.
+void validateSelfPlayConfig(const SelfPlayConfig &cfg);
 
 // Build the policy-target visit counts from raw root-child visits. If a proven
 // winning child exists it takes all the mass (at least 1 visit, even when the

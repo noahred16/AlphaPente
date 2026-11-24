@@ -7,6 +7,7 @@
 #include "SelfPlay.hpp"
 #include <cmath>
 #include <random>
+#include <stdexcept>
 #undef CHECK
 
 #include "doctest.h"
@@ -31,6 +32,52 @@ TEST_CASE("policyTargetVisits - proven win with zero recorded visits still gets 
     const std::vector<int> raw{0, 0, 0};
     const std::vector<int> expected{0, 0, 1};
     CHECK(policyTargetVisits(raw, 2) == expected);
+}
+
+TEST_CASE("validateSelfPlayConfig - default config is valid") {
+    CHECK_NOTHROW(validateSelfPlayConfig(SelfPlayConfig{}));
+}
+
+TEST_CASE("validateSelfPlayConfig - rejects nonsensical scalar values") {
+    SelfPlayConfig cfg;
+    cfg.simulations = 0;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.explorationDropoff = -1;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.numWorkerThreads = 0;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.numEvalThreads = -1;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.dirichletAlpha = 0.0f;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.dirichletEpsilon = 1.5f;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+}
+
+TEST_CASE("validateSelfPlayConfig - rejects Gumbel knobs set under PUCT mode") {
+    SelfPlayConfig cfg;
+    cfg.gumbelMaxConsideredActions = 32;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.gumbelNoise = false;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+}
+
+TEST_CASE("validateSelfPlayConfig - GUMBEL mode rejected as not yet implemented") {
+    SelfPlayConfig cfg;
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
 }
 
 TEST_CASE("SelfPlay - bootstrap examples form valid training targets") {

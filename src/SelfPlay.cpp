@@ -8,6 +8,43 @@
 #include "PenteGame.hpp"
 #include <algorithm>
 #include <cassert>
+#include <stdexcept>
+
+void validateSelfPlayConfig(const SelfPlayConfig &cfg) {
+    if (cfg.simulations <= 0)
+        throw std::invalid_argument("SelfPlayConfig: simulations must be > 0");
+    if (cfg.explorationDropoff < 0)
+        throw std::invalid_argument("SelfPlayConfig: explorationDropoff must be >= 0");
+    if (cfg.numWorkerThreads <= 0)
+        throw std::invalid_argument("SelfPlayConfig: numWorkerThreads must be > 0");
+    if (cfg.numEvalThreads < 0)
+        throw std::invalid_argument("SelfPlayConfig: numEvalThreads must be >= 0");
+
+    if (cfg.searchMode == SelfPlaySearchMode::GUMBEL) {
+        // Not a bug in the config itself -- runGame just doesn't know how to
+        // run this mode yet (see SelfPlayConfig's own comment on searchMode).
+        throw std::invalid_argument(
+            "SelfPlayConfig: GUMBEL search mode is not yet implemented in runGame()");
+    }
+
+    if (cfg.searchMode == SelfPlaySearchMode::PUCT) {
+        if (cfg.dirichletAlpha <= 0.0f)
+            throw std::invalid_argument("SelfPlayConfig: dirichletAlpha must be > 0");
+        if (cfg.dirichletEpsilon < 0.0f || cfg.dirichletEpsilon > 1.0f)
+            throw std::invalid_argument("SelfPlayConfig: dirichletEpsilon must be in [0, 1]");
+        if (cfg.gumbelMaxConsideredActions != 16 || cfg.gumbelNoise != true)
+            throw std::invalid_argument(
+                "SelfPlayConfig: Gumbel knobs (gumbelMaxConsideredActions/gumbelNoise) are set "
+                "but searchMode is PUCT, which ignores them -- they'd silently have no effect");
+    } else { // GUMBEL (unreachable above, but keep the symmetric check for when it lands)
+        if (cfg.gumbelMaxConsideredActions <= 0)
+            throw std::invalid_argument("SelfPlayConfig: gumbelMaxConsideredActions must be > 0");
+        if (cfg.dirichletAlpha != 0.3f || cfg.dirichletEpsilon != 0.25f)
+            throw std::invalid_argument(
+                "SelfPlayConfig: Dirichlet knobs (dirichletAlpha/dirichletEpsilon) are set but "
+                "searchMode is GUMBEL, which ignores them -- they'd silently have no effect");
+    }
+}
 
 std::vector<int> policyTargetVisits(std::vector<int> visits, int solvedWinIdx) {
     if (solvedWinIdx >= 0) {

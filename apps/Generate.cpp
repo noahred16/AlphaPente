@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <torch/torch.h>
 #include <unistd.h>
 
@@ -27,6 +28,8 @@ int main(int argc, char *argv[]) {
     float dirichletAlpha     = 0.3f;
     float dirichletEpsilon   = 0.25f;
     int   explorationDropoff = 8;
+    bool  useGumbel          = false;
+    int   gumbelMaxConsidered = 16;
 
     auto usage = [&](std::ostream &out) {
         out <<
@@ -57,6 +60,11 @@ int main(int argc, char *argv[]) {
             "      position before it from that game's stored examples (so no kept\n"
             "      position's z outcome depends on a not-yet-happened random choice)\n"
             "      (default: " << explorationDropoff << ")\n"
+            "  -G  Gumbel search mode (Sequential Halving) instead of PUCT -- not yet\n"
+            "      implemented in runGame(); exists so its config/validation can be\n"
+            "      exercised ahead of the engine switchover\n"
+            "  -m  Gumbel: root actions considered, ignored outside -G\n"
+            "      (default: " << gumbelMaxConsidered << ")\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -70,7 +78,7 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:Gm:h")) != -1) {
         if      (opt == 'g') gameFlag           = optarg;
         else if (opt == 'n') gamesPerIter       = std::stoi(optarg);
         else if (opt == 's') mctsSims           = std::stoi(optarg);
@@ -85,6 +93,8 @@ int main(int argc, char *argv[]) {
         else if (opt == 'a') dirichletAlpha     = std::stof(optarg);
         else if (opt == 'E') dirichletEpsilon   = std::stof(optarg);
         else if (opt == 'o') explorationDropoff = std::stoi(optarg);
+        else if (opt == 'G') useGumbel           = true;
+        else if (opt == 'm') gumbelMaxConsidered = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -128,10 +138,12 @@ int main(int argc, char *argv[]) {
               << "  dry run  : " << (dryRun ? "yes — nothing will be written to disk" : "no") << "\n\n";
 
     SelfPlayConfig spConfig;
+    spConfig.searchMode         = useGumbel ? SelfPlaySearchMode::GUMBEL : SelfPlaySearchMode::PUCT;
     spConfig.simulations        = mctsSims;
     spConfig.dirichletAlpha     = dirichletAlpha;
     spConfig.dirichletEpsilon   = dirichletEpsilon;
     spConfig.explorationDropoff = explorationDropoff;
+    spConfig.gumbelMaxConsideredActions = gumbelMaxConsidered;
     // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
     // threads feeding a single eval thread. Worker count is NOT scaled with
     // NUM_THREADS — many threads sharing one MCTS tree contend heavily near
@@ -139,6 +151,13 @@ int main(int argc, char *argv[]) {
     // out enough to spread the load; 6 is the tested, working ratio.
     spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 6;
     spConfig.numEvalThreads   = useHeuristic ? 0 : 1;
+
+    try {
+        validateSelfPlayConfig(spConfig);
+    } catch (const std::invalid_argument &e) {
+        std::cerr << "Invalid self-play config: " << e.what() << "\n";
+        return 1;
+    }
 
     std::unique_ptr<Evaluator> evalPtr = useHeuristic
         ? std::unique_ptr<Evaluator>(std::make_unique<HeuristicEvaluator>())
