@@ -1,5 +1,6 @@
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
+#include "GumbelMCTS.hpp"
 #include "MCTS.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
@@ -16,6 +17,8 @@ int main(int argc, char *argv[]) {
     int boardSize = 19;
     bool nonInteractive = false;
     bool useSerial = false;
+    bool useGumbel = false;
+    int gumbelMaxConsidered = 16;
     bool useUniform = false;
     bool jsonOutput = false;
     bool boardOnly = false;
@@ -29,10 +32,12 @@ int main(int argc, char *argv[]) {
     int channels = 128;
     int resBlocks = 8;
     int opt;
-    while ((opt = getopt(argc, argv, "no:suNp:b:B:jDM:hc:r:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "no:sgm:uNp:b:B:jDM:hc:r:v:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
+        else if (opt == 'g') useGumbel = true;
+        else if (opt == 'm') gumbelMaxConsidered = std::atoi(optarg);
         else if (opt == 'j') { jsonOutput = true; nonInteractive = true; }
         else if (opt == 'D') boardOnly = true;
         else if (opt == 'M') promisingMovesArg = optarg;
@@ -60,6 +65,8 @@ int main(int argc, char *argv[]) {
                 "  -r <n>          NN res blocks (default: 8) — must match the checkpoint\n"
                 "  -n              Non-interactive: run search once and exit\n"
                 "  -s              Use serial (single-threaded) MCTS\n"
+                "  -g              Use Gumbel MCTS (Sequential Halving) instead of PUCT\n"
+                "  -m <n>          Gumbel: root actions considered (default: 16)\n"
                 "  -u              Use uniform random evaluator\n"
                 "  -o <n>          Number of move offsets for heuristic (default: 16)\n"
                 "  -v <n>          Minimum visits forced onto every legal root move before\n"
@@ -169,8 +176,28 @@ int main(int argc, char *argv[]) {
     if (useSerial && minRootVisits > 0 && !quiet) {
         std::cout << "Note: -v (root visit floor) is ignored with -s (serial search)\n";
     }
+    if (useGumbel && (useSerial || minRootVisits > 0) && !quiet) {
+        std::cout << "Note: -s and -v don't apply to -g (Gumbel search uses Sequential Halving, not PUCT)\n";
+    }
 
-    if (useSerial) {
+    if (useGumbel) {
+        if (nonInteractive || jsonOutput) {
+            GumbelSearch::Config config;
+            config.tree.numSimulations = mctsIterations;
+            config.tree.maxConsideredActions = gumbelMaxConsidered;
+            config.tree.seed = 42;
+            config.numThreads = GameUtils::numThreadsFromEnv();
+            GumbelSearch mcts(config, evaluator);
+            if (jsonOutput)
+                GameUtils::runSearchAndReportJSON(mcts, game);
+            else
+                GameUtils::runSearchAndReport(mcts, game);
+        } else {
+            GameUtils::interactiveSearchLoopGumbel(evaluator, mctsIterations, gumbelMaxConsidered,
+                                                    GameUtils::numThreadsFromEnv(), /*gumbelNoise=*/true,
+                                                    /*seed=*/42, game);
+        }
+    } else if (useSerial) {
         MCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = explorationConstant;

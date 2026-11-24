@@ -1,8 +1,10 @@
 #include "GameUtils.hpp"
+#include "GumbelMCTS.hpp"
 #include "MCTS.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
 #include "Profiler.hpp"
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <cstdlib>
@@ -378,6 +380,158 @@ void GameUtils::runSearchAndReportJSON(MCTS &mcts, const PenteGame &game) {
     double cpuElapsed = static_cast<double>(cpuEnd - cpuStart) / CLOCKS_PER_SEC;
 
     std::cout << mcts.toJSON(wallElapsed, cpuElapsed) << std::endl;
+}
+
+void GameUtils::runSearchAndReport(GumbelSearch &mcts, const PenteGame &game) {
+    auto wallStart = std::chrono::high_resolution_clock::now();
+
+    GumbelTree::Result result = mcts.search(game);
+
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+
+    std::cout << std::fixed << std::setprecision(4);
+    std::cout << "Simulations: " << result.simulations << "  Wall time: " << std::setprecision(2)
+               << wallElapsed << "s  Root value: " << std::setprecision(4) << result.rootValue
+               << "  Solved: " << (result.solved ? "yes" : "no") << std::endl;
+
+    std::vector<int> order(result.moves.size());
+    for (size_t i = 0; i < order.size(); i++) order[i] = static_cast<int>(i);
+    std::sort(order.begin(), order.end(),
+              [&](int a, int b) { return result.visits[a] > result.visits[b]; });
+
+    std::cout << "Top moves:" << std::endl;
+    int topN = std::min<int>(5, static_cast<int>(order.size()));
+    for (int i = 0; i < topN; i++) {
+        int idx = order[i];
+        std::cout << "  " << displayMove(result.moves[idx].x, result.moves[idx].y)
+                   << "  visits=" << result.visits[idx]
+                   << "  policy=" << result.improvedPolicy[idx] << std::endl;
+    }
+
+    if (result.move.x != PenteGame::Move::INVALID)
+        std::cout << "MCTS selected move: " << displayMove(result.move.x, result.move.y) << std::endl;
+    else
+        std::cout << "MCTS selected move: (none)" << std::endl;
+    std::cout << '\a' << std::flush;
+}
+
+void GameUtils::runSearchAndReportJSON(GumbelSearch &mcts, const PenteGame &game) {
+    auto wallStart = std::chrono::high_resolution_clock::now();
+
+    GumbelTree::Result result = mcts.search(game);
+
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallElapsed = std::chrono::duration<double>(wallEnd - wallStart).count();
+
+    std::vector<int> order(result.moves.size());
+    for (size_t i = 0; i < order.size(); i++) order[i] = static_cast<int>(i);
+    std::sort(order.begin(), order.end(),
+              [&](int a, int b) { return result.visits[a] > result.visits[b]; });
+
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(4);
+    out << "{";
+    out << "\"simulations\":" << result.simulations << ",";
+    out << "\"wallTimeSec\":" << wallElapsed << ",";
+    out << "\"batchCalls\":" << mcts.lastBatchCalls() << ",";
+    out << "\"leavesEvaluated\":" << mcts.lastLeavesEvaluated() << ",";
+    out << "\"solved\":" << (result.solved ? "true" : "false") << ",";
+    out << "\"rootValue\":" << result.rootValue << ",";
+    if (result.move.x != PenteGame::Move::INVALID)
+        out << "\"bestMove\":\"" << displayMove(result.move.x, result.move.y) << "\",";
+    else
+        out << "\"bestMove\":null,";
+
+    out << "\"topMoves\":[";
+    int topN = std::min<int>(5, static_cast<int>(order.size()));
+    for (int i = 0; i < topN; i++) {
+        int idx = order[i];
+        out << (i == 0 ? "" : ",") << "{";
+        out << "\"move\":\"" << displayMove(result.moves[idx].x, result.moves[idx].y) << "\",";
+        out << "\"visits\":" << result.visits[idx] << ",";
+        out << "\"policy\":" << result.improvedPolicy[idx];
+        out << "}";
+    }
+    out << "]";
+    out << "}";
+    std::cout << out.str() << std::endl;
+}
+
+void GameUtils::interactiveSearchLoopGumbel(Evaluator *evaluator, int numSimulations, int maxConsideredActions,
+                                             int numThreads, bool gumbelNoise, uint32_t seed, PenteGame game) {
+    GumbelSearch::Config config;
+    config.tree.maxConsideredActions = maxConsideredActions;
+    config.tree.gumbelNoise = gumbelNoise;
+    config.tree.seed = seed;
+    config.numThreads = numThreads;
+
+    auto runOnce = [&](int sims) {
+        config.tree.numSimulations = sims;
+        GumbelSearch mcts(config, evaluator);
+        runSearchAndReport(mcts, game);
+    };
+
+    runOnce(numSimulations);
+    Profiler::instance().printReport();
+
+    int iterationsToAdd = numSimulations;
+    std::vector<PenteGame> gameHistory;
+
+    while (iterationsToAdd > 0) {
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+        std::cout << "Enter iterations (0 to quit, 1-9 for millions, enter for default "
+                  << formatWithCommas(iterationsToAdd) << "), move (e.g. K10), or -1 to undo: ";
+        std::cout << "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+
+        std::string input;
+        std::getline(std::cin, input);
+
+        if (input.empty()) {
+            // Default: run more iterations
+        } else if (std::isalpha(input[0])) {
+            auto [mx, my] = parseMove(input.c_str());
+            if (mx < 0 || my < 0 || !game.isLegalMove(mx, my)) {
+                std::cout << "Invalid or illegal move: " << input << std::endl;
+                continue;
+            }
+            gameHistory.push_back(game);
+            PenteGame::Move move(mx, my);
+            game.makeMove(mx, my);
+            // No persistent tree to carry over -- every GumbelSearch starts fresh.
+            std::cout << "Played " << input << "." << std::endl;
+            printGameState(game, move.x, move.y);
+        } else {
+            try {
+                int val = std::stoi(input);
+                if (val == -1) {
+                    if (!gameHistory.empty()) {
+                        game = gameHistory.back();
+                        gameHistory.pop_back();
+                        std::cout << "Undid last move." << std::endl;
+                        PenteGame::Move lastMove = game.getLastMove();
+                        printGameState(game, lastMove.x, lastMove.y);
+                    } else {
+                        std::cout << "Nothing to undo." << std::endl;
+                    }
+                    continue;
+                } else if (val >= 1 && val <= 9) {
+                    iterationsToAdd = val * 1000000;
+                } else {
+                    iterationsToAdd = val;
+                }
+            } catch (const std::invalid_argument &) {
+                std::cout << "Invalid input." << std::endl;
+                continue;
+            }
+        }
+
+        if (iterationsToAdd <= 0)
+            break;
+
+        std::cout << "RUNNING SEARCH with " << formatWithCommas(iterationsToAdd) << " iterations..." << std::endl;
+        runOnce(iterationsToAdd);
+    }
 }
 
 template <typename MCTSType>

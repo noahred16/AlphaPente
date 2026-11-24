@@ -12,6 +12,8 @@
 class PenteGame;
 class MCTS;
 class ParallelMCTS;
+class GumbelSearch;
+class Evaluator;
 
 class GameUtils {
   public:
@@ -39,16 +41,26 @@ class GameUtils {
     // Search utilities - overloaded per engine type
     static void runSearchAndReport(MCTS &mcts, const PenteGame &game);
     static void runSearchAndReport(ParallelMCTS &mcts, const PenteGame &game);
+    static void runSearchAndReport(GumbelSearch &mcts, const PenteGame &game);
 
     // Same as runSearchAndReport, but prints a single JSON object (mcts.toJSON())
     // to stdout instead of the human-readable stats/best-moves text. For scripted
     // consumption, e.g. running the search N times and aggregating across runs.
     static void runSearchAndReportJSON(MCTS &mcts, const PenteGame &game);
     static void runSearchAndReportJSON(ParallelMCTS &mcts, const PenteGame &game);
+    static void runSearchAndReportJSON(GumbelSearch &mcts, const PenteGame &game);
 
     // Interactive search loop - shared template; explicit instantiations for MCTS and ParallelMCTS
     template <typename MCTSType>
     static void interactiveSearchLoop(MCTSType &mcts, PenteGame game);
+
+    // Interactive loop for GumbelSearch. Unlike MCTS/ParallelMCTS, a GumbelSearch
+    // builds a fresh tree per move (no persistent subtree to reuse or undo) and
+    // has no setConfig(), so this takes the pieces needed to construct a new
+    // GumbelSearch with an updated simulation budget each time the user asks for
+    // more, rather than a template over a stateful search object.
+    static void interactiveSearchLoopGumbel(Evaluator *evaluator, int numSimulations, int maxConsideredActions,
+                                             int numThreads, bool gumbelNoise, uint32_t seed, PenteGame game);
 
     // Read ARENA_SIZE_GB from env var or .env file; falls back to defaultGb if unset or invalid.
     static size_t arenaSizeFromEnv(size_t defaultGb = 8);

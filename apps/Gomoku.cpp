@@ -1,5 +1,6 @@
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
+#include "GumbelMCTS.hpp"
 #include "MCTS.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
@@ -15,11 +16,15 @@ int main(int argc, char *argv[]) {
     int numOffsets = 16;
     bool nonInteractive = false;
     bool useSerial = false;
+    bool useGumbel = false;
+    int gumbelMaxConsidered = 16;
     int opt;
-    while ((opt = getopt(argc, argv, "no:s")) != -1) {
+    while ((opt = getopt(argc, argv, "no:sgm:")) != -1) {
         if (opt == 'o') numOffsets = std::atoi(optarg);
         else if (opt == 'n') nonInteractive = true;
         else if (opt == 's') useSerial = true;
+        else if (opt == 'g') useGumbel = true;
+        else if (opt == 'm') gumbelMaxConsidered = std::atoi(optarg);
     }
 
     const char *hardCodedGame = "1. K10 L9 2. G10 L7 3. M10 L8 4. L10 J10";
@@ -56,7 +61,21 @@ int main(int argc, char *argv[]) {
 
     HeuristicEvaluator heuristicEvaluator;
 
-    if (useSerial) {
+    if (useGumbel) {
+        if (nonInteractive) {
+            GumbelSearch::Config config;
+            config.tree.numSimulations = mctsIterations;
+            config.tree.maxConsideredActions = gumbelMaxConsidered;
+            config.tree.seed = 42;
+            config.numThreads = GameUtils::numThreadsFromEnv();
+            GumbelSearch mcts(config, &heuristicEvaluator);
+            GameUtils::runSearchAndReport(mcts, game);
+        } else {
+            GameUtils::interactiveSearchLoopGumbel(&heuristicEvaluator, mctsIterations, gumbelMaxConsidered,
+                                                    GameUtils::numThreadsFromEnv(), /*gumbelNoise=*/true,
+                                                    /*seed=*/42, game);
+        }
+    } else if (useSerial) {
         MCTS::Config config;
         config.maxIterations = mctsIterations;
         config.explorationConstant = 1.414;
