@@ -114,6 +114,7 @@ set(PENTE_CORE_SOURCES
     src/PenteGame.cpp
     src/MCTS.cpp
     src/ParallelMCTS.cpp
+    src/GumbelMCTS.cpp
     src/GameUtils.cpp
     src/Evaluator.cpp
     src/Zobrist.cpp
@@ -191,6 +192,7 @@ add_executable(unit_tests
     tests/BitBoardTests.cpp
     tests/PenteGameTests.cpp
     tests/ParallelMCTSTests.cpp
+    tests/GumbelMCTSTests.cpp
     tests/MCTSTests.cpp
     tests/AugmentTests.cpp
     tests/RenjuTests.cpp
