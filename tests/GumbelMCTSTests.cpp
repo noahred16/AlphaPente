@@ -116,6 +116,41 @@ TEST_CASE("Gumbel: opening search returns a legal move and a normalized improved
     CHECK(std::any_of(r.moves.begin(), r.moves.end(), [&](auto &m) { return m.x == r.move.x && m.y == r.move.y; }));
     CHECK(r.simulations == 32);
     CHECK(std::accumulate(r.visits.begin(), r.visits.end(), 0) == 32);
+
+    // prior is the raw evaluator policy (a proper distribution); q is only
+    // meaningful -- and only ever nonzero here, since evaluateValue() never
+    // returns exactly 0 for this evaluator -- where a child was actually
+    // visited.
+    CHECK(r.prior.size() == r.moves.size());
+    CHECK(std::accumulate(r.prior.begin(), r.prior.end(), 0.0f) == doctest::Approx(1.0f));
+    CHECK(r.q.size() == r.moves.size());
+    for (size_t i = 0; i < r.q.size(); ++i) {
+        if (r.visits[i] == 0) CHECK(r.q[i] == 0.0f);
+        CHECK(r.q[i] >= -1.0f);
+        CHECK(r.q[i] <= 1.0f);
+    }
+}
+
+TEST_CASE("Gumbel: improvedValue is a bounded, search-refined estimate") {
+    PenteGame game = midgamePosition();
+    HeuristicEvaluator eval;
+    GumbelSearch search(cfg(200, 16), &eval);
+    auto r = search.search(game);
+
+    CHECK(r.improvedValue >= -1.0f);
+    CHECK(r.improvedValue <= 1.0f);
+    // It's a blend of rootValue and the children's backed-up Q, not just a copy.
+    CHECK(r.improvedValue != r.rootValue);
+}
+
+TEST_CASE("Gumbel: improvedValue is 1.0 on a proven forced win") {
+    PenteGame game = openFourPosition();
+    HeuristicEvaluator eval;
+    GumbelSearch search(cfg(128, 64), &eval);
+    auto r = search.search(game);
+
+    REQUIRE(r.solved);
+    CHECK(r.improvedValue == 1.0f);
 }
 
 TEST_CASE("Gumbel: only maxConsideredActions root actions are ever visited") {

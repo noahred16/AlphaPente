@@ -34,8 +34,11 @@ std::vector<int> GumbelTree::consideredVisitSequence(int maxConsideredActions, i
 }
 
 void GumbelTree::completedQValues(double rawValue, const float *logits, const double *q, const int *visits, int k,
-                                  float maxVisitInit, float valueScale, float *out) {
-    if (k <= 0) return;
+                                  float maxVisitInit, float valueScale, float *out, double *mixedValueOut) {
+    if (k <= 0) {
+        if (mixedValueOut) *mixedValueOut = rawValue;
+        return;
+    }
 
     // softmax prior, floored at the smallest normal float so visited zero-prior
     // actions can't produce NaN (mctx: jnp.finfo.tiny)
@@ -65,6 +68,7 @@ void GumbelTree::completedQValues(double rawValue, const float *logits, const do
             if (visits[i] > 0) weightedQ += prior[i] * q[i] / sumProbs;
     }
     const double mixed = (rawValue + static_cast<double>(sumVisits) * weightedQ) / (static_cast<double>(sumVisits) + 1.0);
+    if (mixedValueOut) *mixedValueOut = mixed;
 
     // complete, rescale to [0,1], scale by visit count (mctx qtransform_completed_by_mix_value)
     double lo = std::numeric_limits<double>::infinity(), hi = -lo;
@@ -279,7 +283,7 @@ double GumbelTree::childQ(int child) const {
     return c.valueSum / c.visits;
 }
 
-void GumbelTree::nodeCompletedQ(int node, std::vector<float> &out) const {
+void GumbelTree::nodeCompletedQ(int node, std::vector<float> &out, double *mixedValueOut) const {
     const Node &nd = nodes_[node];
     const int k = nd.count;
     qBuf_.assign(k, 0.0);
@@ -294,7 +298,7 @@ void GumbelTree::nodeCompletedQ(int node, std::vector<float> &out) const {
     out.resize(k);
     // nd.value is from the mover-into-node's perspective; the mixed value needs the mover-at-node's.
     completedQValues(-static_cast<double>(nd.value), &logits_[nd.begin], qBuf_.data(), visitBuf_.data(), k,
-                     config_.maxVisitInit, config_.valueScale, out.data());
+                     config_.maxVisitInit, config_.valueScale, out.data(), mixedValueOut);
 }
 
 int GumbelTree::argmaxConsidered(int considered) const {
@@ -391,6 +395,29 @@ GumbelTree::Result GumbelTree::result() const {
     res.rootValue = -r.value;
     res.simulations = simsDone_;
 
+    const float *logits = &logits_[r.begin];
+
+    // Root prior (softmax of the raw logits) and each child's own backed-up Q,
+    // independent of win/solved status -- both describe what the evaluator and
+    // the search itself observed, not the final move-selection outcome.
+    {
+        float maxLogit = logits[0];
+        for (int i = 1; i < k; ++i) maxLogit = std::max(maxLogit, logits[i]);
+        double z = 0.0;
+        std::vector<double> ex(k);
+        for (int i = 0; i < k; ++i) {
+            ex[i] = std::exp(static_cast<double>(logits[i] - maxLogit));
+            z += ex[i];
+        }
+        res.prior.resize(k);
+        for (int i = 0; i < k; ++i) res.prior[i] = static_cast<float>(ex[i] / z);
+    }
+    res.q.assign(k, 0.0f);
+    for (int i = 0; i < k; ++i) {
+        const int ch = child_[r.begin + i];
+        if (ch >= 0 && nodes_[ch].visits > 0) res.q[i] = static_cast<float>(childQ(ch));
+    }
+
     const int win = rootWinningChild();
     if (win >= 0) {
         // Proven forced win: play it and train on a one-hot target.
@@ -398,12 +425,14 @@ GumbelTree::Result GumbelTree::result() const {
         res.improvedPolicy.assign(k, 0.0f);
         res.improvedPolicy[win] = 1.0f;
         res.move = res.moves[win];
+        res.improvedValue = 1.0f;
         return res;
     }
     res.solved = r.solved != Status::UNSOLVED;
 
-    nodeCompletedQ(0, compBuf_);
-    const float *logits = &logits_[r.begin];
+    double mixedValue = 0.0;
+    nodeCompletedQ(0, compBuf_, &mixedValue);
+    res.improvedValue = static_cast<float>(mixedValue);
     float zmax = -std::numeric_limits<float>::infinity();
     for (int i = 0; i < k; ++i) zmax = std::max(zmax, logits[i] + compBuf_[i]);
     double z = 0.0;

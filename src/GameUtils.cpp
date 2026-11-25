@@ -392,7 +392,8 @@ void GameUtils::runSearchAndReport(GumbelSearch &mcts, const PenteGame &game) {
 
     std::cout << std::fixed << std::setprecision(4);
     std::cout << "Simulations: " << result.simulations << "  Wall time: " << std::setprecision(2)
-               << wallElapsed << "s  Root value: " << std::setprecision(4) << result.rootValue
+               << wallElapsed << "s  Value: " << std::setprecision(4) << result.improvedValue
+               << " (raw " << result.rootValue << ")"
                << "  Solved: " << (result.solved ? "yes" : "no") << std::endl;
 
     std::vector<int> order(result.moves.size());
@@ -400,13 +401,28 @@ void GameUtils::runSearchAndReport(GumbelSearch &mcts, const PenteGame &game) {
     std::sort(order.begin(), order.end(),
               [&](int a, int b) { return result.visits[a] > result.visits[b]; });
 
-    std::cout << "Top moves:" << std::endl;
+    // Q is each child's own backed-up value, from the perspective of whoever's
+    // actually on move here -- label it with their color rather than a fixed
+    // "white"/"black" the way a hand-worked example would.
+    std::string mover = game.getCurrentPlayer() == PenteGame::BLACK ? "Black" : "White";
+    std::cout << "  " << std::left << std::setw(7) << "Move" << std::right << std::setw(9) << "Prior"
+               << std::setw(13) << "Considered?" << std::setw(9) << "Visits" << std::setw(16) << ("Q (" + mover + ")")
+               << std::setw(9) << "\xcf\x80\xe2\x80\xb2" << std::endl; // UTF-8 for "π′"
+    auto fmt4 = [](float v) {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(4) << v;
+        return ss.str();
+    };
     int topN = std::min<int>(5, static_cast<int>(order.size()));
     for (int i = 0; i < topN; i++) {
         int idx = order[i];
-        std::cout << "  " << displayMove(result.moves[idx].x, result.moves[idx].y)
-                   << "  visits=" << result.visits[idx]
-                   << "  policy=" << result.improvedPolicy[idx] << std::endl;
+        bool considered = result.visits[idx] > 0;
+        std::cout << "  " << std::left << std::setw(7) << displayMove(result.moves[idx].x, result.moves[idx].y)
+                   << std::right << std::setw(9) << result.prior[idx]
+                   << std::setw(13) << (considered ? "yes" : "no")
+                   << std::setw(9) << result.visits[idx]
+                   << std::setw(16) << (considered ? fmt4(result.q[idx]) : std::string("(mixed value)"))
+                   << std::setw(9) << result.improvedPolicy[idx] << std::endl;
     }
 
     if (result.move.x != PenteGame::Move::INVALID)
@@ -437,7 +453,8 @@ void GameUtils::runSearchAndReportJSON(GumbelSearch &mcts, const PenteGame &game
     out << "\"batchCalls\":" << mcts.lastBatchCalls() << ",";
     out << "\"leavesEvaluated\":" << mcts.lastLeavesEvaluated() << ",";
     out << "\"solved\":" << (result.solved ? "true" : "false") << ",";
-    out << "\"rootValue\":" << result.rootValue << ",";
+    out << "\"value\":" << result.improvedValue << ",";
+    out << "\"rawRootValue\":" << result.rootValue << ",";
     if (result.move.x != PenteGame::Move::INVALID)
         out << "\"bestMove\":\"" << displayMove(result.move.x, result.move.y) << "\",";
     else
@@ -447,9 +464,16 @@ void GameUtils::runSearchAndReportJSON(GumbelSearch &mcts, const PenteGame &game
     int topN = std::min<int>(5, static_cast<int>(order.size()));
     for (int i = 0; i < topN; i++) {
         int idx = order[i];
+        bool considered = result.visits[idx] > 0;
         out << (i == 0 ? "" : ",") << "{";
         out << "\"move\":\"" << displayMove(result.moves[idx].x, result.moves[idx].y) << "\",";
+        out << "\"prior\":" << result.prior[idx] << ",";
+        out << "\"considered\":" << (considered ? "true" : "false") << ",";
         out << "\"visits\":" << result.visits[idx] << ",";
+        if (considered)
+            out << "\"q\":" << result.q[idx] << ",";
+        else
+            out << "\"q\":null,";
         out << "\"policy\":" << result.improvedPolicy[idx];
         out << "}";
     }

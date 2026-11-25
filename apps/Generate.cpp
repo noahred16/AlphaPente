@@ -30,6 +30,7 @@ int main(int argc, char *argv[]) {
     int   explorationDropoff = 8;
     bool  useGumbel          = false;
     int   gumbelMaxConsidered = 16;
+    int   gumbelBatchGames    = 64;
 
     auto usage = [&](std::ostream &out) {
         out <<
@@ -60,11 +61,15 @@ int main(int argc, char *argv[]) {
             "      position before it from that game's stored examples (so no kept\n"
             "      position's z outcome depends on a not-yet-happened random choice)\n"
             "      (default: " << explorationDropoff << ")\n"
-            "  -G  Gumbel search mode (Sequential Halving) instead of PUCT -- not yet\n"
-            "      implemented in runGame(); exists so its config/validation can be\n"
-            "      exercised ahead of the engine switchover\n"
+            "  -G  Gumbel search mode (Sequential Halving) instead of PUCT. Runs through\n"
+            "      a dedicated batched driver (-B games in flight at once, continuously\n"
+            "      refilled) rather than one game at a time -- that's what gives Gumbel\n"
+            "      self-play a usable NN batch size, since (unlike PUCT) one Gumbel tree\n"
+            "      alone has no internal parallelism to get it from.\n"
             "  -m  Gumbel: root actions considered, ignored outside -G\n"
             "      (default: " << gumbelMaxConsidered << ")\n"
+            "  -B  Gumbel: games batched together per search step, ignored outside -G\n"
+            "      (default: " << gumbelBatchGames << ")\n"
             "\n"
             "Examples:\n"
             "  # as called by train_loop.sh during self-play training\n"
@@ -78,7 +83,7 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:Gm:h")) != -1) {
+    while ((opt = getopt(argc, argv, "g:n:s:e:bt:xjd:c:r:a:E:o:Gm:B:h")) != -1) {
         if      (opt == 'g') gameFlag           = optarg;
         else if (opt == 'n') gamesPerIter       = std::stoi(optarg);
         else if (opt == 's') mctsSims           = std::stoi(optarg);
@@ -95,6 +100,7 @@ int main(int argc, char *argv[]) {
         else if (opt == 'o') explorationDropoff = std::stoi(optarg);
         else if (opt == 'G') useGumbel           = true;
         else if (opt == 'm') gumbelMaxConsidered = std::stoi(optarg);
+        else if (opt == 'B') gumbelBatchGames    = std::stoi(optarg);
         else if (opt == 'h') { usage(std::cout); return 0; }
         else                 { usage(std::cerr); return 1; }
     }
@@ -144,13 +150,22 @@ int main(int argc, char *argv[]) {
     spConfig.dirichletEpsilon   = dirichletEpsilon;
     spConfig.explorationDropoff = explorationDropoff;
     spConfig.gumbelMaxConsideredActions = gumbelMaxConsidered;
-    // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
-    // threads feeding a single eval thread. Worker count is NOT scaled with
-    // NUM_THREADS — many threads sharing one MCTS tree contend heavily near
-    // the root (shared atomics, slab allocator mutex) before it has branched
-    // out enough to spread the load; 6 is the tested, working ratio.
-    spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 6;
-    spConfig.numEvalThreads   = useHeuristic ? 0 : 1;
+    spConfig.gumbelBatchGames           = gumbelBatchGames;
+    if (useGumbel) {
+        // GumbelSearch parallelizes across the games in flight, not within any
+        // one of them (GumbelTree itself is single-threaded) -- so, unlike
+        // PUCT below, there's no shared-tree contention reason to cap this.
+        spConfig.numWorkerThreads = GameUtils::numThreadsFromEnv();
+        spConfig.numEvalThreads   = 0; // unused by GumbelSearch
+    } else {
+        // Mirror Benchmark.cpp's arena config exactly: a handful of tree-traversal
+        // threads feeding a single eval thread. Worker count is NOT scaled with
+        // NUM_THREADS — many threads sharing one MCTS tree contend heavily near
+        // the root (shared atomics, slab allocator mutex) before it has branched
+        // out enough to spread the load; 6 is the tested, working ratio.
+        spConfig.numWorkerThreads = useHeuristic ? GameUtils::numThreadsFromEnv() : 6;
+        spConfig.numEvalThreads   = useHeuristic ? 0 : 1;
+    }
 
     try {
         validateSelfPlayConfig(spConfig);
@@ -171,47 +186,92 @@ int main(int argc, char *argv[]) {
     int lastGameMoves = 0;
     double entropySum = 0.0;
 
-    std::cout << "── Self-play (" << gamesPerIter << " games) ──────────────────────────\n";
+    std::cout << "── Self-play (" << gamesPerIter << " games"
+              << (useGumbel ? ", " + std::to_string(spConfig.gumbelBatchGames) + " in flight" : "")
+              << ") ──────────────────────────\n";
 
     auto t0 = std::chrono::steady_clock::now();
 
-    for (int g = 0; g < gamesPerIter; g++) {
-        auto tGame = std::chrono::steady_clock::now();
-        auto examples = runGame(eval, gameConfig, spConfig, rng);
+    if (useGumbel) {
+        // One completion callback drives tally + accumulation + progress print,
+        // the same bookkeeping the PUCT loop below does per game -- just called
+        // from runGamesGumbel() as each game finishes instead of after each
+        // runGame() call, since many games are now in flight at once.
+        auto onGameCompleted = [&](int /*completionIndex*/, const std::vector<SelfPlayExample> &gameExamples) {
+            std::vector<SelfPlayExample> examples = gameExamples;
+            lastGameMoves = (int)examples.size();
+            if (tailMoves > 0 && (int)examples.size() > tailMoves)
+                examples.erase(examples.begin(), examples.end() - tailMoves);
 
-        lastGameMoves = (int)examples.size();
-        if (tailMoves > 0 && (int)examples.size() > tailMoves)
-            examples.erase(examples.begin(), examples.end() - tailMoves);
+            if (!examples.empty()) {
+                float v0 = examples[0].outcome;
+                if      (v0 >  0.5f) bWins++;
+                else if (v0 < -0.5f) wWins++;
+                else                 draws++;
+            }
 
-        if (!examples.empty()) {
-            float v0 = examples[0].outcome;
-            if      (v0 >  0.5f) bWins++;
-            else if (v0 < -0.5f) wWins++;
-            else                 draws++;
-        }
+            for (auto &ex : examples) {
+                allPlanes.push_back(ex.planes);
+                allCaptures.push_back(ex.captures);
+                allPolicies.push_back(ex.policy);
+                allValues.push_back(torch::tensor({ex.outcome, ex.rootValue}));
+                allMoveIndices.push_back((float)ex.moveIndex);
+                entropySum += ex.policyEntropy;
+                totalPositions++;
+            }
 
-        for (auto &ex : examples) {
-            allPlanes.push_back(ex.planes);
-            allCaptures.push_back(ex.captures);
-            allPolicies.push_back(ex.policy);
-            allValues.push_back(torch::tensor({ex.outcome, ex.rootValue}));
-            allMoveIndices.push_back((float)ex.moveIndex);
-            entropySum += ex.policyEntropy;
-            totalPositions++;
-        }
+            int completed = bWins + wWins + draws;
+            if (completed % 10 == 0 || completed == gamesPerIter) {
+                double elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t0).count();
+                double avgSecs = elapsed / completed;
+                std::cout << "  " << std::setw(3) << completed << "/" << gamesPerIter
+                          << "  pos: "  << std::setw(6) << totalPositions
+                          << "  B/W/D: " << bWins << "/" << wWins << "/" << draws
+                          << "  moves: " << std::setw(3) << lastGameMoves
+                          << "  avg: "  << std::fixed << std::setprecision(1) << avgSecs << "s/game\n";
+            }
+        };
+        runGamesGumbel(eval, gameConfig, spConfig, gamesPerIter, onGameCompleted);
+    } else {
+        for (int g = 0; g < gamesPerIter; g++) {
+            auto tGame = std::chrono::steady_clock::now();
+            auto examples = runGame(eval, gameConfig, spConfig, rng);
 
-        if ((g + 1) % 10 == 0 || g + 1 == gamesPerIter) {
-            double gameSecs = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - tGame).count();
-            double elapsed  = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - t0).count();
-            double avgSecs  = elapsed / (g + 1);
-            std::cout << "  " << std::setw(3) << (g + 1) << "/" << gamesPerIter
-                      << "  pos: "  << std::setw(6) << totalPositions
-                      << "  B/W/D: " << bWins << "/" << wWins << "/" << draws
-                      << "  moves: " << std::setw(3) << lastGameMoves
-                      << "  game: " << std::fixed << std::setprecision(1) << gameSecs << "s"
-                      << "  avg: "  << std::setprecision(1) << avgSecs << "s\n";
+            lastGameMoves = (int)examples.size();
+            if (tailMoves > 0 && (int)examples.size() > tailMoves)
+                examples.erase(examples.begin(), examples.end() - tailMoves);
+
+            if (!examples.empty()) {
+                float v0 = examples[0].outcome;
+                if      (v0 >  0.5f) bWins++;
+                else if (v0 < -0.5f) wWins++;
+                else                 draws++;
+            }
+
+            for (auto &ex : examples) {
+                allPlanes.push_back(ex.planes);
+                allCaptures.push_back(ex.captures);
+                allPolicies.push_back(ex.policy);
+                allValues.push_back(torch::tensor({ex.outcome, ex.rootValue}));
+                allMoveIndices.push_back((float)ex.moveIndex);
+                entropySum += ex.policyEntropy;
+                totalPositions++;
+            }
+
+            if ((g + 1) % 10 == 0 || g + 1 == gamesPerIter) {
+                double gameSecs = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - tGame).count();
+                double elapsed  = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t0).count();
+                double avgSecs  = elapsed / (g + 1);
+                std::cout << "  " << std::setw(3) << (g + 1) << "/" << gamesPerIter
+                          << "  pos: "  << std::setw(6) << totalPositions
+                          << "  B/W/D: " << bWins << "/" << wWins << "/" << draws
+                          << "  moves: " << std::setw(3) << lastGameMoves
+                          << "  game: " << std::fixed << std::setprecision(1) << gameSecs << "s"
+                          << "  avg: "  << std::setprecision(1) << avgSecs << "s\n";
+            }
         }
     }
 

@@ -72,11 +72,44 @@ TEST_CASE("validateSelfPlayConfig - rejects Gumbel knobs set under PUCT mode") {
     cfg = SelfPlayConfig{};
     cfg.gumbelNoise = false;
     CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.gumbelBatchGames = 32;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
 }
 
-TEST_CASE("validateSelfPlayConfig - GUMBEL mode rejected as not yet implemented") {
+TEST_CASE("validateSelfPlayConfig - GUMBEL mode with default knobs is valid") {
     SelfPlayConfig cfg;
     cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    CHECK_NOTHROW(validateSelfPlayConfig(cfg));
+}
+
+TEST_CASE("validateSelfPlayConfig - rejects nonsensical Gumbel scalar values") {
+    SelfPlayConfig cfg;
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    cfg.gumbelMaxConsideredActions = 0;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    cfg.gumbelBatchGames = 0;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+}
+
+TEST_CASE("validateSelfPlayConfig - rejects PUCT knobs set under GUMBEL mode") {
+    SelfPlayConfig cfg;
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    cfg.dirichletAlpha = 0.5f;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    cfg.dirichletEpsilon = 0.1f;
+    CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
+
+    cfg = SelfPlayConfig{};
+    cfg.searchMode = SelfPlaySearchMode::GUMBEL;
+    cfg.explorationDropoff = 3;
     CHECK_THROWS_AS(validateSelfPlayConfig(cfg), std::invalid_argument);
 }
 
@@ -109,6 +142,47 @@ TEST_CASE("SelfPlay - bootstrap examples form valid training targets") {
         CHECK((ex.outcome == 1.0f || ex.outcome == 0.0f || ex.outcome == -1.0f));
         CHECK(ex.rootValue >= -1.0f);
         CHECK(ex.rootValue <= 1.0f);
+    }
+}
+
+TEST_CASE("runGamesGumbel - batched self-play examples form valid training targets") {
+    // Same data-quality checks as the PUCT bootstrap test above, but through
+    // the batched Gumbel driver, with gumbelBatchGames < numGames so slot
+    // refill (a finished game's slot immediately starting a new one) actually
+    // exercises itself rather than every game running in its own slot.
+    HeuristicEvaluator eval;
+    SelfPlayConfig cfg;
+    cfg.searchMode              = SelfPlaySearchMode::GUMBEL;
+    cfg.simulations              = 64;
+    cfg.gumbelMaxConsideredActions = 8;
+    cfg.gumbelBatchGames         = 3;
+    cfg.numWorkerThreads         = 2;
+
+    int completedCount = 0;
+    auto games = runGamesGumbel(eval, PenteGame::Config::pente(), cfg, /*numGames=*/7,
+                                 [&](int idx, const std::vector<SelfPlayExample> &) {
+                                     CHECK(idx == completedCount);
+                                     ++completedCount;
+                                 });
+
+    REQUIRE(games.size() == 7);
+    CHECK(completedCount == 7);
+
+    constexpr int B = PenteGame::BOARD_SIZE;
+    for (const auto &examples : games) {
+        REQUIRE(!examples.empty());
+        for (const auto &ex : examples) {
+            float psum = ex.policy.sum().item<float>();
+            CHECK(std::abs(psum - 1.0f) < 1e-3f);
+            CHECK(ex.policy.min().item<float>() >= 0.0f);
+
+            auto emptyPlane = ex.planes[2].reshape({B * B});
+            CHECK((((ex.policy > 0.0f) & (emptyPlane < 0.5f))).sum().item<int64_t>() == 0);
+
+            CHECK((ex.outcome == 1.0f || ex.outcome == 0.0f || ex.outcome == -1.0f));
+            CHECK(ex.rootValue >= -1.0f);
+            CHECK(ex.rootValue <= 1.0f);
+        }
     }
 }
 

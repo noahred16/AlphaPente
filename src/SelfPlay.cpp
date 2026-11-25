@@ -3,6 +3,7 @@
 #include "SelfPlay.hpp"
 #include "Evaluator.hpp"
 #include "GameUtils.hpp"
+#include "GumbelMCTS.hpp"
 #include "NNModel.hpp"
 #include "ParallelMCTS.hpp"
 #include "PenteGame.hpp"
@@ -13,36 +14,31 @@
 void validateSelfPlayConfig(const SelfPlayConfig &cfg) {
     if (cfg.simulations <= 0)
         throw std::invalid_argument("SelfPlayConfig: simulations must be > 0");
-    if (cfg.explorationDropoff < 0)
-        throw std::invalid_argument("SelfPlayConfig: explorationDropoff must be >= 0");
     if (cfg.numWorkerThreads <= 0)
         throw std::invalid_argument("SelfPlayConfig: numWorkerThreads must be > 0");
     if (cfg.numEvalThreads < 0)
         throw std::invalid_argument("SelfPlayConfig: numEvalThreads must be >= 0");
 
-    if (cfg.searchMode == SelfPlaySearchMode::GUMBEL) {
-        // Not a bug in the config itself -- runGame just doesn't know how to
-        // run this mode yet (see SelfPlayConfig's own comment on searchMode).
-        throw std::invalid_argument(
-            "SelfPlayConfig: GUMBEL search mode is not yet implemented in runGame()");
-    }
-
     if (cfg.searchMode == SelfPlaySearchMode::PUCT) {
+        if (cfg.explorationDropoff < 0)
+            throw std::invalid_argument("SelfPlayConfig: explorationDropoff must be >= 0");
         if (cfg.dirichletAlpha <= 0.0f)
             throw std::invalid_argument("SelfPlayConfig: dirichletAlpha must be > 0");
         if (cfg.dirichletEpsilon < 0.0f || cfg.dirichletEpsilon > 1.0f)
             throw std::invalid_argument("SelfPlayConfig: dirichletEpsilon must be in [0, 1]");
-        if (cfg.gumbelMaxConsideredActions != 16 || cfg.gumbelNoise != true)
+        if (cfg.gumbelMaxConsideredActions != 16 || cfg.gumbelNoise != true || cfg.gumbelBatchGames != 64)
             throw std::invalid_argument(
-                "SelfPlayConfig: Gumbel knobs (gumbelMaxConsideredActions/gumbelNoise) are set "
-                "but searchMode is PUCT, which ignores them -- they'd silently have no effect");
-    } else { // GUMBEL (unreachable above, but keep the symmetric check for when it lands)
+                "SelfPlayConfig: Gumbel knobs (gumbelMaxConsideredActions/gumbelNoise/gumbelBatchGames) "
+                "are set but searchMode is PUCT, which ignores them -- they'd silently have no effect");
+    } else { // GUMBEL
         if (cfg.gumbelMaxConsideredActions <= 0)
             throw std::invalid_argument("SelfPlayConfig: gumbelMaxConsideredActions must be > 0");
-        if (cfg.dirichletAlpha != 0.3f || cfg.dirichletEpsilon != 0.25f)
+        if (cfg.gumbelBatchGames <= 0)
+            throw std::invalid_argument("SelfPlayConfig: gumbelBatchGames must be > 0");
+        if (cfg.dirichletAlpha != 0.3f || cfg.dirichletEpsilon != 0.25f || cfg.explorationDropoff != 8)
             throw std::invalid_argument(
-                "SelfPlayConfig: Dirichlet knobs (dirichletAlpha/dirichletEpsilon) are set but "
-                "searchMode is GUMBEL, which ignores them -- they'd silently have no effect");
+                "SelfPlayConfig: PUCT knobs (dirichletAlpha/dirichletEpsilon/explorationDropoff) "
+                "are set but searchMode is GUMBEL, which ignores them -- they'd silently have no effect");
     }
 }
 
@@ -202,6 +198,109 @@ std::vector<SelfPlayExample> runGame(Evaluator &eval,
     examples.erase(examples.begin(), examples.begin() + drop);
 
     return examples;
+}
+
+std::vector<std::vector<SelfPlayExample>> runGamesGumbel(
+    Evaluator &eval, const PenteGame::Config &gameConfig, const SelfPlayConfig &cfg, int numGames,
+    const std::function<void(int, const std::vector<SelfPlayExample> &)> &onGameCompleted) {
+    std::vector<std::vector<SelfPlayExample>> completedGames;
+    if (numGames <= 0) return completedGames;
+    completedGames.reserve(numGames);
+
+    GumbelSearch::Config searchConfig;
+    searchConfig.tree.numSimulations        = cfg.simulations;
+    searchConfig.tree.maxConsideredActions  = cfg.gumbelMaxConsideredActions;
+    searchConfig.tree.gumbelNoise           = cfg.gumbelNoise;
+    searchConfig.tree.seed                  = 0; // non-deterministic: a fresh random_device seed per tree
+    searchConfig.numThreads                 = cfg.numWorkerThreads;
+    GumbelSearch search(searchConfig, &eval);
+
+    constexpr int B = PenteGame::BOARD_SIZE;
+    const int slots = std::min(cfg.gumbelBatchGames, numGames);
+
+    auto freshGame = [&] {
+        PenteGame g(gameConfig);
+        g.reset();
+        return g;
+    };
+
+    // Continuous batching: `slots` games are always in flight (until fewer than
+    // `numGames` remain to be started), so the batch GumbelSearch::searchBatch
+    // sees -- and the NN eval batch size riding on it -- never shrinks just
+    // because one particular game happened to finish early.
+    std::vector<PenteGame> slotGame;
+    slotGame.reserve(slots);
+    for (int i = 0; i < slots; i++) slotGame.push_back(freshGame());
+    std::vector<std::vector<SelfPlayExample>> slotExamples(slots);
+    std::vector<bool> slotLive(slots, true);
+
+    int started = slots;
+    int finished = 0;
+
+    std::vector<PenteGame> positions;
+    std::vector<int> slotForPos;
+    while (finished < numGames) {
+        positions.clear();
+        slotForPos.clear();
+        for (int i = 0; i < slots; i++) {
+            if (slotLive[i]) {
+                positions.push_back(slotGame[i]);
+                slotForPos.push_back(i);
+            }
+        }
+        assert(!positions.empty() && "live slots exhausted before numGames finished");
+
+        auto results = search.searchBatch(positions);
+
+        for (size_t j = 0; j < results.size(); j++) {
+            const int i = slotForPos[j];
+            const GumbelTree::Result &r = results[j];
+            PenteGame &game = slotGame[i];
+
+            const int k = static_cast<int>(r.moves.size());
+            auto policyTensor = torch::zeros({B * B});
+            float entropy = 0.0f;
+            auto acc = policyTensor.accessor<float, 1>();
+            for (int a = 0; a < k; a++) {
+                const float p = r.improvedPolicy[a];
+                if (p > 0.0f) {
+                    const PenteGame::Move &mv = r.moves[a]; // no canonical un-rotation -- GumbelTree does none
+                    acc[mv.y * B + mv.x] = p;
+                    entropy -= p * std::log(p);
+                }
+            }
+            const float policyEntropy = (k > 1) ? entropy / std::log(static_cast<float>(k)) : 0.0f;
+
+            auto [planes, captures] = NNEvaluator::gameToTensors(game);
+            slotExamples[i].push_back({planes, captures, policyTensor, game.getCurrentPlayer(), 0.0f,
+                                        r.improvedValue, policyEntropy, game.getMoveCount()});
+
+            game.makeMove(r.move.x, r.move.y);
+
+            if (game.isGameOver()) {
+                const PenteGame::Player winner = game.getWinner();
+                for (auto &ex : slotExamples[i]) {
+                    // Same previous-mover-perspective convention as runGame().
+                    ex.outcome = (winner == PenteGame::NONE) ? 0.0f
+                               : (ex.player == winner)        ? -1.0f
+                                                               :  1.0f;
+                }
+                ++finished;
+                if (onGameCompleted) onGameCompleted(finished - 1, slotExamples[i]);
+                completedGames.push_back(std::move(slotExamples[i]));
+
+                if (started < numGames) {
+                    slotGame[i] = freshGame();
+                    slotExamples[i].clear();
+                    ++started;
+                } else {
+                    slotLive[i] = false;
+                }
+            }
+        }
+    }
+
+    return completedGames;
 }
 
 #endif // WITH_TORCH

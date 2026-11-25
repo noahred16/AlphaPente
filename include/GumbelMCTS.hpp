@@ -54,7 +54,19 @@ class GumbelTree {
         std::vector<PenteGame::Move> moves;  // root legal moves
         std::vector<float> improvedPolicy;   // aligned with moves; sums to 1
         std::vector<int> visits;             // aligned with moves
+        std::vector<float> prior;            // aligned with moves; softmax(logits), the raw evaluator policy
+        // aligned with moves; each child's own backed-up Q (root mover's
+        // perspective), i.e. childQ() -- 0.0f where visits[i] == 0 (never
+        // considered, so nothing was ever backed up for it; the search used
+        // the mixed/completed value in its place, not a real observation).
+        std::vector<float> q;
         float rootValue = 0.0f;              // raw network value, root mover's perspective
+        // Search-refined value estimate (mctx's "mixed value": a visit-weighted
+        // blend of rootValue and the completed Q of every root child, same
+        // perspective as rootValue). This is the analogue of ParallelMCTS's
+        // rootQ (totalValue/visits) -- use THIS, not rootValue, as the search's
+        // contribution to a training value target. 1.0f on a proven forced win.
+        float improvedValue = 0.0f;
         bool solved = false;                 // result proven by minimax
         int simulations = 0;                 // simulations actually run
     };
@@ -84,8 +96,11 @@ class GumbelTree {
 
     // mctx qtransform_completed_by_mix_value. q[i] is only read where visits[i] > 0.
     // rawValue is from the perspective of the player to move at the node.
+    // mixedValueOut, if non-null, receives mctx's _compute_mixed_value -- the
+    // same perspective as rawValue, unscaled (unlike out[], which is rescaled
+    // for use as a logit bonus).
     static void completedQValues(double rawValue, const float *logits, const double *q, const int *visits, int k,
-                                 float maxVisitInit, float valueScale, float *out);
+                                 float maxVisitInit, float valueScale, float *out, double *mixedValueOut = nullptr);
 
   private:
     enum class Phase : uint8_t { IDLE, AWAIT_ROOT, SEARCHING, DONE };
@@ -109,8 +124,10 @@ class GumbelTree {
 
     // Q of child c from its parent's mover perspective (c must have visits > 0).
     double childQ(int child) const;
-    // Fills q/visits for node's children and returns completed transformed Q in out.
-    void nodeCompletedQ(int node, std::vector<float> &out) const;
+    // Fills q/visits for node's children and returns completed transformed Q in
+    // out. mixedValueOut, if non-null, receives the node's own mixed value (see
+    // completedQValues).
+    void nodeCompletedQ(int node, std::vector<float> &out, double *mixedValueOut = nullptr) const;
     // Argmax of g + logit + sigma(q) over root actions whose visit count == considered
     // (uses the buffers filled by nodeCompletedQ(0, compBuf_)).
     int argmaxConsidered(int considered) const;
